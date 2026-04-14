@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">OpenCode Remote</title>
+  <desc id="desc">Industrial dark icon with OC monogram</desc>
+  <rect width="256" height="256" rx="48" fill="#0d1117" />
+  <rect x="24" y="24" width="208" height="208" rx="36" fill="#161b22" stroke="#30363d" stroke-width="4" />
+  <path d="M82 89h39c25 0 44 18 44 39s-19 39-44 39H82V89Zm33 60c12 0 19-8 19-21s-7-21-19-21h-8v42h8Z" fill="#f0f6fc" />
+  <path d="m186 86 18 18-26 24 26 24-18 18-45-42 45-42Z" fill="#d29922" />
+  <path d="m65 86 18 18-26 24 26 24-18 18-45-42 45-42Z" fill="#58a6ff" transform="translate(54) scale(-1 1)" />
+</svg>

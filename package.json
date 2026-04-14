@@ -1,0 +1,28 @@
+{
+  "name": "opencode-remote",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n web,server,runner -c magenta,cyan,yellow \"npm run dev:web\" \"npm run dev:server\" \"npm run dev:runner\"",
+    "dev:web": "npm run dev --workspace @opencode-remote/web",
+    "dev:server": "npm run dev --workspace @opencode-remote/server",
+    "dev:runner": "npm run dev --workspace @opencode-remote/runner",
+    "build": "npm run build:web && npm run build:server && npm run build:runner",
+    "build:web": "npm run build --workspace @opencode-remote/web",
+    "build:server": "npm run build --workspace @opencode-remote/server",
+    "build:runner": "npm run build --workspace @opencode-remote/runner",
+    "typecheck": "npm run typecheck:web && npm run typecheck:server && npm run typecheck:runner",
+    "typecheck:web": "npm run typecheck --workspace @opencode-remote/web",
+    "typecheck:server": "npm run typecheck --workspace @opencode-remote/server",
+    "typecheck:runner": "npm run typecheck --workspace @opencode-remote/runner"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,31 @@
+services:
+  opencode-remote:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opencode-remote
+    ports:
+      - "9223:9223"
+    environment:
+      - TZ=Asia/Taipei
+      - NODE_ENV=production
+      - PORT=9223
+      - DATABASE_PATH=/data/opencode-remote.db
+      - RUNNER_SHARED_TOKEN=change-this-runner-token
+      - SSE_HEARTBEAT_MS=15000
+      - APP_BASE_URL=http://localhost:9223
+      - VAPID_PUBLIC_KEY=
+      - VAPID_PRIVATE_KEY=
+      - VAPID_SUBJECT=
+    volumes:
+      - opencode_remote_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:9223/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  opencode_remote_data:

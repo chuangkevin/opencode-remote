@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family: "Noto Sans TC", system-ui, sans-serif;
+  background: #0d1117;
+  color: #f0f6fc;
+  --app-dvh: 100vh;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: var(--app-dvh);
+  background:
+    linear-gradient(rgba(210, 153, 34, 0.08), rgba(210, 153, 34, 0.08)),
+    linear-gradient(180deg, #0d1117 0%, #11161d 100%);
+}
+
+#root {
+  min-height: var(--app-dvh);
+}
+
+.app-shell {
+  min-height: var(--app-dvh);
+}
+
+.app-shell__content {
+  min-height: calc(var(--app-dvh) - 40px);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(240, 246, 252, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(240, 246, 252, 0.03) 1px, transparent 1px);
+  background-size: 18px 18px;
+  pointer-events: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}

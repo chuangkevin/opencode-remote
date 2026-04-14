@@ -1,13 +1,13 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Tech stack: TypeScript monorepo.
+  Planned packages: `packages/web` (React + Vite PWA), `packages/server` (Node.js API), `packages/runner` (local OpenCode bridge).
+  Storage: SQLite.
+  Deployment shape: single-user homelab service behind Tailscale/HTTPS.
+  Product goal: Claude Dispatch-style remote control for OpenCode, optimized for iPhone PWA.
+  V1 scope: persistent threads, async dispatch, approval relay, Web Push notifications.
+  V1 non-goals: multi-user auth, public internet exposure, MCP bridge, multi-runner clustering.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
@@ -18,3 +18,10 @@ schema: spec-driven
 #       - Always include a "Non-goals" section
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - Include explicit v1 non-goals.
+    - Keep architecture choices aligned with iPhone PWA constraints.
+  tasks:
+    - Group tasks by package and end-to-end flow.
+    - Call out verification work for PWA, SSE, and push notifications.

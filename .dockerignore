@@ -1,0 +1,14 @@
+node_modules/
+packages/*/node_modules/
+packages/*/dist/
+data/
+.git/
+.github/
+.claude/
+.gemini/
+.opencode/
+runner-real.log
+runner-real.err.log
+server-real.log
+server-real.err.log
+npm-debug.log*
