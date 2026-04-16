@@ -9,7 +9,7 @@
 ## 2. Server / Thread 與狀態儲存
 
 - [x] 2.1 定義 SQLite schema：`projects`、`threads`、`jobs`、`thread_events`、`permission_requests`、`push_subscriptions`
-- [ ] 2.2 建立 migration / startup init 流程
+- [x] 2.2 建立 migration / startup init 流程
 - [x] 2.3 實作 thread CRUD API：建立 project、建立 thread、列出 thread、取得 thread 詳情
 - [x] 2.4 實作 dispatch API：送出 prompt、列出 jobs、查詢 thread timeline
 - [x] 2.5 實作 permission reply API，允許前端批准 / 拒絕 OpenCode permission request
@@ -23,7 +23,7 @@
 - [x] 3.3 實作 async prompt dispatch，改由 runner 持續執行而非綁定前端 request
 - [x] 3.4 訂閱 OpenCode SSE event stream，轉譯為 thread events / job status / permission requests
 - [x] 3.5 實作 runner claim lease / heartbeat / recovery 邏輯，避免 crash 後 job 永遠卡住
-- [ ] 3.6 實作 job abort 與 session unhealthy 標記策略，不做 silent remap
+- [x] 3.6 實作 job abort 與 session unhealthy 標記策略，不做 silent remap
 - [ ] 3.7 驗證桌面仍可對映射出的 session 使用 `opencode attach`
 
 ## 4. Web / iPhone PWA Shell
@@ -53,4 +53,4 @@
 - [ ] 6.2 驗證手機送出任務後，切 app / 鎖屏不影響 runner 繼續執行
 - [ ] 6.3 驗證 permission request 可從手機批准並繼續同一條 session
 - [ ] 6.4 驗證完成通知 / 錯誤通知 / 點擊通知回 thread 的完整流程
-- [ ] 6.5 建立部署說明，包含 Tailscale HTTPS / PWA 安裝 / Web Push 前提
+- [x] 6.5 建立部署說明，包含 Tailscale HTTPS / PWA 安裝 / Web Push 前提

@@ -251,7 +251,7 @@ export class AppDatabase {
     this.db = new BetterSqlite3(absolutePath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
-    this.ensureSchema();
+    this.runMigrations();
     this.claimNextJobTx = this.db.transaction((runnerId: string, leaseMs: number) => {
       const now = new Date().toISOString();
       const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
@@ -303,85 +303,107 @@ export class AppDatabase {
     });
   }
 
-  private ensureSchema() {
+  private runMigrations() {
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS threads (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-        title TEXT NOT NULL,
-        opencode_session_id TEXT,
-        status TEXT NOT NULL DEFAULT 'idle',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS jobs (
-        id TEXT PRIMARY KEY,
-        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-        prompt TEXT NOT NULL,
-        status TEXT NOT NULL,
-        error TEXT,
-        runner_id TEXT,
-        lease_expires_at TEXT,
-        queued_at TEXT NOT NULL,
-        started_at TEXT,
-        finished_at TEXT,
-        abort_requested INTEGER NOT NULL DEFAULT 0
-      );
-
-      CREATE TABLE IF NOT EXISTS thread_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-        job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
-        type TEXT NOT NULL,
-        payload_json TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS permission_requests (
-        id TEXT PRIMARY KEY,
-        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-        job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
-        upstream_permission_id TEXT NOT NULL,
-        state TEXT NOT NULL,
-        response TEXT,
-        payload_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        resolved_at TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS push_subscriptions (
-        id TEXT PRIMARY KEY,
-        endpoint TEXT NOT NULL UNIQUE,
-        p256dh TEXT NOT NULL,
-        auth TEXT NOT NULL,
-        device_label TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        revoked_at TEXT
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_threads_project_updated_at ON threads(project_id, updated_at DESC, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_jobs_thread_queued_at ON jobs(thread_id, queued_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs(status, lease_expires_at, queued_at);
-      CREATE INDEX IF NOT EXISTS idx_jobs_runner_status_lease ON jobs(runner_id, status, lease_expires_at);
-      CREATE INDEX IF NOT EXISTS idx_thread_events_thread_id_id ON thread_events(thread_id, id ASC);
-      CREATE INDEX IF NOT EXISTS idx_permission_requests_thread_created_at ON permission_requests(thread_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_permission_requests_job_state ON permission_requests(job_id, state, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_push_subscriptions_active_updated_at ON push_subscriptions(revoked_at, updated_at DESC);
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        applied_at TEXT NOT NULL
+      )
     `);
 
-    const permissionColumns = this.db.prepare("PRAGMA table_info(permission_requests)").all() as Array<{ name: string }>;
-    if (!permissionColumns.some((column) => column.name === "response")) {
-      this.db.exec("ALTER TABLE permission_requests ADD COLUMN response TEXT");
-    }
+    const applied = new Set(
+      (this.db.prepare("SELECT name FROM _migrations").all() as Array<{ name: string }>).map((r) => r.name),
+    );
+
+    const apply = (name: string, fn: () => void) => {
+      if (applied.has(name)) return;
+      fn();
+      this.db.prepare("INSERT INTO _migrations (name, applied_at) VALUES (?, ?)").run(name, new Date().toISOString());
+      console.log(`[db] migration applied: ${name}`);
+    };
+
+    apply("001_initial_schema", () => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS threads (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          opencode_session_id TEXT,
+          status TEXT NOT NULL DEFAULT 'idle',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS jobs (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+          prompt TEXT NOT NULL,
+          status TEXT NOT NULL,
+          error TEXT,
+          runner_id TEXT,
+          lease_expires_at TEXT,
+          queued_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          abort_requested INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS thread_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+          job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+          type TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS permission_requests (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+          job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+          upstream_permission_id TEXT NOT NULL,
+          state TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          resolved_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          id TEXT PRIMARY KEY,
+          endpoint TEXT NOT NULL UNIQUE,
+          p256dh TEXT NOT NULL,
+          auth TEXT NOT NULL,
+          device_label TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          revoked_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_threads_project_updated_at ON threads(project_id, updated_at DESC, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_jobs_thread_queued_at ON jobs(thread_id, queued_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs(status, lease_expires_at, queued_at);
+        CREATE INDEX IF NOT EXISTS idx_jobs_runner_status_lease ON jobs(runner_id, status, lease_expires_at);
+        CREATE INDEX IF NOT EXISTS idx_thread_events_thread_id_id ON thread_events(thread_id, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_permission_requests_thread_created_at ON permission_requests(thread_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_permission_requests_job_state ON permission_requests(job_id, state, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_push_subscriptions_active_updated_at ON push_subscriptions(revoked_at, updated_at DESC);
+      `);
+    });
+
+    apply("002_permission_response_column", () => {
+      const cols = this.db.prepare("PRAGMA table_info(permission_requests)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "response")) {
+        this.db.exec("ALTER TABLE permission_requests ADD COLUMN response TEXT");
+      }
+    });
   }
 
   listProjects() {
@@ -806,6 +828,15 @@ export class AppDatabase {
     const result = this.db
       .prepare("UPDATE threads SET opencode_session_id = ?, updated_at = ? WHERE id = ?")
       .run(sessionId, now, threadId);
+
+    return result.changes > 0 ? this.getThread(threadId) : null;
+  }
+
+  markThreadSessionUnhealthy(threadId: string) {
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare("UPDATE threads SET opencode_session_id = NULL, status = 'attention', updated_at = ? WHERE id = ?")
+      .run(now, threadId);
 
     return result.changes > 0 ? this.getThread(threadId) : null;
   }

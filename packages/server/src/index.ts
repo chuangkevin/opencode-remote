@@ -300,6 +300,19 @@ app.post<{ Params: { threadId: string }; Body: { sessionId?: string } }>("/inter
   return { thread };
 });
 
+app.post<{ Params: { threadId: string }; Body: { reason?: string } }>("/internal/threads/:threadId/session/unhealthy", async (request, reply) => {
+  const reason = request.body.reason?.trim() || "session became unhealthy";
+  const thread = db.markThreadSessionUnhealthy(request.params.threadId);
+  if (!thread) {
+    return reply.code(404).send({ error: "找不到 thread" });
+  }
+
+  const event = db.appendThreadEvent(thread.id, "session_unhealthy", { reason });
+  eventHub.publish(thread.id, formatSseEvent(event));
+
+  return { thread };
+});
+
 app.post<{ Params: { jobId: string }; Body: { runnerId?: string; requestId?: string; payload?: Record<string, unknown> } }>(
   "/internal/jobs/:jobId/permissions",
   async (request, reply) => {

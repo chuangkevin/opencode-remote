@@ -493,6 +493,17 @@ function mapTimelineEvents(event: OpenCodeEvent) {
   return [];
 }
 
+async function markSessionUnhealthy(threadId: string, reason: string) {
+  try {
+    await fetchInternal(`/internal/threads/${threadId}/session/unhealthy`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+  } catch (err) {
+    console.error(`[runner] failed to mark session unhealthy for thread ${threadId}`, err);
+  }
+}
+
 async function failClaimedJob(jobId: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
 
@@ -791,7 +802,14 @@ async function executeRealJob(job: ClaimedJob) {
     await promptOpenCodeSession(sessionId, job.prompt);
     const result = await monitor.done;
 
+    if (result.status === "failed") {
+      await markSessionUnhealthy(job.thread.id, result.error ?? "session failed");
+    }
+
     await updateStatus(job.id, result.status, result.error);
+  } catch (error) {
+    await markSessionUnhealthy(job.thread.id, error instanceof Error ? error.message : "session error");
+    throw error;
   } finally {
     monitor.close();
   }
