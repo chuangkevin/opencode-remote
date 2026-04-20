@@ -1,7 +1,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { config } from "./config.js";
-import { resolveActiveSlug } from "./session.js";
+import { resolveActiveSessionPath } from "./session.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -34,16 +34,16 @@ function proxy(
 
 // ─── HTTP Server ─────────────────────────────────────────────────────────────
 
-let activeSlug = "";
+let activeSessionPath = "";
 
 const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/") {
-    if (!activeSlug) {
+    if (!activeSessionPath) {
       res.writeHead(503);
       res.end("Starting up — please wait and refresh");
       return;
     }
-    res.writeHead(302, { Location: `/${activeSlug}` });
+    res.writeHead(302, { Location: activeSessionPath });
     res.end();
     return;
   }
@@ -94,10 +94,10 @@ async function waitForOpenCode(): Promise<void> {
   throw new Error("OpenCode did not become healthy within 60 seconds");
 }
 
-async function refreshSlug(): Promise<void> {
+async function refreshSessionPath(): Promise<void> {
   try {
-    activeSlug = await resolveActiveSlug();
-    console.log(`[opencode-remote] active session slug: ${activeSlug}`);
+    activeSessionPath = await resolveActiveSessionPath();
+    console.log(`[opencode-remote] active session path: ${activeSessionPath}`);
   } catch (err) {
     console.error("[opencode-remote] failed to resolve active session:", err);
   }
@@ -111,8 +111,17 @@ async function main(): Promise<void> {
     ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],
     { cwd: config.opencodeDirectory, stdio: "inherit", shell: process.platform === "win32" },
   );
-  oc.on("exit", (code) => {
+  oc.on("exit", async (code) => {
     console.error(`[opencode-remote] opencode exited with code ${code}`);
+    // If another OpenCode is already healthy on this port, don't crash
+    try {
+      const r = await fetch(`${config.opencodeUrl}/global/health`);
+      const j = (await r.json()) as { healthy?: boolean };
+      if (j.healthy) {
+        console.log("[opencode-remote] existing OpenCode instance is healthy; continuing");
+        return;
+      }
+    } catch { /* fall through */ }
     process.exit(1);
   });
 
@@ -121,11 +130,11 @@ async function main(): Promise<void> {
   await waitForOpenCode();
   console.log("[opencode-remote] OpenCode is ready");
 
-  // 3. Resolve initial active slug
-  await refreshSlug();
+  // 3. Resolve initial active session path
+  await refreshSessionPath();
 
-  // 4. Periodically refresh the active slug
-  setInterval(() => { void refreshSlug(); }, config.sessionRefreshIntervalMs);
+  // 4. Periodically refresh the active session path
+  setInterval(() => { void refreshSessionPath(); }, config.sessionRefreshIntervalMs);
 
   // 5. Keep-alive SSE connection to OpenCode
   startKeepAlive();
@@ -133,7 +142,7 @@ async function main(): Promise<void> {
   // 6. Start HTTP proxy server
   server.listen(config.port, "0.0.0.0", () => {
     console.log(`[opencode-remote] proxy listening on http://0.0.0.0:${config.port}`);
-    console.log(`[opencode-remote] → redirecting / to /${activeSlug}`);
+    console.log(`[opencode-remote] → redirecting / to ${activeSessionPath}`);
   });
 }
 

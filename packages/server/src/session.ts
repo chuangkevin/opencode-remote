@@ -3,6 +3,7 @@ import { config } from "./config.js";
 type OpenCodeSession = {
   id: string;
   slug: string;
+  projectID: string;
   directory: string;
   title: string;
   time: { created: number; updated: number };
@@ -24,21 +25,27 @@ async function createSession(): Promise<OpenCodeSession> {
   return res.json() as Promise<OpenCodeSession>;
 }
 
+function byUpdatedDesc(a: OpenCodeSession, b: OpenCodeSession): number {
+  return b.time.updated - a.time.updated;
+}
+
 /**
  * Finds the most recently updated session whose directory matches
- * OPENCODE_DIRECTORY. Creates a new session if none found.
- * Returns the session slug (used in the URL /<slug>).
+ * OPENCODE_DIRECTORY, falling back to the globally most recent session,
+ * and creating one only when no sessions exist at all.
+ * Returns the full SPA path: /<projectID>/session/<sessionID>
  */
-export async function resolveActiveSlug(): Promise<string> {
+export async function resolveActiveSessionPath(): Promise<string> {
   const sessions = await listSessions();
-  const matching = sessions
+
+  const byDir = sessions
     .filter((s) => s.directory === config.opencodeDirectory)
-    .sort((a, b) => b.time.updated - a.time.updated);
+    .sort(byUpdatedDesc);
 
-  if (matching.length > 0) {
-    return matching[0].slug;
-  }
+  const session =
+    byDir[0] ??
+    sessions.sort(byUpdatedDesc)[0] ??
+    (await createSession());
 
-  const created = await createSession();
-  return created.slug;
+  return `/${session.projectID}/session/${session.id}`;
 }
