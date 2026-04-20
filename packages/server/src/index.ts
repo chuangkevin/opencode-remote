@@ -5,6 +5,12 @@ import { resolveActiveSessionPath } from "./session.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
+// Injected into every HTML page so mobile browsers auto-reload after 10 s in background.
+const VISIBILITY_SCRIPT =
+  `<script>(function(){var t=0;document.addEventListener('visibilitychange',` +
+  `function(){if(document.visibilityState==='hidden'){t=Date.now();}` +
+  `else if(t&&Date.now()-t>10000){location.reload();}});})();</script>`;
+
 function proxy(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -18,8 +24,29 @@ function proxy(
   };
 
   const proxyReq = http.request(options, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
-    proxyRes.pipe(res, { end: true });
+    const contentType = proxyRes.headers["content-type"] ?? "";
+    const isHtml = contentType.includes("text/html");
+
+    if (!isHtml) {
+      res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
+      proxyRes.pipe(res, { end: true });
+      return;
+    }
+
+    // Buffer HTML so we can inject the visibility-reload script.
+    const chunks: Buffer[] = [];
+    proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
+    proxyRes.on("end", () => {
+      let body = Buffer.concat(chunks).toString("utf8");
+      body = body.includes("</body>")
+        ? body.replace("</body>", `${VISIBILITY_SCRIPT}</body>`)
+        : body + VISIBILITY_SCRIPT;
+
+      const headers = { ...proxyRes.headers };
+      delete headers["content-length"]; // length changed after injection
+      res.writeHead(proxyRes.statusCode ?? 200, headers);
+      res.end(body);
+    });
   });
 
   proxyReq.on("error", () => {
