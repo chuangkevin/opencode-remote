@@ -109,3 +109,75 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 - Volume `opencode_data:/root/.opencode` 持久化 session 資料
 - Bind mount `${WORKSPACE_PATH}:/workspace` 讓 OpenCode 存取工作目錄
 - Healthcheck: `GET /global/health`
+
+## 目前進度與後續工作
+
+### 已完成
+- [x] 透明 HTTP proxy（`node:http` pipe，SSE 支援）
+- [x] `GET /` → 302 → `/<base64url(dir)>/session/<sessionId>`
+- [x] 每 30 秒刷新 active session path
+- [x] Background SSE keep-alive（指數退避重連）
+- [x] `waitForOpenCode()` 健康檢查（60 秒超時）
+- [x] Windows `opencode.cmd` spawn 用 `shell: true`
+- [x] EADDRINUSE 不 crash（檢測既有 OpenCode 是否健康）
+- [x] `.env` 透過 `--env-file` 載入
+- [x] `start.ps1` 一鍵啟動腳本
+- [x] Docker 設定（Dockerfile + docker-compose.yml）
+- [x] 跨瀏覽器同步驗證通過（Playwright 測試 + 使用者確認）
+
+### 待做（未完成）
+
+**1. Caddy reverse proxy on RPi**
+- 目標：在 RPi 上的 Caddyfile 加 `opencode.sisihome.org` 的 entry，指到 `kevinhome:9223`
+- 位置：RPi 的 Caddyfile（路徑參考 homelab-docs 或 RPi 上 `/etc/caddy/Caddyfile`）
+- 需 Tailscale 網路存取 kevinhome
+- 之前試過 SSH 到 RPi 但連不上，需要使用者確認 RPi 可達性或提供新的連線方式
+
+**2. 開機自動啟動（Persistent startup on kevinhome）**
+- 目標：Windows 開機後自動跑 proxy，不需手動點 `start.ps1`
+- 選項：
+  - Windows Task Scheduler（啟動觸發器 = 登入時，動作 = 執行 `start.ps1`）
+  - PM2 + pm2-windows-service
+  - NSSM（Non-Sucking Service Manager）包成 Windows Service
+- 推薦 Task Scheduler，因為最簡單且不需額外安裝
+- 注意：需要確保 `opencode` CLI 在 Task Scheduler 的 PATH 中可見（可能要用絕對路徑或在 `start.ps1` 裡 `$env:PATH` 加料）
+
+**3. （可選）清理舊 "opencode-remote" 空白 sessions**
+- 測試過程中 `createSession()` 創建了一些標題為 "opencode-remote" 的空 session
+- 它們會污染 session 列表（出現在左側欄）
+- 可透過 `DELETE /session/<id>` 清理，或讓 OpenCode 原生 UI 右鍵刪除
+- 非必要，但會讓 UI 更乾淨
+
+### 驗證方式
+
+跨瀏覽器同步測試（Playwright headless）：
+```bash
+# 假設 proxy 已在 9223 運行
+/c/Users/h1114/AppData/Local/Programs/Python/Python312/python.exe -c "
+import asyncio
+from playwright.async_api import async_playwright
+async def main():
+    async with async_playwright() as p:
+        b = await p.chromium.launch(headless=True)
+        c1 = await b.new_context(); p1 = await c1.new_page()
+        await p1.goto('http://localhost:9223/', wait_until='commit')
+        await asyncio.sleep(5)
+        c2 = await b.new_context(); p2 = await c2.new_page()
+        await p2.goto('http://localhost:9223/', wait_until='commit')
+        await asyncio.sleep(5)
+        print('Same URL?', p1.url == p2.url)
+        await b.close()
+asyncio.run(main())
+"
+```
+
+真實瀏覽器驗證：Chrome 和 Edge（或 Chrome 無痕模式）分別打開 `http://localhost:9223/`，兩邊應看到完全相同的 session 畫面（標題、對話歷史都一致）。
+
+## 關鍵提交紀錄（commit history for context）
+
+- `0de4b50` — 重寫為透明 proxy（移除 Job Queue/Runner 舊架構）
+- `c0109d5` — Windows `shell: true` spawn 修正
+- `5d899f9` — 第一次修正 redirect 格式（`/global/session/<id>`，後證明仍不對）
+- `1f23077` — **最終修正**：改用 `/<base64url(dir)>/session/<id>`，這才是正確的 SPA URL 格式
+- `6e38e24` — 加 `start.ps1`
+- `3f04c62` / `c72806e` — 文件同步
