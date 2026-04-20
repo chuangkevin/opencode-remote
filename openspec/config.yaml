@@ -1,27 +1,30 @@
 schema: spec-driven
 
 context: |
-  Tech stack: TypeScript monorepo.
-  Planned packages: `packages/web` (React + Vite PWA), `packages/server` (Node.js API), `packages/runner` (local OpenCode bridge).
-  Storage: SQLite.
-  Deployment shape: single-user homelab service behind Tailscale/HTTPS.
-  Product goal: Claude Dispatch-style remote control for OpenCode, optimized for iPhone PWA.
-  V1 scope: persistent threads, async dispatch, approval relay, Web Push notifications.
-  V1 non-goals: multi-user auth, public internet exposure, MCP bridge, multi-runner clustering.
+  Product goal: expose OpenCode's native web UI to any device, with automatic
+  redirect to the most recently active session so every browser sees the same
+  conversation. Sessions persist server-side even when the browser closes.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Tech stack: Node.js 22 + TypeScript, native `node:http` (no runtime npm deps).
+  Single package: `packages/server/` is a transparent HTTP proxy that spawns
+  `opencode serve` as a child process on port 4096 and exposes port 9223.
+
+  Architecture: `GET /` → 302 to `/<base64url(directory)>/session/<sessionId>`.
+  All other requests pipe through to OpenCode unmodified. A background SSE
+  keep-alive prevents OpenCode from idling. Active session is refreshed
+  every 30 seconds by querying `GET /session`.
+
+  Deployment: single-user homelab service behind Tailscale + Caddy HTTPS.
+  Data: no database — all state owned by OpenCode, persisted via Docker
+  volume on `~/.opencode/`.
+
+  See `CLAUDE.md` for full technical context (URL format gotchas, Windows
+  spawn quirks, session API shape).
+
 rules:
   proposal:
-    - Include explicit v1 non-goals.
-    - Keep architecture choices aligned with iPhone PWA constraints.
+    - Call out how the change interacts with OpenCode's SPA URL format.
+    - List any new runtime dependencies (should usually be zero).
   tasks:
-    - Group tasks by package and end-to-end flow.
-    - Call out verification work for PWA, SSE, and push notifications.
+    - Group tasks by deployment surface (proxy code, Dockerfile, Caddy, autostart).
+    - Include verification steps for cross-browser session sync.

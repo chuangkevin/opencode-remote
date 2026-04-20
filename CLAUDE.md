@@ -110,6 +110,20 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 - Bind mount `${WORKSPACE_PATH}:/workspace` 讓 OpenCode 存取工作目錄
 - Healthcheck: `GET /global/health`
 
+## OpenSpec（規格來源）
+
+本專案使用 OpenSpec 管理規格。主要檔案：
+
+- `openspec/config.yaml` — 專案上下文（已更新為 transparent proxy 架構）
+- `openspec/specs/session-proxy/spec.md` — **目前唯一的 capability spec**，完整定義 proxy 的行為要求（啟動、health check、redirect 格式、session 解析、keep-alive、配置）
+- `openspec/changes/deployment-wiring/` — **待執行的變更**：RPi Caddy entry + kevinhome 開機自啟
+- `openspec/changes/archive/` — 已被取代的舊設計（Dispatch 模型，勿接手）
+
+後續接手時：
+1. 讀 `session-proxy/spec.md` 了解 proxy 必須做到什麼
+2. 讀 `changes/deployment-wiring/tasks.md` 知道還有什麼沒做
+3. 改東西前確認新行為符合 spec；若要改行為，先在 `openspec/changes/<name>/` 開新提案
+
 ## 目前進度與後續工作
 
 ### 已完成
