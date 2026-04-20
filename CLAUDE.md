@@ -81,7 +81,7 @@ GET  /event                      → SSE stream
 
 **opencode.cmd spawn：** Windows 上 `opencode` npm global 安裝為 `opencode.cmd`，spawn 時需要 `shell: process.platform === "win32"` 才能找到。
 
-**Directory 亂碼：** 某些 session 的 `directory` 欄位含有非 UTF-8 bytes（Windows 路徑編碼問題）。永遠用 `config.opencodeDirectory`（乾淨的設定值）來做 `encodeDirSlug()`，不要用 session 存儲的 directory 直接編碼。
+**Directory 亂碼：** 某些舊 session 的 `directory` 欄位含有非 UTF-8 bytes（Windows 路徑編碼問題）。URL 必須用 session 自己的 `directory` 編碼（才能對應 SPA 內部 workspace context），所以亂碼 session 產生的 URL 無法使用。解法是優先挑選 `directory === OPENCODE_DIRECTORY` 的 session，這樣被編碼的就是乾淨的設定路徑。
 
 **EADDRINUSE：** 開發時 OpenCode 可能已在 port 4096 運行。proxy 的 spawn 會失敗，但 `oc.on("exit")` handler 會檢查 OpenCode 是否已經健康，若是則不 crash。
 

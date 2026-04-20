@@ -25,36 +25,39 @@ Phone / Tablet / PC
 Caddy (HTTPS, Tailscale) → port 9223
        ↓
 opencode-remote proxy (port 9223)
-  ├── GET /   → 302 → /<most-recent-session-slug>
+  ├── GET /   → 302 → /<base64url(dir)>/session/<sessionId>
   └── ALL /*  → transparent proxy → OpenCode (127.0.0.1:4096)
                                           ↑
                                child process: opencode serve
 ```
 
+**URL format discovery (critical):** OpenCode SPA's router pattern is `/:dir/session/:id?` where `:dir` = `base64url(session.directory)` (UTF-8 bytes, no `=` padding). Redirecting to `/<slug>` or `/global/session/<id>` does NOT work — the SPA interprets it differently and may navigate away to a malformed URL, resulting in a blank page.
+
 The proxy is **completely transparent** to OpenCode's web UI. Every feature — conversation, image upload, SSE events, file reading, session switching via the left panel — passes through unmodified.
 
 ### Startup Sequence
 
-1. Spawn `opencode serve --hostname 127.0.0.1 --port 4096` as a child process
-2. Poll `GET /global/health` until `{ healthy: true }`
-3. `GET /session` → filter sessions where `directory === OPENCODE_DIRECTORY` → sort by `time.updated` descending → take first
-4. If no session exists → `POST /session` to create one for `OPENCODE_DIRECTORY`
-5. Store the active slug in memory
-6. Start Fastify proxy on `PORT` (default 9223)
-7. Open a background SSE client to `GET /event` — keeps OpenCode active even when no browser is connected
+1. Spawn `opencode serve --hostname 127.0.0.1 --port 4096` as a child process (with `shell: true` on Windows since `opencode` is `opencode.cmd`)
+2. If spawn fails due to EADDRINUSE but OpenCode is already healthy on that port, continue using the existing instance
+3. Poll `GET /global/health` until `{ healthy: true }`
+4. `GET /session` → filter sessions where `directory === OPENCODE_DIRECTORY` → sort by `time.updated` descending → take first. Fallback: globally most recently updated session. Last resort: `POST /session` to create one.
+5. Compute `base64url(session.directory)` as the workspace slug and build `/<slug>/session/<session.id>`
+6. Store the active session path in memory
+7. Start HTTP proxy on `PORT` (default 9223)
+8. Open a background SSE client to `GET /event` — keeps OpenCode active even when no browser is connected
 
 ### Request Routing
 
 | Request | Behavior |
 |---------|----------|
-| `GET /` | `302` → `/<active-slug>` |
+| `GET /` | `302` → `/<base64url(dir)>/session/<sessionId>` |
 | Any other path | Transparent proxy to `http://127.0.0.1:4096<path>` |
 | SSE (`/event`, `/global/event`) | Proxy with streaming (no buffering) |
 | WebSocket (if any) | Proxy as WebSocket |
 
 ### Active Session Refresh
 
-The active slug is refreshed every 30 seconds by re-querying `GET /session`, picking the most recently updated session for `OPENCODE_DIRECTORY`. This means: if the user switches sessions in the native OpenCode left panel and works there, the next person who opens `/` will land on that session automatically.
+The active session path is refreshed every 30 seconds by re-querying `GET /session`, picking the most recently updated session for `OPENCODE_DIRECTORY` and re-computing `/<base64url(dir)>/session/<sessionId>`. This means: if the user switches sessions in the native OpenCode left panel and works there, the next person who opens `/` will land on that session automatically.
 
 ### Execution Continuity
 
@@ -68,11 +71,12 @@ Keep the `packages/server/` directory but remove the other two packages:
 packages/
 └── server/              # Only remaining package
     └── src/
-        ├── index.ts      # Fastify server, routing, startup sequence
-        ├── proxy.ts      # HTTP + SSE transparent proxy
-        ├── session.ts    # Find/create active session logic
-        └── config.ts     # Env config with validation
+        ├── index.ts      # node:http server, routing, proxy, startup sequence, keep-alive SSE
+        ├── session.ts    # Session resolution + base64url dir encoding
+        └── config.ts     # Env config
 ```
+
+Uses Node.js built-in `node:http` for the proxy (no Fastify runtime dep) — `proxyRes.pipe(res)` handles SSE streaming natively.
 
 Delete `packages/web/` and `packages/runner/` entirely. Simplify root `package.json` to single-workspace or remove workspaces config.
 
@@ -113,3 +117,10 @@ SESSION_REFRESH_INTERVAL_MS=30000
 - Proxy must not buffer SSE streams — pipe directly
 - `GET /` redirect must happen before serving the SPA, not inside the SPA
 - Background SSE keep-alive must reconnect on disconnect with exponential backoff
+- URL must use the exact format `/<base64url(directory)>/session/<sessionId>` — other formats (session slug, `/global/session/<id>`) cause the SPA to navigate away to a malformed URL
+
+## Known Gotchas
+
+- **Windows spawn**: `opencode` is `opencode.cmd` on npm global — requires `shell: process.platform === "win32"`
+- **Corrupted session.directory**: Some legacy sessions have non-UTF-8 bytes in their `directory` field (Windows encoding artifact). The URL must encode the session's own `directory` (to match the SPA's internal workspace context), so such sessions produce malformed URLs. Prefer sessions filtered by `directory === OPENCODE_DIRECTORY` so the configured (clean) path is what gets encoded.
+- **Port conflict in dev**: If OpenCode is already running on port 4096, the proxy's spawn will fail with EADDRINUSE. The `oc.on("exit")` handler checks if OpenCode is still healthy before crashing the proxy.
