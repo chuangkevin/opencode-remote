@@ -141,11 +141,11 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 
 ### 待做（未完成）
 
-**1. Caddy reverse proxy on RPi**
-- 目標：在 RPi 上的 Caddyfile 加 `opencode.sisihome.org` 的 entry，指到 `kevinhome:9223`
-- 位置：RPi 的 Caddyfile（路徑參考 homelab-docs 或 RPi 上 `/etc/caddy/Caddyfile`）
-- 需 Tailscale 網路存取 kevinhome
-- 之前試過 SSH 到 RPi 但連不上，需要使用者確認 RPi 可達性或提供新的連線方式
+**1. ~~Caddy reverse proxy on RPi~~** ✅ **已完成 (2026-04-20)**
+- ✅ Caddyfile 已包含 `opencode.sisihome.org` 配置，指向 `100.83.112.20:9223`
+- ✅ Caddy 已重新載入
+- ✅ 驗證通過：`https://opencode.sisihome.org/` 正常運作
+- ✅ Session 重導向正常，OpenCode Web UI 可透過域名存取
 
 **2. 開機自動啟動（Persistent startup on kevinhome）**
 - 目標：Windows 開機後自動跑 proxy，不需手動點 `start.ps1`
