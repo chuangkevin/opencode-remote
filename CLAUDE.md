@@ -85,6 +85,52 @@ GET  /event                      → SSE stream
 
 **EADDRINUSE：** 開發時 OpenCode 可能已在 port 4096 運行。proxy 的 spawn 會失敗，但 `oc.on("exit")` handler 會檢查 OpenCode 是否已經健康，若是則不 crash。
 
+### 認證問題與解決方案
+
+**問題：OpenCode serve 預設要求 HTTP Basic Authentication**
+
+當 OpenCode serve 啟動時，所有 HTTP 端點（包括 `/global/health` 和 `/session`）都會返回 `401 Unauthorized`，並要求 Basic Authentication。這會導致：
+- proxy 的 `waitForOpenCode()` 健康檢查無法通過
+- proxy 無法啟動
+- 瀏覽器存取時會跳出登入提示
+
+**根本原因：**
+- OpenCode 檢查環境變數 `OPENCODE_SERVER_PASSWORD`
+- 如果該變數存在且非空，OpenCode 會啟用 HTTP Basic Auth
+- 如果該變數未設定或為空字串，OpenCode 會以無認證模式運行
+
+**解決方案（已實作）：**
+
+在 `packages/server/src/index.ts` 的 spawn 配置中，明確設定環境變數：
+
+```typescript
+const oc = spawn(
+  "opencode",
+  ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],
+  {
+    cwd: config.opencodeDirectory,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+    env: { ...process.env, OPENCODE_SERVER_PASSWORD: "" },  // 關鍵：清空密碼
+  },
+);
+```
+
+**為什麼需要明確設定：**
+- Node.js spawn 預設會繼承父進程的環境變數
+- 如果開發環境或系統環境中設定了 `OPENCODE_SERVER_PASSWORD`，子進程會繼承該值
+- 必須明確設為空字串 `""` 來覆蓋任何繼承的值
+
+**參考文件：**
+- homelab-docs 的 OpenCode Web 操作手冊記載了相同的解決方式
+- 標準啟動命令：`$env:OPENCODE_SERVER_PASSWORD=$null; & 'opencode-cli.exe' web ...`
+
+**驗證方式：**
+```bash
+# 應返回 {"healthy":true,"version":"1.4.3"}，而非 Unauthorized
+curl http://localhost:4096/global/health
+```
+
 ## 設定（`.env`）
 
 ```env
@@ -187,6 +233,44 @@ asyncio.run(main())
 
 真實瀏覽器驗證：Chrome 和 Edge（或 Chrome 無痕模式）分別打開 `http://localhost:9223/`，兩邊應看到完全相同的 session 畫面（標題、對話歷史都一致）。
 
+## Troubleshooting
+
+### dist/ 目錄包含舊架構代碼
+
+**問題：** 執行 `npm start` 後發現服務運行的是舊的 Fastify + Database 架構，而非透明 proxy。
+
+**原因：** `packages/server/dist/` 目錄包含之前架構編譯的代碼，TypeScript 編譯器不會自動刪除舊檔案。
+
+**解法：**
+```bash
+npm run build  # 重新編譯，覆蓋舊的 dist/index.js
+```
+
+**驗證：**
+```bash
+head -20 packages/server/dist/index.js
+# 應該看到 "import http from "node:http"" 和 proxy 相關代碼
+# 而不是 "import Fastify from 'fastify'"
+```
+
+### OpenCode 認證問題（詳見上方「認證問題與解決方案」章節）
+
+如果 OpenCode 啟動後所有端點返回 `401 Unauthorized`，檢查：
+1. spawn 時是否設定了 `env: { ...process.env, OPENCODE_SERVER_PASSWORD: "" }`
+2. 系統環境變數中是否存在 `OPENCODE_SERVER_PASSWORD`
+
+### Port 衝突
+
+如果 `npm start` 失敗並顯示 port 已被占用：
+```bash
+# Windows
+netstat -ano | findstr :9223
+netstat -ano | findstr :4096
+
+# 停止占用 port 的進程
+Stop-Process -Id <PID> -Force
+```
+
 ## 關鍵提交紀錄（commit history for context）
 
 - `0de4b50` — 重寫為透明 proxy（移除 Job Queue/Runner 舊架構）
@@ -195,3 +279,4 @@ asyncio.run(main())
 - `1f23077` — **最終修正**：改用 `/<base64url(dir)>/session/<id>`，這才是正確的 SPA URL 格式
 - `6e38e24` — 加 `start.ps1`
 - `3f04c62` / `c72806e` — 文件同步
+- `4eb4a2d` — **認證修正**：設定 `OPENCODE_SERVER_PASSWORD=""` 禁用認證，完成 Caddy 部署
