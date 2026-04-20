@@ -10,22 +10,28 @@ services:
       - TZ=Asia/Taipei
       - NODE_ENV=production
       - PORT=9223
-      - DATABASE_PATH=/data/opencode-remote.db
-      - RUNNER_SHARED_TOKEN=change-this-runner-token
-      - SSE_HEARTBEAT_MS=15000
-      - APP_BASE_URL=http://localhost:9223
-      - VAPID_PUBLIC_KEY=
-      - VAPID_PRIVATE_KEY=
-      - VAPID_SUBJECT=
+      - OPENCODE_PORT=4096
+      - OPENCODE_DIRECTORY=/workspace
+      - SESSION_REFRESH_INTERVAL_MS=30000
     volumes:
-      - opencode_remote_data:/data
+      # Project directory — OpenCode works here
+      - type: bind
+        source: ${WORKSPACE_PATH:-D:\Projects\_HomeProject}
+        target: /workspace
+      # OpenCode data: session history, config, API keys
+      - opencode_data:/root/.opencode
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:9223/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "require('http').get('http://localhost:9223/global/health',(r)=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>process.exit(JSON.parse(d).healthy?0:1))}).on('error',()=>process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 30s
 
 volumes:
-  opencode_remote_data:
+  opencode_data:
+    name: opencode_data
