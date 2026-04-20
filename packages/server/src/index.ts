@@ -109,7 +109,7 @@ async function main(): Promise<void> {
   const oc = spawn(
     "opencode",
     ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],
-    { cwd: config.opencodeDirectory, stdio: "inherit" },
+    { cwd: config.opencodeDirectory, stdio: "inherit", shell: process.platform === "win32" },
   );
   oc.on("exit", (code) => {
     console.error(`[opencode-remote] opencode exited with code ${code}`);
