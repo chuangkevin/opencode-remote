@@ -192,6 +192,8 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 - ✅ Caddy 已重新載入
 - ✅ 驗證通過：`https://opencode.sisihome.org/` 正常運作
 - ✅ Session 重導向正常，OpenCode Web UI 可透過域名存取
+- ✅ 修正 Caddy gzip 錯誤（添加 `transport http { compression off }` 配置）
+- ✅ 頁面內容正常載入（59 行 HTML），visibility script 正常注入
 
 **2. 開機自動啟動（Persistent startup on kevinhome）**
 - 目標：Windows 開機後自動跑 proxy，不需手動點 `start.ps1`
@@ -270,6 +272,49 @@ netstat -ano | findstr :4096
 # 停止占用 port 的進程
 Stop-Process -Id <PID> -Force
 ```
+
+### Caddy Gzip 錯誤導致空白頁面
+
+**問題：** 透過 `https://opencode.sisihome.org` 存取時，頁面返回 200 但內容為空（0 bytes）。Caddy 日誌顯示：
+```
+"error":"reading: gzip: invalid header"
+```
+
+**原因：** Caddy 的 reverse_proxy 預設會在 HTTP transport 層自動處理壓縮，即使 upstream 沒有發送 gzipped 內容，Caddy 也可能嘗試壓縮/解壓縮導致錯誤。我們的 proxy 使用 `Transfer-Encoding: chunked` 發送 HTML（因為注入 visibility script 後長度改變），這與 Caddy 的自動壓縮處理產生衝突。
+
+**解法（Caddyfile 配置）：**
+```caddyfile
+@opencode host opencode.sisihome.org
+handle @opencode {
+    reverse_proxy 100.83.112.20:9223 {
+        flush_interval -1              # SSE 支援
+        header_up -Accept-Encoding     # 移除請求的壓縮要求
+        header_down -Content-Encoding  # 確保回應不帶壓縮標頭
+        transport http {
+            compression off            # 關鍵：禁用 transport 層壓縮
+        }
+    }
+}
+```
+
+**關鍵配置：**
+- `transport http { compression off }` — 禁用 Caddy 在與 upstream 通訊時的自動壓縮處理
+- `flush_interval -1` — 禁用 buffering，支援 SSE streams（`/global/event` keep-alive）
+- `header_up -Accept-Encoding` — 不向 upstream 發送 Accept-Encoding header
+- `header_down -Content-Encoding` — 移除回應中的 Content-Encoding header（防護措施）
+
+**驗證：**
+```bash
+# 應返回完整的 HTML（約 59 行）
+curl -s https://opencode.sisihome.org/<session-url> | wc -l
+
+# 檢查 Caddy 日誌，不應再有 gzip 錯誤
+docker logs caddy 2>&1 | grep 'gzip'
+```
+
+**錯誤的嘗試（不要使用）：**
+- `encode none` — Caddy 沒有這個語法，會導致啟動失敗
+- 單獨使用 `flush_interval -1` 或 `header_up` 無法解決問題，必須同時禁用 transport compression
 
 ## 關鍵提交紀錄（commit history for context）
 
