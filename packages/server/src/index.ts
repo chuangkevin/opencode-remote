@@ -26,9 +26,17 @@ function proxy(
   const proxyReq = http.request(options, (proxyRes) => {
     const contentType = proxyRes.headers["content-type"] ?? "";
     const isHtml = contentType.includes("text/html");
+    const isHead = req.method === "HEAD";
 
-    if (!isHtml) {
-      res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
+    // HEAD requests and non-HTML: pass through without modification
+    if (isHead || !isHtml) {
+      // Workaround: OpenCode returns Content-Length: 0 for HEAD requests
+      // Remove the header to let browser handle it properly
+      const headers = { ...proxyRes.headers };
+      if (isHead && headers["content-length"] === "0") {
+        delete headers["content-length"];
+      }
+      res.writeHead(proxyRes.statusCode ?? 200, headers);
       proxyRes.pipe(res, { end: true });
       return;
     }
