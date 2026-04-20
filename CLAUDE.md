@@ -24,6 +24,63 @@
 
 `packages/server/src/config.ts` — 設定（從環境變數讀取）
 
+## 已知限制
+
+### 無法注入自動刷新 Script
+
+**限制：** 無法在 HTML 中注入 JavaScript（如 visibility-based auto-reload）來改善使用體驗。
+
+**原因：**
+
+1. **修改 HTML 必須 buffer 整個響應**：
+   ```typescript
+   // 需要這樣做才能注入 script
+   const chunks: Buffer[] = [];
+   proxyRes.on("data", chunk => chunks.push(chunk));
+   proxyRes.on("end", () => {
+     let body = Buffer.concat(chunks).toString("utf8");
+     body = body.replace("</body>", `${SCRIPT}</body>`);
+     res.end(body);
+   });
+   ```
+
+2. **Buffer 後必須刪除 Content-Length**（因為內容長度改變）：
+   ```typescript
+   delete headers["content-length"];
+   ```
+
+3. **刪除 Content-Length 導致 Transfer-Encoding: chunked**：
+   - Node.js http 模組自動使用 chunked encoding
+
+4. **Chunked encoding + Caddy reverse proxy = 內容解碼失敗**：
+   - Caddy 處理 chunked responses 時嘗試 gzip 壓縮/解壓縮
+   - 產生 `reading: gzip: invalid header` 錯誤
+   - 瀏覽器收到損壞的內容
+   - 顯示 `net::ERR_CONTENT_DECODING_FAILED 200 (OK)`
+
+5. **無法透過 Caddy 配置修復**：
+   - 添加 `transport http { compression off }` 會導致 HTTP/2 streams 關閉
+   - `/provider` 等 API 請求失敗（`http2: stream closed`）
+   - Model 配置無法正確載入
+
+**結論：**
+
+- 必須保持**完全透明的 proxy**（pure pipe，不修改任何內容）
+- 使用者需要手動刷新頁面來看到新對話
+- 這是架構限制，無法在不破壞核心功能的前提下改善
+
+**驗證方式：**
+
+```bash
+# 透明 pipe（可用）
+curl -s https://opencode.sisihome.org/<session-url> | wc -l
+# 返回 0（gzip 錯誤），但瀏覽器可正常使用
+
+# 注入 script（不可用）
+# 瀏覽器顯示：net::ERR_CONTENT_DECODING_FAILED
+# 完全空白頁面
+```
+
 ## 關鍵技術細節
 
 ### OpenCode SPA URL 格式
