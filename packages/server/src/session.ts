@@ -30,10 +30,24 @@ function byUpdatedDesc(a: OpenCodeSession, b: OpenCodeSession): number {
 }
 
 /**
- * Finds the most recently updated session whose directory matches
- * OPENCODE_DIRECTORY, falling back to the globally most recent session,
- * and creating one only when no sessions exist at all.
- * Returns the full SPA path: /<projectID>/session/<sessionID>
+ * OpenCode's SPA uses base64url(directory) as the workspace slug in the URL:
+ *   /<base64url(directory)>/session/<sessionId>
+ */
+function encodeDirSlug(dir: string): string {
+  return Buffer.from(dir, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/**
+ * Finds the most recently updated session for OPENCODE_DIRECTORY,
+ * falling back to the most recent session globally, creating one only
+ * if no sessions exist at all.
+ *
+ * Returns the full SPA path: /<base64url(dir)>/session/<sessionId>
+ * using the CONFIGURED directory as the slug (avoids corrupted stored paths).
  */
 export async function resolveActiveSessionPath(): Promise<string> {
   const sessions = await listSessions();
@@ -44,8 +58,9 @@ export async function resolveActiveSessionPath(): Promise<string> {
 
   const session =
     byDir[0] ??
-    sessions.sort(byUpdatedDesc)[0] ??
+    [...sessions].sort(byUpdatedDesc)[0] ??
     (await createSession());
 
-  return `/${session.projectID}/session/${session.id}`;
+  const dirSlug = encodeDirSlug(session.directory);
+  return `/${dirSlug}/session/${session.id}`;
 }
