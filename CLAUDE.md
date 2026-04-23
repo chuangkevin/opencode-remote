@@ -257,13 +257,18 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 
 ## 啟動方式
 
-**Windows 背景啟動（推薦）：** `.\start-hidden.ps1`（不佔用終端，輸出到背景）
-**前景啟動（debug）：** `npm start`（日誌直接顯示）
-**停止：** `.\stop.ps1`（同時停止 proxy 和 OpenCode）
-**開發：** `npm run dev`（tsx watch，自動重載）
+**主要啟動（AI agent / 自動化可用）：** `.\start-hidden.ps1`
+→ 背景執行，不阻塞，可透過 PowerShell tool 直接執行
+
+**停止：** `.\stop.ps1`（同時停止 proxy 和 OpenCode，AI 可執行）
+
+**開發：** `npm run dev`（tsx watch，自動重載，AI 可執行，但會阻塞）
 **Docker：** `docker compose up`（需設 `WORKSPACE_PATH` 環境變數）
 
-**Health check 確認啟動成功：**
+> **手動備用（需使用者在終端機操作）：** `npm start`
+> 前景模式，日誌直接顯示。AI agent 無法用此方式啟動（阻塞式 + terminal 只有 click 權限）。
+
+**Health check 確認啟動成功（AI 可執行）：**
 ```powershell
 curl http://localhost:4096/global/health   # 應返回 {"healthy":true,...}
 curl http://localhost:9223/                # 應返回 302 redirect

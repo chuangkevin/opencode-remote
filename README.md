@@ -6,13 +6,12 @@
 
 ```powershell
 cd D:\GitClone\_HomeProject\opencode-remote
-
-# 背景啟動（推薦）
 .\start-hidden.ps1
-
-# 前景啟動（查看日誌）
-npm start
 ```
+
+服務在背景執行，不阻塞終端。AI agent（Claude Code task）可直接用 PowerShell tool 執行此指令。
+
+> **手動備用（需開終端機）：** `npm start`（前景模式，日誌直接顯示，Ctrl+C 停止）
 
 ## 確認服務正常
 

@@ -4,25 +4,21 @@
 
 ### 啟動服務
 
-**背景啟動（推薦）：**
+**背景啟動（主要方式）：**
 
 ```powershell
 cd D:\GitClone\_HomeProject\opencode-remote
 .\start-hidden.ps1
 ```
 
-服務在背景執行，不佔用終端：
+服務在背景執行，不阻塞終端。**AI agent（Claude Code task）可直接透過 PowerShell tool 執行此指令。**
+
 - 本地訪問: http://localhost:9223
 - 外網訪問: https://opencode.sisihome.org
 
-**前景啟動（查看即時日誌）：**
-
-```powershell
-cd D:\GitClone\_HomeProject\opencode-remote
-npm start
-```
-
-輸出直接顯示在終端，方便 debug。Ctrl+C 停止。
+> **手動備用（需使用者開終端機）：** `npm start`
+> 前景模式，日誌直接顯示，Ctrl+C 停止。
+> AI agent 無法使用這個方式（阻塞式進程，且 terminal 只有 click 權限無法輸入）。
 
 ### 確認服務正常
 
@@ -99,13 +95,15 @@ netstat -ano | findstr :4096   # OpenCode
 
 ## 修改代碼後的流程
 
-```powershell
-# 1. 修改代碼 (packages/server/src/*.ts)
+以下步驟 AI agent 可以全部透過 PowerShell/Bash tool 執行：
 
-# 2. 編譯
+```powershell
+# 1. 修改代碼 (packages/server/src/*.ts)  ← AI 用 Edit tool
+
+# 2. 編譯（非阻塞，等完成後返回）
 npm run build
 
-# 3. 重啟服務
+# 3. 重啟服務（背景，不阻塞）
 .\restart-service.ps1
 
 # 4. 驗證
@@ -242,15 +240,18 @@ Get-Process -Id $pid | Select-Object ProcessName, @{Name="Memory(MB)";Expression
 
 ### 查看服務日誌
 
-如果使用 `start-hidden.ps1`，輸出會重定向。要查看日誌：
+`start-hidden.ps1` 的輸出會到背景（無法直接查看）。要查看即時日誌需手動操作：
 
 ```powershell
-# 停止隱藏模式
+# 停止目前服務
 .\stop.ps1
 
-# 以前台模式啟動查看日誌
+# 手動開 PowerShell 終端機，前台模式啟動
 npm start
+# （Ctrl+C 停止）
 ```
+
+> **注意：** 此操作需要使用者手動在終端機執行，AI agent 無法代為操作。
 
 ## 自動化測試
 
