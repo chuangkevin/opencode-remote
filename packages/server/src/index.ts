@@ -5,12 +5,6 @@ import { resolveActiveSessionPath } from "./session.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
-// Injected into every HTML page so mobile browsers auto-reload after 10 s in background.
-const VISIBILITY_SCRIPT =
-  `<script>(function(){var t=0;document.addEventListener('visibilitychange',` +
-  `function(){if(document.visibilityState==='hidden'){t=Date.now();}` +
-  `else if(t&&Date.now()-t>10000){location.reload();}});})();</script>`;
-
 function proxy(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -24,37 +18,18 @@ function proxy(
   };
 
   const proxyReq = http.request(options, (proxyRes) => {
-    const contentType = proxyRes.headers["content-type"] ?? "";
-    const isHtml = contentType.includes("text/html");
     const isHead = req.method === "HEAD";
 
-    // HEAD requests and non-HTML: pass through without modification
-    if (isHead || !isHtml) {
-      // Workaround: OpenCode returns Content-Length: 0 for HEAD requests
-      // Remove the header to let browser handle it properly
-      const headers = { ...proxyRes.headers };
-      if (isHead && headers["content-length"] === "0") {
-        delete headers["content-length"];
-      }
-      res.writeHead(proxyRes.statusCode ?? 200, headers);
-      proxyRes.pipe(res, { end: true });
-      return;
+    // Pass through all responses without modification for Caddy compatibility
+    // HTML modification with script injection causes connection issues through reverse proxy
+    // Workaround: OpenCode returns Content-Length: 0 for HEAD requests
+    // Remove the header to let browser handle it properly
+    const headers = { ...proxyRes.headers };
+    if (isHead && headers["content-length"] === "0") {
+      delete headers["content-length"];
     }
-
-    // Buffer HTML so we can inject the visibility-reload script.
-    const chunks: Buffer[] = [];
-    proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
-    proxyRes.on("end", () => {
-      let body = Buffer.concat(chunks).toString("utf8");
-      body = body.includes("</body>")
-        ? body.replace("</body>", `${VISIBILITY_SCRIPT}</body>`)
-        : body + VISIBILITY_SCRIPT;
-
-      const headers = { ...proxyRes.headers };
-      delete headers["content-length"]; // length changed after injection
-      res.writeHead(proxyRes.statusCode ?? 200, headers);
-      res.end(body);
-    });
+    res.writeHead(proxyRes.statusCode ?? 200, headers);
+    proxyRes.pipe(res, { end: true });
   });
 
   proxyReq.on("error", () => {
@@ -141,8 +116,11 @@ async function refreshSessionPath(): Promise<void> {
 async function main(): Promise<void> {
   // 1. Spawn OpenCode headless server
   console.log(`[opencode-remote] spawning opencode serve in ${config.opencodeDirectory}`);
+  const opencodeCmd = process.platform === "win32"
+    ? "C:\\Users\\Kevin\\AppData\\Local\\opencode\\opencode-cli.exe"
+    : "opencode";
   const oc = spawn(
-    "opencode",
+    opencodeCmd,
     ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],
     {
       cwd: config.opencodeDirectory,

@@ -1,5 +1,7 @@
 # opencode-remote — AI Assistant Context
 
+> **操作手冊：** 服務啟動、重啟、故障排除等操作流程請參考 [`OPERATIONS.md`](./OPERATIONS.md)
+
 ## 專案目的
 
 在 Windows 電腦上運行 OpenCode headless server，並透過一個透明 HTTP proxy 將 OpenCode 的原生 Web UI 暴露給所有裝置。任何裝置打開 URL 都會自動進入同一個最近活躍的 session，看到完整對話歷史，可以繼續工作。Session 在伺服器端持久化，瀏覽器關閉不影響。
@@ -30,7 +32,7 @@
 
 **限制：** 無法在 HTML 中注入 JavaScript（如 visibility-based auto-reload）來改善使用體驗。
 
-**原因：**
+**根本原因：HTTP 協議違規導致 Caddy 關閉連接**（2026-04-22 確認）
 
 1. **修改 HTML 必須 buffer 整個響應**：
    ```typescript
@@ -40,45 +42,60 @@
    proxyRes.on("end", () => {
      let body = Buffer.concat(chunks).toString("utf8");
      body = body.replace("</body>", `${SCRIPT}</body>`);
-     res.end(body);
+     res.end(body);  // ← 問題在這裡
    });
    ```
 
-2. **Buffer 後必須刪除 Content-Length**（因為內容長度改變）：
+2. **從 OpenCode 收到的 response 包含 `Transfer-Encoding: chunked` header**
+
+3. **刪除 Content-Length 但保留 Transfer-Encoding 造成協議違規**：
    ```typescript
-   delete headers["content-length"];
+   delete headers["content-length"];  // 因為內容長度改變
+   // 但 Transfer-Encoding: chunked 被保留了
+   res.writeHead(proxyRes.statusCode ?? 200, headers);
+   res.end(body);  // 發送完整 body string，不是 chunked 格式
    ```
 
-3. **刪除 Content-Length 導致 Transfer-Encoding: chunked**：
-   - Node.js http 模組自動使用 chunked encoding
+4. **HTTP 協議違規**：
+   - `Transfer-Encoding: chunked` 表示數據會以特殊格式分塊傳輸（每塊前有長度標記）
+   - 但 `res.end(body)` 直接發送完整內容，**不符合 chunked 編碼格式**
+   - Node.js 本地能容忍這個錯誤（localhost:9223 訪問正常）
+   - **Caddy 嚴格遵守 HTTP 規範**：
+     - 看到 `Transfer-Encoding: chunked` header
+     - 期待接收 chunked 格式數據
+     - 實際收到的是完整 body（非 chunked 格式）
+     - 直接關閉連接 → `curl: (18) transfer closed with outstanding read data remaining`
 
-4. **Chunked encoding + Caddy reverse proxy = 內容解碼失敗**：
-   - Caddy 處理 chunked responses 時嘗試 gzip 壓縮/解壓縮
-   - 產生 `reading: gzip: invalid header` 錯誤
-   - 瀏覽器收到損壞的內容
-   - 顯示 `net::ERR_CONTENT_DECODING_FAILED 200 (OK)`
-
-5. **無法透過 Caddy 配置修復**：
-   - 添加 `transport http { compression off }` 會導致 HTTP/2 streams 關閉
-   - `/provider` 等 API 請求失敗（`http2: stream closed`）
-   - Model 配置無法正確載入
+5. **嘗試修復失敗**：
+   - ❌ 設定明確的 `Content-Length`：連接仍被關閉
+   - ❌ 在首個 data chunk 立即寫入 headers：連接仍被關閉
+   - ❌ 加入 error handling：無法解決根本問題
+   - ✅ **唯一解法：完全透明 pipe，不修改內容**
 
 **結論：**
 
-- 必須保持**完全透明的 proxy**（pure pipe，不修改任何內容）
-- 使用者需要手動刷新頁面來看到新對話
+- 必須保持**完全透明的 proxy**（`proxyRes.pipe(res)`，不修改任何內容）
+- 代碼已移除所有 HTML 修改邏輯（包括 VISIBILITY_SCRIPT）
+- 手機瀏覽器不會自動 reload（可接受的代價）
 - 這是架構限制，無法在不破壞核心功能的前提下改善
+
+**症狀對比：**
+
+| 模式 | 本地訪問 (localhost:9223) | HTTPS/Caddy 訪問 |
+|------|--------------------------|-----------------|
+| 透明 pipe | ✅ 正常 | ✅ 正常 |
+| HTML 修改 | ✅ 正常 | ❌ `transfer closed` / `Empty reply` |
 
 **驗證方式：**
 
 ```bash
-# 透明 pipe（可用）
-curl -s https://opencode.sisihome.org/<session-url> | wc -l
-# 返回 0（gzip 錯誤），但瀏覽器可正常使用
+# 測試 HTTPS 訪問
+curl -L https://opencode.sisihome.org/
+# 應返回完整 HTML（約 2365 bytes）
 
-# 注入 script（不可用）
-# 瀏覽器顯示：net::ERR_CONTENT_DECODING_FAILED
-# 完全空白頁面
+# Playwright 測試
+node test-screenshot2.mjs
+# 應成功載入並生成 opencode-screen.png
 ```
 
 ## 關鍵技術細節
@@ -136,7 +153,46 @@ GET  /event                      → SSE stream
 
 ### Windows 特有問題
 
-**opencode.cmd spawn：** Windows 上 `opencode` npm global 安裝為 `opencode.cmd`，spawn 時需要 `shell: process.platform === "win32"` 才能找到。
+**⚠️ 必須使用 opencode-cli.exe（重要！）**
+
+Windows 上 OpenCode 有兩個執行檔：
+- `OpenCode.exe` (25MB) - GUI 版本，會立即退出（exit code 0）
+- `opencode-cli.exe` (180MB) - CLI 版本，正確的 headless server
+
+**問題症狀：**
+```
+[opencode-remote] spawning opencode serve in D:\GitClone\_HomeProject
+opencode exited with code 0
+```
+
+**錯誤做法：**
+```typescript
+spawn("opencode", ["serve", ...])  // 在 Windows 上會啟動 OpenCode.exe (GUI)
+```
+
+**正確做法：**
+```typescript
+// packages/server/src/index.ts (已修正)
+const opencodeCmd = process.platform === "win32"
+  ? "C:\\Users\\Kevin\\AppData\\Local\\opencode\\opencode-cli.exe"  // 明確指定 CLI 版本
+  : "opencode";
+
+spawn(opencodeCmd, ["serve", ...], {
+  shell: process.platform === "win32",  // Windows 需要 shell
+  ...
+});
+```
+
+**驗證方式：**
+```powershell
+# 確認使用的是 CLI 版本
+ls "C:\Users\Kevin\AppData\Local\opencode\opencode-cli.exe"
+# 應該是 180MB 左右
+
+# 服務啟動後檢查
+netstat -ano | findstr :4096
+# 應該看到 LISTENING 狀態持續存在
+```
 
 **Directory 亂碼：** 某些舊 session 的 `directory` 欄位含有非 UTF-8 bytes（Windows 路徑編碼問題）。URL 必須用 session 自己的 `directory` 編碼（才能對應 SPA 內部 workspace context），所以亂碼 session 產生的 URL 無法使用。解法是優先挑選 `directory === OPENCODE_DIRECTORY` 的 session，這樣被編碼的就是乾淨的設定路徑。
 
@@ -201,9 +257,17 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 
 ## 啟動方式
 
+**Windows 背景啟動（推薦）：** `.\start-hidden.ps1`（不佔用終端，輸出到背景）
+**前景啟動（debug）：** `npm start`（日誌直接顯示）
+**停止：** `.\stop.ps1`（同時停止 proxy 和 OpenCode）
 **開發：** `npm run dev`（tsx watch，自動重載）
-**生產：** `npm start` 或直接點 `start.ps1`
 **Docker：** `docker compose up`（需設 `WORKSPACE_PATH` 環境變數）
+
+**Health check 確認啟動成功：**
+```powershell
+curl http://localhost:4096/global/health   # 應返回 {"healthy":true,...}
+curl http://localhost:9223/                # 應返回 302 redirect
+```
 
 ## Docker
 
@@ -238,7 +302,8 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 - [x] Windows `opencode.cmd` spawn 用 `shell: true`
 - [x] EADDRINUSE 不 crash（檢測既有 OpenCode 是否健康）
 - [x] `.env` 透過 `--env-file` 載入
-- [x] `start.ps1` 一鍵啟動腳本
+- [x] `start.ps1` / `start-hidden.ps1` 啟動腳本（前景/背景）
+- [x] `stop.ps1` / `restart-service.ps1` 停止與重啟腳本
 - [x] Docker 設定（Dockerfile + docker-compose.yml）
 - [x] 跨瀏覽器同步驗證通過（Playwright 測試 + 使用者確認）
 
@@ -382,3 +447,63 @@ docker logs caddy 2>&1 | grep 'gzip'
 - `6e38e24` — 加 `start.ps1`
 - `3f04c62` / `c72806e` — 文件同步
 - `4eb4a2d` — **認證修正**：設定 `OPENCODE_SERVER_PASSWORD=""` 禁用認證，完成 Caddy 部署
+
+## 重大修復記錄
+
+### 2026-04-22: Caddy HTTPS 連接問題修復
+
+**問題：** 透過 `https://opencode.sisihome.org` 訪問時連接失敗
+- 症狀：`curl: (18) transfer closed with outstanding read data remaining` 或 `Empty reply from server`
+- 本地訪問正常 (localhost:9223)
+- 直接 Tailscale HTTP 訪問正常
+- 僅 Caddy HTTPS 訪問失敗
+
+**根本原因：** HTTP 協議違規
+- 原代碼嘗試注入 VISIBILITY_SCRIPT 到 HTML 中（用於手機瀏覽器自動 reload）
+- 修改 HTML 需要 buffer 整個 response
+- 從 OpenCode 收到的 response 包含 `Transfer-Encoding: chunked`
+- 代碼刪除 `Content-Length` 但保留 `Transfer-Encoding: chunked`
+- 然後用 `res.end(body)` 發送完整 body（不是 chunked 格式）
+- Node.js 本地能容忍，但 Caddy 嚴格遵守規範，發現格式不符後關閉連接
+
+**解決方案：** 完全移除 HTML 修改邏輯
+- 移除 `VISIBILITY_SCRIPT` 常量
+- 改為純透傳代理：`proxyRes.pipe(res)`
+- 不再修改任何 HTML 內容
+- 所有 response 保持原始 headers 和 body
+
+**代價：** 手機瀏覽器不會在背景超過 10 秒後自動 reload（可接受）
+
+**驗證：**
+```bash
+curl -L https://opencode.sisihome.org/  # 返回完整 HTML (2365 bytes)
+node test-screenshot2.mjs                # Playwright 測試成功
+```
+
+**相關文件：**
+- `packages/server/src/index.ts` - 移除 HTML 修改邏輯，簡化為純透傳
+- `OPERATIONS.md` - 新增操作手冊
+
+### 2026-04-22 之前: Windows OpenCode 啟動失敗
+
+**問題：** OpenCode server 立即退出 (exit code 0)
+```
+[opencode-remote] spawning opencode serve
+opencode exited with code 0
+```
+
+**根本原因：** 使用錯誤的執行檔
+- Windows 上有兩個執行檔：
+  - `OpenCode.exe` (25MB) - GUI 版本
+  - `opencode-cli.exe` (180MB) - CLI 版本
+- `spawn("opencode")` 在 Windows 上會啟動 GUI 版本
+- GUI 版本會立即退出，無法作為 headless server
+
+**解決方案：** 明確指定 opencode-cli.exe
+```typescript
+const opencodeCmd = process.platform === "win32"
+  ? "C:\Users\Kevin\AppData\Local\opencode\opencode-cli.exe"
+  : "opencode";
+```
+
+**相關 commit：** 參見 `packages/server/src/index.ts` line 144-146
