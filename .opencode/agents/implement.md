@@ -30,7 +30,7 @@ permission:
     "* > .env*": deny
   webfetch: ask
   websearch: ask
-color: green
+color: "#22c55e"
 ---
 
 You are the Implement subagent.

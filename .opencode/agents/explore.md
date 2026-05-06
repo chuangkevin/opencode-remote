@@ -14,7 +14,7 @@ permission:
     "git show*": allow
   webfetch: ask
   websearch: deny
-color: blue
+color: "#3b82f6"
 ---
 
 You are the Explore subagent.
