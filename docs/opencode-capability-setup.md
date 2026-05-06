@@ -11,14 +11,34 @@ This document wires the version-controlled opencode capability files from
 
 Run commands from `opencode-remote`.
 
+## Guided Setup
+
+Use the guided setup when `.env` is missing, `OPENCODE_DIRECTORY` is unknown, or
+GitHub MCP needs a local token:
+
+```powershell
+.\setup-capabilities.ps1
+```
+
+The script prompts for missing values, writes local `.env` without printing
+secret values, and wires `opencode.json`, `AGENTS.md`, and `.opencode\agents` to
+the runtime root. It prefers symlink/junction wiring and offers copy fallback if
+link creation fails.
+
+To skip GitHub token input:
+
+```powershell
+.\setup-capabilities.ps1 -SkipGithubToken
+```
+
 ## Read Runtime Root From `.env`
 
 ```powershell
 $Repo = (Get-Location).Path
 $EnvLine = Get-Content "$Repo\.env" | Where-Object { $_ -match '^OPENCODE_DIRECTORY=' } | Select-Object -First 1
-if (-not $EnvLine) { throw 'OPENCODE_DIRECTORY is missing from .env' }
+if (-not $EnvLine) { .\setup-capabilities.ps1; return }
 $HomeProjectRoot = $EnvLine -replace '^OPENCODE_DIRECTORY=', ''
-if (-not (Test-Path $HomeProjectRoot)) { throw "HomeProject root does not exist: $HomeProjectRoot" }
+if (-not (Test-Path $HomeProjectRoot)) { .\setup-capabilities.ps1; return }
 $HomeProjectRoot
 ```
 
@@ -47,7 +67,8 @@ New-Item -ItemType Junction -Path $AgentTarget -Target (Join-Path $Repo '.openco
 ```
 
 If symbolic link creation fails because Windows Developer Mode or privileges are
-not available, use the copy fallback below.
+not available, run `./setup-capabilities.ps1 -CopyFallback` or use the copy
+fallback below.
 
 ## Fallback Setup: Copy
 

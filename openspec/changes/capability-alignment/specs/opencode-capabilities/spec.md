@@ -32,6 +32,14 @@ runtime workspace as `<HOMEPROJECT_ROOT>` and by relying on the configured
 - **THEN** setup instructions and verification commands work for that root
 - **AND** no source file needs to be edited solely to replace `D:\Projects`
 
+#### Scenario: Local runtime settings are missing
+
+- **WHEN** `.env` or `OPENCODE_DIRECTORY` is missing or invalid
+- **THEN** `opencode-remote` provides a guided setup command that prompts for the
+  missing user-provided values
+- **AND** the command writes the local `.env` without committing or printing
+  secret values
+
 ### Requirement: Workspace configuration exposure SHALL be manual in v1
 
 The first implementation SHALL document manual workspace wiring for making

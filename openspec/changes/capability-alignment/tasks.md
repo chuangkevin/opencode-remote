@@ -33,9 +33,12 @@
 - [x] 3.2 Document copy fallback commands and drift warning.
 - [x] 3.3 Document equivalent setup for `AGENTS.md` and `.opencode\agents`.
 - [x] 3.4 Add verification commands proving the runtime sees the wired files.
+- [x] 3.5 Provide guided setup that prompts for missing local values and writes
+      `.env` from user-provided input instead of stopping at missing config.
 
       → Manual symlink/junction and copy fallback commands are documented in
-        `docs/opencode-capability-setup.md` with verification prompts.
+        `docs/opencode-capability-setup.md` with verification prompts. Missing
+        local settings can be filled by `setup-capabilities.ps1`.
 
 ## 4. Rules And Memory
 

@@ -75,7 +75,9 @@ requires merging back to the intended branch and cleaning up temporary worktrees
 
 ## Safety
 
-- Never edit `.env*`, service-account files, credential JSON, or secret paths.
+- Never manually edit `.env*`, service-account files, credential JSON, or secret
+  paths. Use `setup-capabilities.ps1` when the user explicitly provides local
+  setup values that must be written to `.env`.
 - Never run force-push, hard reset, broad cleanup, or recursive deletion unless
   the user explicitly requests and approves it.
 - Keep `packages/server/src/*` unchanged for capability alignment unless config

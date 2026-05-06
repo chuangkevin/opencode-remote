@@ -62,6 +62,7 @@ SESSION_REFRESH_INTERVAL_MS=30000              # Session 刷新間隔（ms）
 
 ## OpenCode Capability Setup
 
+- Run `.\setup-capabilities.ps1` when local `.env` or workspace wiring is missing.
 - [docs/opencode-capability-setup.md](./docs/opencode-capability-setup.md) — manual workspace wiring for `opencode.json`, `AGENTS.md`, MCP, memory, and subagents
 - [docs/superpowers/specs/2026-05-06-capability-alignment-design.md](./docs/superpowers/specs/2026-05-06-capability-alignment-design.md) — approved capability alignment design
 - [openspec/changes/capability-alignment/](./openspec/changes/capability-alignment/) — formal OpenSpec change
