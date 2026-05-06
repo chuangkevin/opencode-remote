@@ -36,13 +36,16 @@
 
 ## 4. Rules And Memory
 
-- [ ] 4.1 Create `AGENTS.md` in `opencode-remote` as the opencode workspace rule
+- [x] 4.1 Create `AGENTS.md` in `opencode-remote` as the opencode workspace rule
       source.
-- [ ] 4.2 Keep `AGENTS.md` concise and reference HomeProject rule sources instead
+- [x] 4.2 Keep `AGENTS.md` concise and reference HomeProject rule sources instead
       of copying long `CLAUDE.md` sections.
-- [ ] 4.3 Create `.opencode-memory/MEMORY.md` and initial topic files.
-- [ ] 4.4 Document memory write/read triggers and the rule that memory-backed
+- [x] 4.3 Create `.opencode-memory/MEMORY.md` and initial topic files.
+- [x] 4.4 Document memory write/read triggers and the rule that memory-backed
       code/runtime claims must be re-verified.
+
+      → Rules and memory are owned by `opencode-remote`; AGENTS.md lazy-loads
+        HomeProject rule sources and memory files cite their source paths.
 
 ## 5. Subagents And Worktree Guidance
 
