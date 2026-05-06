@@ -181,27 +181,28 @@ G. **參考來源**（§G）
       "command": [
         "npx", "-y",
         "@modelcontextprotocol/server-filesystem",
-        "D:\\GitClone\\_HomeProject"
+        "{env:OPENCODE_DIRECTORY}"
       ],
       "enabled": true,
       "timeout": 10000
     },
     "git": {
       "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-git", "--repository", "D:\\GitClone\\_HomeProject"],
+      "command": ["npx", "-y", "@cyanheads/git-mcp-server"],
       "enabled": true
     },
     "github": {
-      "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "type": "remote",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer {env:GITHUB_TOKEN}"
+      },
       "enabled": true,
-      "environment": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${env:GITHUB_TOKEN}"
-      }
+      "timeout": 10000
     },
     "fetch": {
       "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-fetch"],
+      "command": ["npx", "-y", "mcp-fetch-server"],
       "enabled": true
     },
     "playwright": {
@@ -725,13 +726,13 @@ Claude Code 的 Cowork dispatch 流程是「主 agent → 拆任務 → 平行�
 **Step 4.1** — 預先 `npx` 一次每個 server 確認下載成功（避免 session 內首次延遲）：
 ```powershell
 npx -y @modelcontextprotocol/server-filesystem --help
-npx -y @modelcontextprotocol/server-git --help
-npx -y @modelcontextprotocol/server-github --help
-npx -y @modelcontextprotocol/server-fetch --help
+npx -y @cyanheads/git-mcp-server --help
+npx -y mcp-fetch-server --help
+# GitHub MCP uses GitHub's official remote endpoint: https://api.githubcopilot.com/mcp/
 # playwright 預設 disabled，先不裝
 ```
 **Step 4.2** — 為 GitHub MCP 申請 PAT（GitHub → Settings → Developer settings → Tokens (classic)），scopes：`repo`, `read:org`. 寫進 `opencode-remote/.env` 的 `GITHUB_TOKEN`。
-**Step 4.3** — 修 `packages/server/src/index.ts` 在 spawn 區段把 `GITHUB_TOKEN` 透傳。
+**Step 4.3** — 不需要修改 server code；`.env` 會載入 `process.env`，並由 `opencode serve` child process 繼承 `GITHUB_TOKEN`。
 **Step 4.4** — 重啟 server，session 內試 `「mcp/git: list branches in opencode-remote」` 跟 `「mcp/github: open issues in kevinsisi/mind-diary」`，驗證兩者都能呼叫成功。
 
 ### Task 5: 建立記憶系統目錄結構
@@ -897,9 +898,9 @@ Expected: commit message 含 "Co-Authored-By: opencode (gpt-5.5) ..."，
 ### G.3 MCP server packages
 
 - `@modelcontextprotocol/server-filesystem` — npm 套件，受限 root 的檔案 R/W
-- `@modelcontextprotocol/server-git` — 結構化 git 操作
-- `@modelcontextprotocol/server-github` — GitHub REST/GraphQL via PAT
-- `@modelcontextprotocol/server-fetch` — URL → markdown
+- `@cyanheads/git-mcp-server` — npm 套件，結構化 git 操作
+- GitHub official remote MCP — `https://api.githubcopilot.com/mcp/` with `GITHUB_TOKEN` bearer auth
+- `mcp-fetch-server` — npm 套件，URL → markdown/text/json
 - `@playwright/mcp` — 瀏覽器自動化（預設 disabled）
 
 ### G.4 相關 Claude Code 概念對照
