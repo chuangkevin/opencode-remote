@@ -794,7 +794,8 @@ Copy-Item (Join-Path $Repo '.opencode\agents\*.md') (Join-Path $HomeProjectRoot 
 GitHub MCP reads `GITHUB_TOKEN` from `opencode-remote/.env`. Add it locally only:
 
 ```env
-GITHUB_TOKEN=ghp_your_local_token_here
+# Paste the real token locally only. Do not commit it.
+GITHUB_TOKEN=
 ```
 
 Do not commit the real token.

@@ -156,7 +156,8 @@ OPENCODE_PORT=4096
 SESSION_REFRESH_INTERVAL_MS=30000
 
 # 新增（MCP 用）
-GITHUB_TOKEN=<personal-access-token>     # 給 GitHub remote MCP 用，scopes: repo + read:org
+# 本機自行填入真 token，不要 commit
+GITHUB_TOKEN=                            # 給 GitHub remote MCP 用，scopes: repo + read:org
 ```
 
 不需要修改 `packages/server/src/index.ts`。`.env` 已由 npm scripts 的
