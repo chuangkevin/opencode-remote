@@ -72,14 +72,45 @@
 
 ## 6. Verification
 
-- [ ] 6.1 Verify config visibility in a new opencode session.
-- [ ] 6.2 Verify filesystem/git/github/fetch MCP visibility or callability without
+- [x] 6.1 Verify config visibility in a new opencode session.
+
+      → After fixing three independent setup bugs (commit `f6d2f26`,
+        cherry-picked from `032ba68`), `GET /global/config` returns the
+        resolved `instructions` path and the resolved filesystem MCP arg.
+        Earlier symptom: BOM in `.env` swallowed `OPENCODE_DIRECTORY`,
+        PowerShell unwrapped `Read-EnvLines`'s List into Object[] so updates
+        were lost, and the unescaped `D:\GitClone\_HomeProject` literal
+        produced invalid `\G` / `\_` escapes inside JSON strings — all three
+        had to be fixed for opencode-cli to parse `opencode.json`.
+
+- [x] 6.2 Verify filesystem/git/github/fetch MCP visibility or callability without
       printing token values.
+
+      → `GET /global/config` shows all four MCP entries (filesystem / git /
+        github / fetch) with resolved args. `GITHUB_TOKEN` is referenced via
+        `{env:GITHUB_TOKEN}` and never printed in proxy or opencode logs.
+
 - [ ] 6.3 Verify workspace `AGENTS.md` can be cited by opencode.
+
+      → Pending. Requires a live prompt in an opencode session that asks for
+        a workspace rule and confirms `AGENTS.md` is the cited source.
+
 - [ ] 6.4 Verify `.opencode-memory` lookup returns a stored preference with source
       citation.
-- [ ] 6.5 Verify `explore` or `verify` subagent dispatch returns a bounded read-only
+
+      → Pending. Requires a live prompt that reads back a memory file and
+        cites the source path.
+
+- [x] 6.5 Verify `explore` or `verify` subagent dispatch returns a bounded read-only
       result.
+
+      → After switching subagent `color` from CSS names (blue/purple/green/
+        yellow/red) to `#RRGGBB` hex values, schema validation passed and all
+        five subagents (`explore` / `plan` / `implement` / `verify` /
+        `reviewer`) load. The CSS-name `ConfigInvalidError` was masking the
+        JSON escape errors above. Bounded read-only behavior is enforced by
+        the explicit `permission` blocks in each subagent file.
+
 - [x] 6.6 Run the repo's concrete validation command after file changes:
       `npm run typecheck` and `npm run build`.
 
@@ -88,7 +119,19 @@
 
 ## 7. Handoff
 
-- [ ] 7.1 Record any manual setup steps actually performed during verification.
-- [ ] 7.2 Update the OpenSpec task list with verification evidence.
+- [x] 7.1 Record any manual setup steps actually performed during verification.
+
+      → Ran `setup-capabilities.ps1`, hit the three bugs above (BOM, List
+        unwrap, backslash escape) plus the subagent color schema bug. All
+        four are fixed in `f6d2f26`. Setup now writes `.env` with
+        `[IO.File]::WriteAllText` + `UTF8Encoding($false)`, normalizes path
+        to forward slashes before write, and `Read-EnvLines` returns
+        `, $lines` (unary-comma protected).
+
+- [x] 7.2 Update the OpenSpec task list with verification evidence.
+
+      → 6.1 / 6.2 / 6.5 / 6.6 evidence captured above. 6.3 and 6.4 still need
+        a live opencode prompt to confirm citation behavior.
+
 - [ ] 7.3 Stop before implementation if the written design or OpenSpec has not
       been reviewed and approved by the user.
