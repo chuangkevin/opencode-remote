@@ -287,24 +287,29 @@ curl http://localhost:9223/                # 應返回 302 redirect
 本專案使用 OpenSpec 管理規格。主要檔案：
 
 - `openspec/config.yaml` — 專案上下文（已更新為 transparent proxy 架構）
-- `openspec/specs/session-proxy/spec.md` — **目前唯一的 capability spec**，完整定義 proxy 的行為要求（啟動、health check、redirect 格式、session 解析、keep-alive、配置）
-- `openspec/changes/deployment-wiring/` — **待執行的變更**：RPi Caddy entry + kevinhome 開機自啟
+- `openspec/specs/session-proxy/spec.md` — proxy 已 archive 後的穩定 spec（啟動、health check、redirect 格式、session 解析、keep-alive、配置）
+- `openspec/changes/capability-alignment/` — **進行中的變更**：opencode/GPT-5.5 capability 層（`opencode.json`、`AGENTS.md`、subagents、`.opencode-memory`、guided setup）。檔案已就位、`npm run typecheck` / `npm run build` 通過；剩 6.1–6.5 需要在實際 opencode session 內驗證
+- `openspec/changes/deployment-wiring/` — **進行中的變更**：Caddy 已完成；kevinhome 開機自啟還沒做
 - `openspec/changes/archive/` — 已被取代的舊設計（Dispatch 模型，勿接手）
 
 後續接手時：
 1. 讀 `session-proxy/spec.md` 了解 proxy 必須做到什麼
-2. 讀 `changes/deployment-wiring/tasks.md` 知道還有什麼沒做
-3. 改東西前確認新行為符合 spec；若要改行為，先在 `openspec/changes/<name>/` 開新提案
+2. 讀 `capability-alignment/specs/opencode-capabilities/spec.md` 了解 capability 層的需求
+3. 讀 `changes/deployment-wiring/tasks.md` 和 `changes/capability-alignment/tasks.md` 知道還有什麼沒做
+4. 改東西前確認新行為符合 spec；若要改行為，先在 `openspec/changes/<name>/` 開新提案
 
 ## 目前進度與後續工作
 
 ### 已完成
+
+**Proxy 核心**
 - [x] 透明 HTTP proxy（`node:http` pipe，SSE 支援）
 - [x] `GET /` → 302 → `/<base64url(dir)>/session/<sessionId>`
 - [x] 每 30 秒刷新 active session path
 - [x] Background SSE keep-alive（指數退避重連）
 - [x] `waitForOpenCode()` 健康檢查（60 秒超時）
-- [x] Windows `opencode.cmd` spawn 用 `shell: true`
+- [x] Windows 使用絕對路徑 spawn `opencode-cli.exe` 加 `shell: true`
+- [x] `OPENCODE_SERVER_PASSWORD=""` 禁用 Basic Auth
 - [x] EADDRINUSE 不 crash（檢測既有 OpenCode 是否健康）
 - [x] `.env` 透過 `--env-file` 載入
 - [x] `start.ps1` / `start-hidden.ps1` 啟動腳本（前景/背景）
@@ -312,30 +317,49 @@ curl http://localhost:9223/                # 應返回 302 redirect
 - [x] Docker 設定（Dockerfile + docker-compose.yml）
 - [x] 跨瀏覽器同步驗證通過（Playwright 測試 + 使用者確認）
 
+**部署外網（deployment-wiring 變更，2026-04-20）**
+- [x] RPi Caddy `opencode.sisihome.org` → `100.83.112.20:9223`
+- [x] Caddy gzip 修復（`transport http { compression off }` + `header_up -Accept-Encoding` + `flush_interval -1`）
+- [x] Caddy HTTPS 連接修復（移除 HTML 注入，改回純透傳）
+
+**Capability 對齊（capability-alignment 變更，2026-05-06）**
+- [x] `opencode.json`（model `openai/gpt-5.5`、4 個 MCP enabled、Playwright disabled、保守的 edit/bash 權限）
+- [x] MCP 套件選擇定案：filesystem `@modelcontextprotocol/server-filesystem`、git `@cyanheads/git-mcp-server`、github 官方 remote MCP（`https://api.githubcopilot.com/mcp/` + `GITHUB_TOKEN`）、fetch `mcp-fetch-server`、playwright `@playwright/mcp`（disabled）
+- [x] Workspace `AGENTS.md`（指向 `homelab-docs/CLAUDE.md` 與 skill SKILL.md，不重抄）
+- [x] 五個 role-based subagents：`explore` / `plan` / `implement` / `verify` / `reviewer`（在 `.opencode/agents/`）
+- [x] `.opencode-memory/` 檔案型 memory（MEMORY.md index + topic files）
+- [x] `setup-capabilities.ps1` 引導式 wiring（symlink/junction，含 copy fallback）
+- [x] `docs/opencode-capability-setup.md` 手動 wiring + 驗證步驟
+- [x] `npm run typecheck` 與 `npm run build` 通過
+
 ### 待做（未完成）
 
-**1. ~~Caddy reverse proxy on RPi~~** ✅ **已完成 (2026-04-20)**
-- ✅ Caddyfile 已包含 `opencode.sisihome.org` 配置，指向 `100.83.112.20:9223`
-- ✅ Caddy 已重新載入
-- ✅ 驗證通過：`https://opencode.sisihome.org/` 正常運作
-- ✅ Session 重導向正常，OpenCode Web UI 可透過域名存取
-- ✅ 修正 Caddy gzip 錯誤（添加 `transport http { compression off }` 配置）
-- ✅ 頁面內容正常載入（59 行 HTML），visibility script 正常注入
-
-**2. 開機自動啟動（Persistent startup on kevinhome）**
+**1. 開機自動啟動（deployment-wiring 變更，Section 2）**
 - 目標：Windows 開機後自動跑 proxy，不需手動點 `start.ps1`
 - 選項：
   - Windows Task Scheduler（啟動觸發器 = 登入時，動作 = 執行 `start.ps1`）
   - PM2 + pm2-windows-service
   - NSSM（Non-Sucking Service Manager）包成 Windows Service
 - 推薦 Task Scheduler，因為最簡單且不需額外安裝
-- 注意：需要確保 `opencode` CLI 在 Task Scheduler 的 PATH 中可見（可能要用絕對路徑或在 `start.ps1` 裡 `$env:PATH` 加料）
+- 注意：`opencode-cli.exe` 已用絕對路徑，但 `node` / `npm` 仍要在 Task Scheduler 環境的 `$env:PATH` 內
+
+**2. Capability 層 runtime 驗證（capability-alignment 變更，Tasks 6.1–6.5、7.1–7.3）**
+- 在實際的 opencode session 內驗證以下事項，並在 `openspec/changes/capability-alignment/tasks.md` 補上證據：
+  - 6.1 設定可被新 session 讀取
+  - 6.2 filesystem / git / github / fetch MCP 可見或可呼叫，且不洩露 token
+  - 6.3 workspace `AGENTS.md` 可被引用
+  - 6.4 `.opencode-memory` 查得到偏好並引用 source file
+  - 6.5 `explore` 或 `verify` subagent dispatch 回傳 bounded read-only 結果
+- 7.1–7.3 記錄實際 manual setup 步驟、寫進 task list、提交給使用者 review/approve
+- 這部分需要使用者在 `https://opencode.sisihome.org/` 開新 opencode session 才能驗證
 
 **3. （可選）清理舊 "opencode-remote" 空白 sessions**
 - 測試過程中 `createSession()` 創建了一些標題為 "opencode-remote" 的空 session
 - 它們會污染 session 列表（出現在左側欄）
 - 可透過 `DELETE /session/<id>` 清理，或讓 OpenCode 原生 UI 右鍵刪除
 - 非必要，但會讓 UI 更乾淨
+
+> 已完成的：Caddy + Tailscale 外網訪問（2026-04-20）；capability 層檔案落地與 typecheck/build 通過（2026-05-06）。詳見上方「已完成」清單。
 
 ### 驗證方式
 
@@ -407,7 +431,7 @@ Stop-Process -Id <PID> -Force
 "error":"reading: gzip: invalid header"
 ```
 
-**原因：** Caddy 的 reverse_proxy 預設會在 HTTP transport 層自動處理壓縮，即使 upstream 沒有發送 gzipped 內容，Caddy 也可能嘗試壓縮/解壓縮導致錯誤。我們的 proxy 使用 `Transfer-Encoding: chunked` 發送 HTML（因為注入 visibility script 後長度改變），這與 Caddy 的自動壓縮處理產生衝突。
+**原因：** Caddy 的 reverse_proxy 預設會在 HTTP transport 層自動處理壓縮，即使 upstream 沒有發送 gzipped 內容，Caddy 也可能嘗試壓縮/解壓縮導致錯誤。OpenCode 的 HTML 響應使用 `Transfer-Encoding: chunked`，這與 Caddy 的自動壓縮處理產生衝突。（早期版本的 proxy 會注入 visibility script 改寫 HTML，此修改邏輯後續已移除——見「2026-04-22 Caddy HTTPS 連接問題修復」。）
 
 **解法（Caddyfile 配置）：**
 ```caddyfile
@@ -445,6 +469,7 @@ docker logs caddy 2>&1 | grep 'gzip'
 
 ## 關鍵提交紀錄（commit history for context）
 
+**Proxy 核心**
 - `0de4b50` — 重寫為透明 proxy（移除 Job Queue/Runner 舊架構）
 - `c0109d5` — Windows `shell: true` spawn 修正
 - `5d899f9` — 第一次修正 redirect 格式（`/global/session/<id>`，後證明仍不對）
@@ -452,6 +477,18 @@ docker logs caddy 2>&1 | grep 'gzip'
 - `6e38e24` — 加 `start.ps1`
 - `3f04c62` / `c72806e` — 文件同步
 - `4eb4a2d` — **認證修正**：設定 `OPENCODE_SERVER_PASSWORD=""` 禁用認證，完成 Caddy 部署
+
+**Capability alignment（2026-05-06）**
+- `4cf98df` — 加入 `opencode.json`（5 個 MCP + 權限政策）
+- `e2b3a3f` — GitHub MCP 改用官方 remote endpoint，棄用 deprecated npm 套件
+- `74dd032` — 補強：禁止 root-level secret edit
+- `cdf0eaf` / `fbbdb2f` / `4663545` / `a12acbd` — 校正 capability 文件，移除 stale 範例
+- `ee5bd71` — 加入 `AGENTS.md` 與 `.opencode-memory/`
+- `1c47480` — 加入五個 role-based subagents
+- `7a8ce5b` — 文件釐清 memory + subagent 啟用條件
+- `0c19716` — 加入 `docs/opencode-capability-setup.md` 手動 wiring 說明
+- `3b103e3` — 紀錄 `npm run typecheck` / `npm run build` 通過
+- `00bad47` — 加入 `setup-capabilities.ps1` 引導式 wiring
 
 ## 重大修復記錄
 
