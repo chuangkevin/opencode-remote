@@ -2,13 +2,16 @@
 
 ## 1. Specification And Existing Plan Cleanup
 
-- [ ] 1.1 Review `docs/capability-alignment-plan.md` and replace hard-coded
+- [x] 1.1 Review `docs/capability-alignment-plan.md` and replace hard-coded
       `D:\GitClone\_HomeProject` assumptions with `<HOMEPROJECT_ROOT>` and
       `OPENCODE_DIRECTORY` guidance where appropriate.
-- [ ] 1.2 Link the existing plan to this OpenSpec change and the superpower
+- [x] 1.2 Link the existing plan to this OpenSpec change and the superpower
       design doc so future agents know which file is authoritative.
-- [ ] 1.3 Confirm no implementation task requires changing `packages/server/src/*`
+- [x] 1.3 Confirm no implementation task requires changing `packages/server/src/*`
       before config loading has been tested.
+
+      → Existing draft now points to the OpenSpec change and uses path notation
+        guidance instead of treating one HomeProject root as authoritative.
 
 ## 2. Version-Controlled opencode Configuration
 

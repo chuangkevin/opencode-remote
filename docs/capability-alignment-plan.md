@@ -1,6 +1,18 @@
 # opencode-remote Capability Alignment Plan
 
-> **狀態:** 規劃草稿（2026-05-06）
+> **Authoritative follow-up:** This file is the original exploratory draft from
+> commit `58b857a`. The approved requirement source is
+> `openspec/changes/capability-alignment/`, and the approved design is
+> `docs/superpowers/specs/2026-05-06-capability-alignment-design.md`.
+> Implementation should follow
+> `docs/superpowers/plans/2026-05-06-capability-alignment.md`.
+
+> **Path notation:** References to `D:\GitClone\_HomeProject` in this draft are
+> historical examples. New work must use `<HOMEPROJECT_ROOT>` and the runtime
+> `OPENCODE_DIRECTORY` value so both `D:\Projects\_HomeProject` and
+> `D:\GitClone\_HomeProject` are supported.
+
+> **狀態:** 參考草稿（2026-05-06）；正式需求見 `openspec/changes/capability-alignment/`
 > **作者:** Claude (claude-opus-4-7)
 > **目的:** 讓 opencode-remote（GPT-5.5 後端）的工作能力盡量靠近 Claude Code 的 Cowork / Dispatch 模式
 > **超粉規範:** 此文件結合 superpowers `brainstorming` + `writing-plans` 的產出，先有設計決策＋未定問題，再有可逐步執行的任務清單
