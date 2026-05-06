@@ -77,8 +77,11 @@
       citation.
 - [ ] 6.5 Verify `explore` or `verify` subagent dispatch returns a bounded read-only
       result.
-- [ ] 6.6 Run the repo's concrete validation command after file changes:
+- [x] 6.6 Run the repo's concrete validation command after file changes:
       `npm run typecheck` and `npm run build`.
+
+      → `npm run typecheck` passed.
+      → `npm run build` passed.
 
 ## 7. Handoff
 
