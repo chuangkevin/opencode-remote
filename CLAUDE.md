@@ -494,6 +494,40 @@ docker logs caddy 2>&1 | grep 'gzip'
 
 ## 重大修復記錄
 
+### 2026-05-06: Capability 設定無法載入（三個串聯 bug）
+
+**問題：** `setup-capabilities.ps1` 跑完後，opencode-cli 啟動時看不到 `opencode.json`、subagents 也不出現。`GET /config` 返回的 instructions 與 MCP 設定都是空的。
+
+**根本原因：** 三個獨立 bug 串在一起，每個都 mask 後一個。
+
+1. **PowerShell 5.1 寫 `.env` 帶 UTF-8 BOM**
+   - `Set-Content -Encoding UTF8` 在 PS 5.1 預設輸出 BOM。
+   - Node 的 `--env-file` parser 看到 BOM 會把第一個變數整行吃掉，導致 `OPENCODE_DIRECTORY` 在 proxy / 子進程 env 中是空的。
+   - 解法：改用 `New-Object System.Text.UTF8Encoding($false)` + `[System.IO.File]::WriteAllText`。
+
+2. **`Read-EnvLines` 回傳被 PowerShell 解封裝**
+   - 函式 `return $lines`（型別是 `Generic.List[string]`）在呼叫端被自動展開為 `Object[]`。
+   - 後續 `Set-EnvValue` 的 by-reference 變更，套用在被丟棄的副本上，永遠不會回到 `.env`。
+   - 解法：`return , $lines`（unary comma 阻止解封裝）。
+
+3. **`opencode.json` 中 `{env:OPENCODE_DIRECTORY}` 內含反斜線造成 JSON 跳脫錯誤**
+   - 前面兩個 bug 修好後，`OPENCODE_DIRECTORY=D:\GitClone\_HomeProject` 被插入 JSON string，`\G` 與 `\_` 是非法跳脫，整個 config 被 opencode 拒絕（`ConfigJsonError` 在 `instructions` 與 filesystem MCP arg）。
+   - 解法：`setup-capabilities.ps1` 寫 `.env` 前 normalize 成正斜線（`'\\'` → `'/'`，並 trim 結尾分隔符）。Node 與 `@modelcontextprotocol/server-filesystem` 在 Windows 都接受任一分隔符。
+
+**附帶修復：subagent `color` schema**
+- 五個 `.opencode/agents/*.md` 原本用 CSS 名（`blue`/`purple`/`green`/`yellow`/`red`），但 opencode 規範只接受 `#RRGGBB` 或命名 token（`primary`/`secondary`/`accent`/`success`/`warning`/`error`/`info`）。
+- 整個 config 因此先 fail `ConfigInvalidError`，反而 mask 上面的 JSON 錯誤。
+- 解法：改成接近原視覺意圖的 hex 值。
+
+**驗證：** `GET /config` 返回 resolved `instructions` 路徑、filesystem MCP arg、五個 subagents 全部載入。
+
+**經驗教訓：**
+- 只跑 `npm run typecheck` / `npm run build` 不夠，必須在實際 opencode session 內驗證 `GET /config`，這就是為什麼 capability-alignment Tasks 6.1–6.5 是 runtime 驗證。
+- PowerShell 的「自動展開」與 BOM 寫入是 setup script 的高機率踩雷區，未來寫 PS setup script 預設用 `[IO.File]::WriteAllText` + `UTF8Encoding($false)`。
+- Windows 路徑塞進 JSON / TOML 等需要跳脫的格式時，先正規化成正斜線。
+
+**相關 commit：** `032ba68`（fix） — 後 cherry-pick 到 main 為 `f6d2f26`。
+
 ### 2026-04-22: Caddy HTTPS 連接問題修復
 
 **問題：** 透過 `https://opencode.sisihome.org` 訪問時連接失敗
