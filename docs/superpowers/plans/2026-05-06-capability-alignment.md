@@ -116,12 +116,11 @@ Run:
 ```powershell
 npm view @modelcontextprotocol/server-filesystem name version
 npm view @cyanheads/git-mcp-server name version bin
-npm view @modelcontextprotocol/server-github name version
 npm view mcp-fetch-server name version bin
 npm view @playwright/mcp name version
 ```
 
-Expected: each command prints package metadata. `@modelcontextprotocol/server-git` and `@modelcontextprotocol/server-fetch` are not used because they returned npm 404 during planning.
+Expected: each command prints package metadata. GitHub MCP uses GitHub's official remote server `https://api.githubcopilot.com/mcp/` with `GITHUB_TOKEN` auth. `@modelcontextprotocol/server-git` and `@modelcontextprotocol/server-fetch` are not used because they returned npm 404 during planning.
 
 - [ ] **Step 2: Create `opencode.json`**
 
@@ -196,14 +195,10 @@ Write this exact file:
       "timeout": 10000
     },
     "github": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-github"
-      ],
-      "environment": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GITHUB_TOKEN}"
+      "type": "remote",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer {env:GITHUB_TOKEN}"
       },
       "enabled": true,
       "timeout": 10000
@@ -1055,7 +1050,7 @@ Report:
 - Spec coverage: Tasks cover OpenSpec requirements for ownership, dual-root support, manual wiring, MCP, permissions, rules, memory, subagents, worktree, and verification.
 - Placeholder scan: This plan contains concrete file paths, exact file contents, exact commands, and expected outputs.
 - Type/config consistency: opencode config uses current docs fields: `instructions`, `permission`, `mcp`, `model`, and `small_model`. Markdown agents use `description`, `mode`, `model`, `temperature`, `steps`, `permission`, and `color` frontmatter.
-- Package consistency: npm package checks use packages verified during planning: `@modelcontextprotocol/server-filesystem`, `@cyanheads/git-mcp-server`, `@modelcontextprotocol/server-github`, `mcp-fetch-server`, and `@playwright/mcp`.
+- Package consistency: npm package checks use packages verified during planning: `@modelcontextprotocol/server-filesystem`, `@cyanheads/git-mcp-server`, `mcp-fetch-server`, and `@playwright/mcp`; GitHub uses the official remote MCP endpoint.
 
 ---
 

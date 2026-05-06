@@ -21,8 +21,11 @@
 - [x] 2.4 Add conservative permission rules for edit and bash operations.
 - [x] 2.5 Update `.env.example` with `GITHUB_TOKEN=` documentation only.
 
-      → MCP package names were verified on npm. Git and fetch use currently
-        available packages: `@cyanheads/git-mcp-server` and `mcp-fetch-server`.
+      → MCP package names were verified where npm packages are used. Git and
+        fetch use currently available packages: `@cyanheads/git-mcp-server` and
+        `mcp-fetch-server`. GitHub uses GitHub's official remote MCP endpoint
+        `https://api.githubcopilot.com/mcp/` with `GITHUB_TOKEN` auth because
+        `@modelcontextprotocol/server-github` is deprecated.
 
 ## 3. Manual Workspace Wiring Documentation
 
