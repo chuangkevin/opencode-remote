@@ -138,6 +138,12 @@ Write this exact file:
   "permission": {
     "edit": {
       "*": "ask",
+      ".env": "deny",
+      ".env.*": "deny",
+      "*service-account*.json": "deny",
+      "*credential*.json": "deny",
+      "secrets/**": "deny",
+      ".claude-memory/**": "deny",
       "**/.env": "deny",
       "**/.env.*": "deny",
       "**/*service-account*.json": "deny",
