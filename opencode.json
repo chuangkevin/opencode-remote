@@ -1,0 +1,105 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-5.5",
+  "small_model": "openai/gpt-5.5",
+  "autoupdate": "notify",
+  "instructions": [
+    "{env:OPENCODE_DIRECTORY}/opencode-remote/.opencode-memory/MEMORY.md"
+  ],
+  "permission": {
+    "edit": {
+      "*": "ask",
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+      "**/*service-account*.json": "deny",
+      "**/*credential*.json": "deny",
+      "**/secrets/**": "deny",
+      "**/.claude-memory/**": "deny"
+    },
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git log*": "allow",
+      "git diff*": "allow",
+      "git show*": "allow",
+      "npm run typecheck": "allow",
+      "npm run build": "allow",
+      "node --version": "allow",
+      "npm --version": "allow",
+      "git reset --hard*": "deny",
+      "git push --force*": "deny",
+      "git clean*": "deny",
+      "Remove-Item *": "deny",
+      "del *": "deny",
+      "rmdir *": "deny",
+      "* > .env*": "deny"
+    },
+    "git_git_reset": "deny",
+    "git_git_clean": "deny",
+    "git_git_clear_working_dir": "deny",
+    "git_git_push": "ask",
+    "git_git_commit": "ask",
+    "github_*": "ask",
+    "filesystem_*": "ask",
+    "fetch_*": "allow"
+  },
+  "mcp": {
+    "filesystem": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "{env:OPENCODE_DIRECTORY}"
+      ],
+      "enabled": true,
+      "timeout": 10000
+    },
+    "git": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@cyanheads/git-mcp-server"
+      ],
+      "enabled": true,
+      "timeout": 10000
+    },
+    "github": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "environment": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GITHUB_TOKEN}"
+      },
+      "enabled": true,
+      "timeout": 10000
+    },
+    "fetch": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "mcp-fetch-server"
+      ],
+      "environment": {
+        "DEFAULT_LIMIT": "10000"
+      },
+      "enabled": true,
+      "timeout": 10000
+    },
+    "playwright": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp"
+      ],
+      "enabled": false,
+      "timeout": 30000
+    }
+  }
+}

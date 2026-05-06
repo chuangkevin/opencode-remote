@@ -15,11 +15,14 @@
 
 ## 2. Version-Controlled opencode Configuration
 
-- [ ] 2.1 Create `opencode.json` in the `opencode-remote` repo.
-- [ ] 2.2 Configure filesystem, git, github, and fetch MCP servers.
-- [ ] 2.3 Include Playwright MCP in the config with `enabled: false`.
-- [ ] 2.4 Add conservative permission rules for edit and bash operations.
-- [ ] 2.5 Update `.env.example` with `GITHUB_TOKEN=` documentation only.
+- [x] 2.1 Create `opencode.json` in the `opencode-remote` repo.
+- [x] 2.2 Configure filesystem, git, github, and fetch MCP servers.
+- [x] 2.3 Include Playwright MCP in the config with `enabled: false`.
+- [x] 2.4 Add conservative permission rules for edit and bash operations.
+- [x] 2.5 Update `.env.example` with `GITHUB_TOKEN=` documentation only.
+
+      → MCP package names were verified on npm. Git and fetch use currently
+        available packages: `@cyanheads/git-mcp-server` and `mcp-fetch-server`.
 
 ## 3. Manual Workspace Wiring Documentation
 
