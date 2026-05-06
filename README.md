@@ -59,3 +59,9 @@ SESSION_REFRESH_INTERVAL_MS=30000              # Session 刷新間隔（ms）
 
 - [OPERATIONS.md](./OPERATIONS.md) — 完整操作手冊、故障排除
 - [CLAUDE.md](./CLAUDE.md) — 技術細節、架構決策（給 AI assistant 看）
+
+## OpenCode Capability Setup
+
+- [docs/opencode-capability-setup.md](./docs/opencode-capability-setup.md) — manual workspace wiring for `opencode.json`, `AGENTS.md`, MCP, memory, and subagents
+- [docs/superpowers/specs/2026-05-06-capability-alignment-design.md](./docs/superpowers/specs/2026-05-06-capability-alignment-design.md) — approved capability alignment design
+- [openspec/changes/capability-alignment/](./openspec/changes/capability-alignment/) — formal OpenSpec change

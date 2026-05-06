@@ -29,10 +29,13 @@
 
 ## 3. Manual Workspace Wiring Documentation
 
-- [ ] 3.1 Document symlink setup commands for `<HOMEPROJECT_ROOT>\opencode.json`.
-- [ ] 3.2 Document copy fallback commands and drift warning.
-- [ ] 3.3 Document equivalent setup for `AGENTS.md` and `.opencode\agents`.
-- [ ] 3.4 Add verification commands proving the runtime sees the wired files.
+- [x] 3.1 Document symlink setup commands for `<HOMEPROJECT_ROOT>\opencode.json`.
+- [x] 3.2 Document copy fallback commands and drift warning.
+- [x] 3.3 Document equivalent setup for `AGENTS.md` and `.opencode\agents`.
+- [x] 3.4 Add verification commands proving the runtime sees the wired files.
+
+      → Manual symlink/junction and copy fallback commands are documented in
+        `docs/opencode-capability-setup.md` with verification prompts.
 
 ## 4. Rules And Memory
 
