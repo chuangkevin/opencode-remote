@@ -45,7 +45,8 @@
       code/runtime claims must be re-verified.
 
       → Rules and memory are owned by `opencode-remote`; AGENTS.md lazy-loads
-        HomeProject rule sources and memory files cite their source paths.
+        HomeProject rule sources, documents memory read/write triggers, and
+        makes subagent usage conditional until Task 4 adds the definitions.
 
 ## 5. Subagents And Worktree Guidance
 

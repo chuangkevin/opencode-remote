@@ -38,12 +38,13 @@ context by default:
 
 opencode memory lives in `opencode-remote/.opencode-memory/`.
 
-- Read `opencode-remote/.opencode-memory/MEMORY.md` before answering questions
-  about remembered user preferences or previous durable decisions.
-- Topic files use `type: user`, `type: feedback`, `type: project`, or
-  `type: reference` frontmatter.
-- Memory is a hint, not a source of truth. Re-read live code, git, docs, or
-  runtime state before acting on memory about files, services, or behavior.
+- Read `opencode-remote/.opencode-memory/MEMORY.md` before answering remembered
+  preference or decision questions.
+- Write/update memory only when the user gives durable preferences,
+  corrections, project facts, or reference facts that should affect future
+  sessions.
+- Do not write memory for facts that are easily re-read from code, git, or docs.
+- Memory is a hint; re-verify live code/runtime claims.
 
 ## MCP Usage
 
@@ -56,11 +57,15 @@ opencode memory lives in `opencode-remote/.opencode-memory/`.
 
 ## Subagents
 
-- Use `explore` for read-only codebase or git research.
-- Use `plan` for read-only planning and spec synthesis.
-- Use `implement` only for bounded implementation work with strict permissions.
-- Use `verify` for no-edit test/build/smoke verification.
-- Use `reviewer` for read-only diff and code review.
+Subagent definitions live in `opencode-remote/.opencode/agents/` after Task 4
+of the capability-alignment plan is implemented and workspace wiring exposes
+them to OpenCode. Intended usage once available:
+
+- `explore`: read-only codebase or git research.
+- `plan`: read-only planning and spec synthesis.
+- `implement`: bounded implementation work with strict permissions.
+- `verify`: no-edit test/build/smoke verification.
+- `reviewer`: read-only diff and code review.
 
 ## Worktree Rule
 
