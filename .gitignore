@@ -6,6 +6,7 @@ coverage/
 *.tsbuildinfo
 *.log
 data/
+.worktrees/
 
 packages/server/data/
 packages/web/.vite/
