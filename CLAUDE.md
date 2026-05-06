@@ -331,6 +331,7 @@ curl http://localhost:9223/                # 應返回 302 redirect
 - [x] `setup-capabilities.ps1` 引導式 wiring（symlink/junction，含 copy fallback）
 - [x] `docs/opencode-capability-setup.md` 手動 wiring + 驗證步驟
 - [x] `npm run typecheck` 與 `npm run build` 通過
+- [x] Runtime 啟動修復（fix `032ba68`）：`.env` 用 UTF-8 without BOM、`Read-EnvLines` 回傳保留 list、`OPENCODE_DIRECTORY` normalize 為正斜線；subagent `color` 改 hex（`opencode-cli` 才會接受 schema）。`GET /config` 回傳已含完整 instructions、MCP、5 個 subagents
 
 ### 待做（未完成）
 
@@ -489,6 +490,7 @@ docker logs caddy 2>&1 | grep 'gzip'
 - `0c19716` — 加入 `docs/opencode-capability-setup.md` 手動 wiring 說明
 - `3b103e3` — 紀錄 `npm run typecheck` / `npm run build` 通過
 - `00bad47` — 加入 `setup-capabilities.ps1` 引導式 wiring
+- `032ba68` — **Runtime 載入修復**：BOM-free `.env`、`Read-EnvLines` 回傳保留、`OPENCODE_DIRECTORY` 正斜線、subagent `color` 改 hex；確認 `GET /config` 完整載入
 
 ## 重大修復記錄
 
