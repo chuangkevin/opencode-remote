@@ -97,14 +97,14 @@ G. **參考來源**（§G）
 
 ### A.1 `opencode.json` 放置位置
 
-選擇 **project-level**：`D:\GitClone\_HomeProject\opencode-remote\opencode.json`
+選擇 **project-level**：`<HOMEPROJECT_ROOT>\opencode-remote\opencode.json`
 
 理由：
 - Project 設定會 commit 進 git，跟 server code 一起版控。
-- 但 opencode CLI 啟動時的 cwd 不是 `opencode-remote`，而是 `OPENCODE_DIRECTORY`（即 `D:\GitClone\_HomeProject`）。所以：
-  - **首選方案：把 `opencode.json` 放在 `D:\GitClone\_HomeProject\opencode.json`**（cwd 就能直接讀到），但這個目錄不是 git repo。
-  - **次選方案：`opencode-remote/opencode.json`，並在 spawn 時透過 `OPENCODE_CONFIG` 環境變數明確指定路徑**（需確認 opencode CLI 是否支援；若不支援，改 symlink 或 copy）。
-  - **本計畫採用次選方案 + symlink fallback**：commit 進 `opencode-remote/opencode.json`，啟動腳本 (`start.ps1`) 在 OPENCODE_DIRECTORY 建 symbolic link `D:\GitClone\_HomeProject\opencode.json` → `opencode-remote/opencode.json`。
+- 但 opencode CLI 啟動時的 cwd 不是 `opencode-remote`，而是 `OPENCODE_DIRECTORY`（也就是 `<HOMEPROJECT_ROOT>`）。所以：
+  - `opencode.json` 的 source of truth 放在 `opencode-remote/opencode.json`。
+  - `<HOMEPROJECT_ROOT>\opencode.json` 由使用者手動 symlink 或 copy 到 source of truth。
+  - 不修改 `start.ps1` 或 server code 自動建立連結；manual setup 見 `docs/opencode-capability-setup.md`。
 
 ### A.2 完整 `opencode.json` 內容
 
@@ -146,29 +146,22 @@ opencode 內建工具不需在 `mcp` 區段設定，但需要在 `permission` �
 
 ### A.5 環境變數
 
-新增到 `D:\GitClone\_HomeProject\opencode-remote\.env`：
+新增到 `opencode-remote\.env`：
 
 ```env
 # 已有
-OPENCODE_DIRECTORY=D:\GitClone\_HomeProject
+OPENCODE_DIRECTORY=<HOMEPROJECT_ROOT>
 PORT=9223
 OPENCODE_PORT=4096
 SESSION_REFRESH_INTERVAL_MS=30000
 
 # 新增（MCP 用）
-GITHUB_TOKEN=<personal-access-token>     # 給 mcp/github 用，scopes: repo + read:org
-# OPENCODE_CONFIG=...                    # 若要讓 opencode 讀 opencode-remote/opencode.json，啟動時注入
+GITHUB_TOKEN=<personal-access-token>     # 給 GitHub remote MCP 用，scopes: repo + read:org
 ```
 
-`packages/server/src/index.ts` 的 spawn 區段需要把 `GITHUB_TOKEN` 透傳：
-
-```typescript
-env: {
-  ...process.env,
-  OPENCODE_SERVER_PASSWORD: "",
-  GITHUB_TOKEN: process.env.GITHUB_TOKEN ?? "",
-}
-```
+不需要修改 `packages/server/src/index.ts`。`.env` 已由 npm scripts 的
+`--env-file` 載入到 `process.env`，spawn `opencode serve` 時會透過
+`env: { ...process.env, OPENCODE_SERVER_PASSWORD: "" }` 繼承 `GITHUB_TOKEN`。
 
 ---
 

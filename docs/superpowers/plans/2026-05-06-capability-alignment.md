@@ -120,7 +120,7 @@ npm view mcp-fetch-server name version bin
 npm view @playwright/mcp name version
 ```
 
-Expected: each command prints package metadata. GitHub MCP uses GitHub's official remote server `https://api.githubcopilot.com/mcp/` with `GITHUB_TOKEN` auth. `@modelcontextprotocol/server-git` and `@modelcontextprotocol/server-fetch` are not used because they returned npm 404 during planning.
+Expected: each command prints package metadata. GitHub MCP uses GitHub's official remote server `https://api.githubcopilot.com/mcp/` with `GITHUB_TOKEN` auth. The earlier exploratory draft's legacy git/fetch MCP package names are not used because they were not available during planning.
 
 - [ ] **Step 2: Create `opencode.json`**
 

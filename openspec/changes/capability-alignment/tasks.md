@@ -25,7 +25,7 @@
         fetch use currently available packages: `@cyanheads/git-mcp-server` and
         `mcp-fetch-server`. GitHub uses GitHub's official remote MCP endpoint
         `https://api.githubcopilot.com/mcp/` with `GITHUB_TOKEN` auth because
-        `@modelcontextprotocol/server-github` is deprecated.
+        the earlier npm GitHub MCP package is deprecated.
 
 ## 3. Manual Workspace Wiring Documentation
 
