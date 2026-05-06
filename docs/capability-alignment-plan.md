@@ -108,112 +108,19 @@ G. **參考來源**（§G）
 
 ### A.2 完整 `opencode.json` 內容
 
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
+> **2026-05-06 update:** The original inline JSONC sketch in this draft has
+> been superseded by the committed `opencode.json`. Do not copy config from this
+> section. Use `opencode.json` plus the OpenSpec change
+> `openspec/changes/capability-alignment/` as the authoritative source.
 
-  // 模型與 provider — opencode-remote 後端固定 GPT-5.5
-  "provider": "openai",
-  "model": "gpt-5.5",
-  "small_model": "gpt-5-mini",
+Current implementation choices:
 
-  // 工具 permission：edit / bash 對 sensitive 區域要 prompt
-  "permission": {
-    "edit": {
-      "allow": ["**/*"],
-      "deny": [
-        "**/.env",
-        "**/.env.*",
-        "**/*service-account*.json",
-        "**/.claude-memory/**",     // Claude 端的記憶檔不被 GPT 直接改
-        "**/secrets/**"
-      ]
-    },
-    "bash": {
-      "allow": [
-        "git *",
-        "npm *",
-        "node *",
-        "tsx *",
-        "tsc *",
-        "ls *",
-        "type *",
-        "cat *",
-        "cd *",
-        "powershell -Command *"
-      ],
-      "deny": [
-        "rm -rf *",
-        "git push --force *",
-        "git reset --hard *",
-        "* > .env*",
-        "del /f /s /q *"
-      ]
-    }
-  },
-
-  // Step budget — 防止 doom loop
-  "agent": {
-    "default": { "steps": 50 },
-    "subagent": { "steps": 30 }
-  },
-
-  // 全 repo 共用的 instruction sources
-  // 路徑相對 cwd，cwd = OPENCODE_DIRECTORY = D:\GitClone\_HomeProject
-  "instructions": [
-    "AGENTS.md",
-    "homelab-docs/skills/execution-style/SKILL.md",
-    "homelab-docs/skills/completion-checklist/SKILL.md",
-    "homelab-docs/skills/plan-before-build/SKILL.md",
-    "homelab-docs/skills/agent-design/SKILL.md",
-    "homelab-docs/skills/integration-robustness/SKILL.md",
-    "homelab-docs/skills/verification-and-evidence/SKILL.md",
-    "homelab-docs/skills/root-cause-debugging/SKILL.md",
-    "homelab-docs/skills/deployment/SKILL.md",
-    "homelab-docs/skills/project-stack-standard/SKILL.md",
-    "*/AGENTS.md"
-  ],
-
-  // MCP servers
-  "mcp": {
-    "filesystem": {
-      "type": "local",
-      "command": [
-        "npx", "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "{env:OPENCODE_DIRECTORY}"
-      ],
-      "enabled": true,
-      "timeout": 10000
-    },
-    "git": {
-      "type": "local",
-      "command": ["npx", "-y", "@cyanheads/git-mcp-server"],
-      "enabled": true
-    },
-    "github": {
-      "type": "remote",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer {env:GITHUB_TOKEN}"
-      },
-      "enabled": true,
-      "timeout": 10000
-    },
-    "fetch": {
-      "type": "local",
-      "command": ["npx", "-y", "mcp-fetch-server"],
-      "enabled": true
-    },
-    "playwright": {
-      "type": "local",
-      "command": ["npx", "-y", "@playwright/mcp"],
-      "enabled": false,    // 預設關閉，需要時再開
-      "timeout": 30000
-    }
-  }
-}
-```
+- `filesystem`: local `@modelcontextprotocol/server-filesystem`, rooted at `{env:OPENCODE_DIRECTORY}`.
+- `git`: local `@cyanheads/git-mcp-server`.
+- `github`: GitHub official remote MCP endpoint `https://api.githubcopilot.com/mcp/` with `GITHUB_TOKEN` bearer auth.
+- `fetch`: local `mcp-fetch-server`.
+- `playwright`: local `@playwright/mcp`, disabled by default.
+- Permissions use opencode's current `"allow" | "ask" | "deny"` action map syntax.
 
 ### A.3 每個 MCP server 的選用理由
 
@@ -491,8 +398,15 @@ steps: 20
 permission:
   edit: deny
   bash:
-    allow: ["git log *", "git status", "git diff *", "git show *", "ls *", "type *", "cat *", "find *"]
-    deny: ["*"]
+    "*": deny
+    "git log *": allow
+    "git status": allow
+    "git diff *": allow
+    "git show *": allow
+    "ls *": allow
+    "type *": allow
+    "cat *": allow
+    "find *": allow
 color: blue
 ---
 
@@ -516,8 +430,12 @@ steps: 30
 permission:
   edit: deny
   bash:
-    allow: ["git log *", "git status", "git diff *", "ls *", "cat *"]
-    deny: ["*"]
+    "*": deny
+    "git log *": allow
+    "git status": allow
+    "git diff *": allow
+    "ls *": allow
+    "cat *": allow
 color: purple
 ---
 
@@ -545,11 +463,23 @@ temperature: 0.4
 steps: 80
 permission:
   edit:
-    allow: ["**/*"]
-    deny: ["**/.env*", "**/secrets/**", "**/.claude-memory/**"]
+    "*": ask
+    "**/.env*": deny
+    "**/secrets/**": deny
+    "**/.claude-memory/**": deny
   bash:
-    allow: ["git *", "npm *", "node *", "tsx *", "tsc *", "ls *", "cat *", "powershell -Command *"]
-    deny: ["rm -rf *", "git push --force *", "git reset --hard *"]
+    "*": ask
+    "git *": allow
+    "npm *": allow
+    "node *": allow
+    "tsx *": allow
+    "tsc *": allow
+    "ls *": allow
+    "cat *": allow
+    "powershell -Command *": allow
+    "rm -rf *": deny
+    "git push --force *": deny
+    "git reset --hard *": deny
 color: green
 ---
 
@@ -577,8 +507,18 @@ steps: 15
 permission:
   edit: deny
   bash:
-    allow: ["npm test*", "npm run *", "tsc *", "tsx *", "node *", "curl *", "git status", "git log *"]
-    deny: ["git push *", "git commit *", "rm *"]
+    "*": ask
+    "npm test*": allow
+    "npm run *": allow
+    "tsc *": allow
+    "tsx *": allow
+    "node *": allow
+    "curl *": allow
+    "git status": allow
+    "git log *": allow
+    "git push *": deny
+    "git commit *": deny
+    "rm *": deny
 color: yellow
 ---
 
@@ -601,8 +541,12 @@ steps: 15
 permission:
   edit: deny
   bash:
-    allow: ["git diff *", "git log *", "git show *", "ls *", "cat *"]
-    deny: ["*"]
+    "*": deny
+    "git diff *": allow
+    "git log *": allow
+    "git show *": allow
+    "ls *": allow
+    "cat *": allow
 color: red
 ---
 
