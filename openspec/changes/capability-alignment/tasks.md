@@ -50,15 +50,19 @@
 
 ## 5. Subagents And Worktree Guidance
 
-- [ ] 5.1 Create `.opencode/agents/explore.md` as read-only research.
-- [ ] 5.2 Create `.opencode/agents/plan.md` as read-only planning.
-- [ ] 5.3 Create `.opencode/agents/implement.md` with strict write permissions.
-- [ ] 5.4 Create `.opencode/agents/verify.md` as no-edit verification.
-- [ ] 5.5 Create `.opencode/agents/reviewer.md` as read-only review.
-- [ ] 5.6 Add worktree guidance requiring isolation for cross-repo, three-or-more
+- [x] 5.1 Create `.opencode/agents/explore.md` as read-only research.
+- [x] 5.2 Create `.opencode/agents/plan.md` as read-only planning.
+- [x] 5.3 Create `.opencode/agents/implement.md` with strict write permissions.
+- [x] 5.4 Create `.opencode/agents/verify.md` as no-edit verification.
+- [x] 5.5 Create `.opencode/agents/reviewer.md` as read-only review.
+- [x] 5.6 Add worktree guidance requiring isolation for cross-repo, three-or-more
       file, high-risk, or parallel implementation tasks.
-- [ ] 5.7 Add commit attribution guidance:
+- [x] 5.7 Add commit attribution guidance:
       `Co-Authored-By: Kevin-AI <kevin950805@gmail.com>`.
+
+      → Five markdown subagents were added with explicit permissions. Worktree
+        thresholds and Kevin-AI co-author guidance are captured in AGENTS.md and
+        implement.md.
 
 ## 6. Verification
 
