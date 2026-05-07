@@ -11,3 +11,7 @@ type: user
 - When local setup/config is missing, prompt for user-provided values and let
   `opencode-remote` write local config instead of only reporting that the system
   cannot start.
+- `opencode-remote` should be distributable with one command; startup scripts
+  must prepare local config, build, and start without requiring manual setup.
+- Do not include or preserve user-level Pencil MCP in the shared
+  `opencode-remote` runtime config.

@@ -13,6 +13,17 @@ Run commands from `opencode-remote`.
 
 ## Guided Setup
 
+For normal use, run one command:
+
+```powershell
+.\start-hidden.ps1
+```
+
+The start script runs guided setup in non-interactive mode, builds the project,
+and starts the service. It also removes user-level `pencil` MCP from the local
+OpenCode config so the shared HomeProject capability config is not polluted by a
+desktop-only MCP server.
+
 Use the guided setup when `.env` is missing, `OPENCODE_DIRECTORY` is unknown, or
 GitHub MCP needs a local token:
 

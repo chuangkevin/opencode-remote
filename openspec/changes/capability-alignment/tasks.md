@@ -39,10 +39,13 @@
 - [x] 3.4 Add verification commands proving the runtime sees the wired files.
 - [x] 3.5 Provide guided setup that prompts for missing local values and writes
       `.env` from user-provided input instead of stopping at missing config.
+- [x] 3.6 Make `start.ps1` and `start-hidden.ps1` one-command startup flows that
+      prepare config, remove user-level Pencil MCP, build, and start.
 
       → Manual symlink/junction and copy fallback commands are documented in
         `docs/opencode-capability-setup.md` with verification prompts. Missing
-        local settings can be filled by `setup-capabilities.ps1`.
+        local settings can be filled by `setup-capabilities.ps1`. Startup
+        scripts run non-interactive setup automatically for distribution.
 
 ## 4. Rules And Memory
 
@@ -79,7 +82,7 @@
 - [x] 6.1 Verify config visibility in a new opencode session.
 
       → After fixing three independent setup bugs (commit `f6d2f26`,
-        cherry-picked from `032ba68`), `GET /global/config` returns the
+        cherry-picked from `032ba68`), `GET /config` returns the
         resolved `instructions` path and the resolved filesystem MCP arg.
         Earlier symptom: BOM in `.env` swallowed `OPENCODE_DIRECTORY`,
         PowerShell unwrapped `Read-EnvLines`'s List into Object[] so updates
@@ -90,9 +93,11 @@
 - [x] 6.2 Verify filesystem/git/github/fetch MCP visibility or callability without
       printing token values.
 
-      → `GET /global/config` shows all four MCP entries (filesystem / git /
+      → `GET /config` shows all four MCP entries (filesystem / git /
         github / fetch) with resolved args. `GITHUB_TOKEN` is referenced via
         `{env:GITHUB_TOKEN}` and never printed in proxy or opencode logs.
+        One-click startup verification on 2026-05-07 returned
+        `mcp=filesystem,git,github,fetch,playwright` and `hasPencil=False`.
 
 - [ ] 6.3 Verify workspace `AGENTS.md` can be cited by opencode.
 
@@ -130,7 +135,9 @@
         four are fixed in `f6d2f26`. Setup now writes `.env` with
         `[IO.File]::WriteAllText` + `UTF8Encoding($false)`, normalizes path
         to forward slashes before write, and `Read-EnvLines` returns
-        `, $lines` (unary-comma protected).
+        `, $lines` (unary-comma protected). On 2026-05-07, `start-hidden.ps1`
+        completed non-interactive setup, build, background start, and `/config`
+        verification without loading user-level Pencil MCP.
 
 - [x] 7.2 Update the OpenSpec task list with verification evidence.
 

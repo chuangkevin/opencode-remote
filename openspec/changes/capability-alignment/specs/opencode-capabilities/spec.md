@@ -67,6 +67,14 @@ proxy server code.
 - **THEN** the documentation provides copy commands
 - **AND** explicitly warns that copied files can drift from the repository source
 
+#### Scenario: User starts opencode-remote with one command
+
+- **WHEN** the user runs `start.ps1` or `start-hidden.ps1`
+- **THEN** the script prepares local `.env`, exposes `opencode.json`, `AGENTS.md`,
+  and `.opencode\agents` to the runtime root, builds the server, and starts it
+- **AND** user-level `pencil` MCP is removed so runtime MCP visibility is driven
+  by the shared `opencode-remote` config
+
 ### Requirement: MCP configuration SHALL enable core tools with Playwright disabled by default
 
 `opencode.json` SHALL configure filesystem, git, github, and fetch MCP servers as

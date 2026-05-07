@@ -3,7 +3,9 @@
 [CmdletBinding()]
 param(
     [switch]$CopyFallback,
-    [switch]$SkipGithubToken
+    [switch]$SkipGithubToken,
+    [switch]$NonInteractive,
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +13,11 @@ $Repo = $PSScriptRoot
 $EnvPath = Join-Path $Repo ".env"
 
 function Get-DefaultHomeProjectRoot {
+    $repoParent = Split-Path -Parent $Repo
+    if (Test-Path -LiteralPath (Join-Path $repoParent "homelab-docs")) {
+        return $repoParent
+    }
+
     foreach ($candidate in @("D:\Projects\_HomeProject", "D:\GitClone\_HomeProject")) {
         if (Test-Path -LiteralPath $candidate) {
             return $candidate
@@ -132,7 +139,17 @@ function Ensure-TargetAvailable {
         return $false
     }
 
+    if ($Force) {
+        Write-Host "Replacing runtime capability path: $Path" -ForegroundColor Yellow
+        Remove-Item -LiteralPath $Path -Recurse -Force
+        return $true
+    }
+
     Write-Host "Target already exists and is not managed by this setup: $Path" -ForegroundColor Yellow
+    if ($NonInteractive) {
+        throw "Existing unmanaged path requires -Force: $Path"
+    }
+
     $choice = Read-Host "Type REPLACE to replace this one path, or press Enter to stop"
     if ($choice -ne "REPLACE") {
         throw "Stopped before replacing existing path: $Path"
@@ -188,11 +205,44 @@ function Link-CapabilityFiles {
     return $mode
 }
 
+function Remove-UserPencilMcp {
+    $userConfig = Join-Path $HOME ".config\opencode\opencode.json"
+    if (-not (Test-Path -LiteralPath $userConfig)) {
+        return
+    }
+
+    $config = Get-Content -LiteralPath $userConfig -Raw | ConvertFrom-Json
+    if (-not $config.mcp) {
+        return
+    }
+
+    $pencilProperty = $config.mcp.PSObject.Properties["pencil"]
+    if (-not $pencilProperty) {
+        return
+    }
+
+    $config.mcp.PSObject.Properties.Remove("pencil")
+    if ($config.mcp.PSObject.Properties.Count -eq 0) {
+        $config.PSObject.Properties.Remove("mcp")
+    }
+
+    $json = $config | ConvertTo-Json -Depth 20
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($userConfig, $json + [Environment]::NewLine, $utf8NoBom)
+    Write-Host "Removed user-level Pencil MCP from $userConfig" -ForegroundColor Yellow
+}
+
 $envLines = Read-EnvLines
 $homeProjectRoot = Get-EnvValue $envLines "OPENCODE_DIRECTORY"
 if ([string]::IsNullOrWhiteSpace($homeProjectRoot) -or -not (Test-Path -LiteralPath $homeProjectRoot)) {
     $defaultRoot = Get-DefaultHomeProjectRoot
+    if ($NonInteractive -and -not [string]::IsNullOrWhiteSpace($defaultRoot)) {
+        $homeProjectRoot = $defaultRoot
+    }
     do {
+        if ($NonInteractive) {
+            throw "OPENCODE_DIRECTORY is missing or invalid and no default root could be inferred. Run setup-capabilities.ps1 interactively once."
+        }
         $homeProjectRoot = Read-RequiredValue "OPENCODE_DIRECTORY" $defaultRoot
         if (-not (Test-Path -LiteralPath $homeProjectRoot)) {
             Write-Host "Path does not exist: $homeProjectRoot" -ForegroundColor Yellow
@@ -218,7 +268,7 @@ if ([string]::IsNullOrWhiteSpace((Get-EnvValue $envLines "SESSION_REFRESH_INTERV
 }
 
 $opencodeCliPath = Get-EnvValue $envLines "OPENCODE_CLI_PATH"
-if ([string]::IsNullOrWhiteSpace($opencodeCliPath) -and [string]::IsNullOrWhiteSpace((Get-DefaultOpenCodeCliPath))) {
+if (-not $NonInteractive -and [string]::IsNullOrWhiteSpace($opencodeCliPath) -and [string]::IsNullOrWhiteSpace((Get-DefaultOpenCodeCliPath))) {
     $providedCliPath = Read-Host "Optional OPENCODE_CLI_PATH for non-standard opencode-cli.exe location (leave blank to use PATH fallback)"
     if (-not [string]::IsNullOrWhiteSpace($providedCliPath)) {
         if (-not (Test-Path -LiteralPath $providedCliPath)) {
@@ -247,6 +297,7 @@ if (-not $SkipGithubToken) {
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($EnvPath, ($envLines -join [Environment]::NewLine) + [Environment]::NewLine, $utf8NoBom)
 Write-Host "Wrote local .env without printing secret values." -ForegroundColor Green
+Remove-UserPencilMcp
 
 if ($CopyFallback) {
     $setupMode = Copy-CapabilityFiles $homeProjectRoot
@@ -257,6 +308,15 @@ else {
     }
     catch {
         Write-Host "Symlink/junction setup failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        if ($NonInteractive) {
+            $setupMode = Copy-CapabilityFiles $homeProjectRoot
+            Write-Host "Used copy fallback because non-interactive setup cannot request elevation." -ForegroundColor Yellow
+            Write-Host "Capability setup complete." -ForegroundColor Green
+            Write-Host "Runtime root: $homeProjectRoot" -ForegroundColor Cyan
+            Write-Host "Setup mode: $setupMode" -ForegroundColor Cyan
+            Write-Host "Next: .\restart-service.ps1" -ForegroundColor Cyan
+            exit 0
+        }
         $answer = Read-Host "Use copy fallback instead? [Y/n]"
         if ($answer -match "^(n|no)$") {
             throw

@@ -13,11 +13,13 @@ cd D:\GitClone\_HomeProject\opencode-remote
 
 服務在背景執行，不阻塞終端。**AI agent（Claude Code task）可直接透過 PowerShell tool 執行此指令。**
 
+`start-hidden.ps1` 是一鍵啟動：會自動準備 `.env`、同步 capability config 到 `OPENCODE_DIRECTORY`、移除 user-level Pencil MCP、執行 build，然後啟動服務。
+
 - 本地訪問: http://localhost:9223
 - 外網訪問: https://opencode.sisihome.org
 
-> **手動備用（需使用者開終端機）：** `npm start`
-> 前景模式，日誌直接顯示，Ctrl+C 停止。
+> **手動備用（需使用者開終端機）：** `./start.ps1`
+> 前景模式，會做同樣的一鍵準備流程，日誌直接顯示，Ctrl+C 停止。
 > AI agent 無法使用這個方式（阻塞式進程，且 terminal 只有 click 權限無法輸入）。
 
 ### 確認服務正常
@@ -78,6 +80,10 @@ curl http://localhost:4096/global/health
 # Proxy health（確認轉導正常）
 curl http://localhost:9223/
 # 預期: 302 redirect 到 /<base64(dir)>/session/<id>
+
+# OpenCode instance config（確認 MCP 不是只載到 user-level config）
+curl http://localhost:4096/config
+# 預期: mcp 包含 filesystem / git / github / fetch；不包含 pencil
 
 # 外網訪問（需要 Tailscale 和 Caddy 正常）
 curl -L https://opencode.sisihome.org/

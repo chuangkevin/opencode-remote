@@ -258,7 +258,7 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 ## 啟動方式
 
 **主要啟動（AI agent / 自動化可用）：** `.\start-hidden.ps1`
-→ 背景執行，不阻塞，可透過 PowerShell tool 直接執行
+→ 一鍵背景執行；會自動 setup capability config、移除 user-level Pencil MCP、build、再啟動服務
 
 **停止：** `.\stop.ps1`（同時停止 proxy 和 OpenCode，AI 可執行）
 
@@ -312,7 +312,7 @@ curl http://localhost:9223/                # 應返回 302 redirect
 - [x] `OPENCODE_SERVER_PASSWORD=""` 禁用 Basic Auth
 - [x] EADDRINUSE 不 crash（檢測既有 OpenCode 是否健康）
 - [x] `.env` 透過 `--env-file` 載入
-- [x] `start.ps1` / `start-hidden.ps1` 啟動腳本（前景/背景）
+- [x] `start.ps1` / `start-hidden.ps1` 一鍵啟動腳本（自動 setup/build/啟動；前景/背景）
 - [x] `stop.ps1` / `restart-service.ps1` 停止與重啟腳本
 - [x] Docker 設定（Dockerfile + docker-compose.yml）
 - [x] 跨瀏覽器同步驗證通過（Playwright 測試 + 使用者確認）
@@ -329,6 +329,7 @@ curl http://localhost:9223/                # 應返回 302 redirect
 - [x] 五個 role-based subagents：`explore` / `plan` / `implement` / `verify` / `reviewer`（在 `.opencode/agents/`）
 - [x] `.opencode-memory/` 檔案型 memory（MEMORY.md index + topic files）
 - [x] `setup-capabilities.ps1` 引導式 wiring（symlink/junction，含 copy fallback）
+- [x] 一鍵啟動會自動移除 user-level `pencil` MCP，避免全域 OpenCode config 污染 shared runtime
 - [x] `docs/opencode-capability-setup.md` 手動 wiring + 驗證步驟
 - [x] `npm run typecheck` 與 `npm run build` 通過
 - [x] Runtime 啟動修復（fix `032ba68`）：`.env` 用 UTF-8 without BOM、`Read-EnvLines` 回傳保留 list、`OPENCODE_DIRECTORY` normalize 為正斜線；subagent `color` 使用 OpenCode semantic color name。`GET /config` 回傳已含完整 instructions、MCP、5 個 subagents

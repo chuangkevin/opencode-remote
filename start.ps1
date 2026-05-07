@@ -1,15 +1,38 @@
-# Kill any existing process on port 9223
-$existing = netstat -ano | Select-String ":9223.*LISTENING" | ForEach-Object {
-    ($_ -split "\s+")[-1]
-} | Select-Object -First 1
+# One-click foreground start for opencode-remote.
 
-if ($existing) {
-    Write-Host "Stopping existing process (PID $existing)..." -ForegroundColor Yellow
-    Stop-Process -Id $existing -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
+param(
+    [switch]$NoPrepare
+)
+
+$ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
+
+function Stop-PortProcess {
+    param([int]$Port)
+
+    $processIds = netstat -ano | Select-String ":$Port.*LISTENING" | ForEach-Object {
+        ($_ -split "\s+")[-1]
+    } | Select-Object -Unique
+
+    foreach ($processId in $processIds) {
+        if ($processId) {
+            Write-Host "Stopping process on port $Port (PID $processId)..." -ForegroundColor Yellow
+            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
-# Start the proxy
+Stop-PortProcess 9223
+Stop-PortProcess 4096
+Start-Sleep -Seconds 1
+
+if (-not $NoPrepare) {
+    Write-Host "Preparing opencode capability config..." -ForegroundColor Cyan
+    .\setup-capabilities.ps1 -SkipGithubToken -NonInteractive -Force
+
+    Write-Host "Building opencode-remote..." -ForegroundColor Cyan
+    npm run build
+}
+
 Write-Host "Starting opencode-remote..." -ForegroundColor Cyan
-Set-Location $PSScriptRoot
 npm start
