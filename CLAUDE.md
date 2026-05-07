@@ -173,9 +173,7 @@ spawn("opencode", ["serve", ...])  // 在 Windows 上會啟動 OpenCode.exe (GUI
 **正確做法：**
 ```typescript
 // packages/server/src/index.ts (已修正)
-const opencodeCmd = process.platform === "win32"
-  ? "C:\\Users\\Kevin\\AppData\\Local\\opencode\\opencode-cli.exe"  // 明確指定 CLI 版本
-  : "opencode";
+const opencodeCmd = resolveOpenCodeCommand();
 
 spawn(opencodeCmd, ["serve", ...], {
   shell: process.platform === "win32",  // Windows 需要 shell
@@ -185,9 +183,11 @@ spawn(opencodeCmd, ["serve", ...], {
 
 **驗證方式：**
 ```powershell
-# 確認使用的是 CLI 版本
-ls "C:\Users\Kevin\AppData\Local\opencode\opencode-cli.exe"
-# 應該是 180MB 左右
+# 預設會尋找目前 Windows 使用者的 CLI
+Test-Path "$env:LOCALAPPDATA\opencode\opencode-cli.exe"
+
+# 非標準安裝路徑時，在 .env 設定，不要改 source code
+OPENCODE_CLI_PATH=C:\path\to\opencode-cli.exe
 
 # 服務啟動後檢查
 netstat -ano | findstr :4096
@@ -308,7 +308,7 @@ curl http://localhost:9223/                # 應返回 302 redirect
 - [x] 每 30 秒刷新 active session path
 - [x] Background SSE keep-alive（指數退避重連）
 - [x] `waitForOpenCode()` 健康檢查（60 秒超時）
-- [x] Windows 使用絕對路徑 spawn `opencode-cli.exe` 加 `shell: true`
+- [x] Windows 動態解析 `opencode-cli.exe`（`OPENCODE_CLI_PATH` → `%LOCALAPPDATA%\opencode\opencode-cli.exe` → `opencode`）加 `shell: true`
 - [x] `OPENCODE_SERVER_PASSWORD=""` 禁用 Basic Auth
 - [x] EADDRINUSE 不 crash（檢測既有 OpenCode 是否健康）
 - [x] `.env` 透過 `--env-file` 載入
@@ -331,7 +331,7 @@ curl http://localhost:9223/                # 應返回 302 redirect
 - [x] `setup-capabilities.ps1` 引導式 wiring（symlink/junction，含 copy fallback）
 - [x] `docs/opencode-capability-setup.md` 手動 wiring + 驗證步驟
 - [x] `npm run typecheck` 與 `npm run build` 通過
-- [x] Runtime 啟動修復（fix `032ba68`）：`.env` 用 UTF-8 without BOM、`Read-EnvLines` 回傳保留 list、`OPENCODE_DIRECTORY` normalize 為正斜線；subagent `color` 改 hex（`opencode-cli` 才會接受 schema）。`GET /config` 回傳已含完整 instructions、MCP、5 個 subagents
+- [x] Runtime 啟動修復（fix `032ba68`）：`.env` 用 UTF-8 without BOM、`Read-EnvLines` 回傳保留 list、`OPENCODE_DIRECTORY` normalize 為正斜線；subagent `color` 使用 OpenCode semantic color name。`GET /config` 回傳已含完整 instructions、MCP、5 個 subagents
 
 ### 待做（未完成）
 
@@ -342,7 +342,7 @@ curl http://localhost:9223/                # 應返回 302 redirect
   - PM2 + pm2-windows-service
   - NSSM（Non-Sucking Service Manager）包成 Windows Service
 - 推薦 Task Scheduler，因為最簡單且不需額外安裝
-- 注意：`opencode-cli.exe` 已用絕對路徑，但 `node` / `npm` 仍要在 Task Scheduler 環境的 `$env:PATH` 內
+- 注意：`opencode-cli.exe` 會動態解析；非標準位置請在 `.env` 設 `OPENCODE_CLI_PATH`。`node` / `npm` 仍要在 Task Scheduler 環境的 `$env:PATH` 內
 
 **2. Capability 層 runtime 驗證（capability-alignment 變更，Tasks 6.1–6.5、7.1–7.3）**
 - 在實際的 opencode session 內驗證以下事項，並在 `openspec/changes/capability-alignment/tasks.md` 補上證據：
@@ -577,11 +577,9 @@ opencode exited with code 0
 - `spawn("opencode")` 在 Windows 上會啟動 GUI 版本
 - GUI 版本會立即退出，無法作為 headless server
 
-**解決方案：** 明確指定 opencode-cli.exe
+**解決方案：** 動態解析 opencode-cli.exe，不要硬寫某個 Windows 使用者路徑
 ```typescript
-const opencodeCmd = process.platform === "win32"
-  ? "C:\Users\Kevin\AppData\Local\opencode\opencode-cli.exe"
-  : "opencode";
+const opencodeCmd = resolveOpenCodeCommand();
 ```
 
-**相關 commit：** 參見 `packages/server/src/index.ts` line 144-146
+**解析順序：** `OPENCODE_CLI_PATH` → `%LOCALAPPDATA%\opencode\opencode-cli.exe` → `opencode`。

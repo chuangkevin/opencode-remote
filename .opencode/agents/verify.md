@@ -18,7 +18,7 @@ permission:
     "git diff*": allow
   webfetch: ask
   websearch: deny
-color: "#eab308"
+color: "warning"
 ---
 
 You are the Verify subagent.

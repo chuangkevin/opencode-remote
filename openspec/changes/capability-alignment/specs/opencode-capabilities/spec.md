@@ -40,6 +40,13 @@ runtime workspace as `<HOMEPROJECT_ROOT>` and by relying on the configured
 - **AND** the command writes the local `.env` without committing or printing
   secret values
 
+#### Scenario: Windows opencode CLI path is user-specific
+
+- **WHEN** `opencode-remote` starts on Windows
+- **THEN** it resolves the CLI path from `OPENCODE_CLI_PATH` or the current
+  user's `%LOCALAPPDATA%\opencode\opencode-cli.exe`
+- **AND** source code and documentation do not hard-code one Windows user name
+
 ### Requirement: Workspace configuration exposure SHALL be manual in v1
 
 The first implementation SHALL document manual workspace wiring for making

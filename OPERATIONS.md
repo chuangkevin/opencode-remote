@@ -140,20 +140,22 @@ taskkill /F /PID <PID>
 .\start-hidden.ps1
 ```
 
-### 問題: OpenCode 立即退出 (exit code 0)
+### 問題: OpenCode 立即退出 (exit code 0 或 1)
 
-**原因:** 錯誤的 OpenCode 執行檔
+**原因:** 錯誤的 OpenCode 執行檔或使用者專屬路徑寫死
 
-**檢查:** 確認 `packages/server/src/index.ts` 第 144-146 行：
+**檢查:** 服務必須使用 CLI 版 `opencode-cli.exe`，不能啟動 GUI 版 `OpenCode.exe`。
 
-```typescript
-const opencodeCmd = process.platform === "win32"
-  ? "C:\\Users\\Kevin\\AppData\\Local\\opencode\\opencode-cli.exe"  // ← 必須是 CLI 版本
-  : "opencode";
+```powershell
+# 預設尋找這台電腦目前使用者的 CLI
+Test-Path "$env:LOCALAPPDATA\opencode\opencode-cli.exe"
+
+# 若安裝在非標準位置，寫到本機 .env，不要改 source code
+OPENCODE_CLI_PATH=C:\path\to\opencode-cli.exe
 ```
 
 **不能使用:** `OpenCode.exe` (GUI 版本，會立即退出)
-**必須使用:** `opencode-cli.exe` (CLI 版本，180MB)
+**必須使用:** `opencode-cli.exe` (CLI 版本)。`opencode-remote` 會依序使用 `OPENCODE_CLI_PATH`、`%LOCALAPPDATA%\opencode\opencode-cli.exe`、最後 fallback `opencode`。
 
 ### 問題: HTTPS 外網無法訪問
 

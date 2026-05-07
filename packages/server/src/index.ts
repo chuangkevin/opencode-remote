@@ -1,5 +1,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { config } from "./config.js";
 import { resolveActiveSessionPath } from "./session.js";
 
@@ -90,6 +92,24 @@ function startKeepAlive(): void {
 
 // ─── Startup ─────────────────────────────────────────────────────────────────
 
+function resolveOpenCodeCommand(): string {
+  if (process.env.OPENCODE_CLI_PATH) {
+    return process.env.OPENCODE_CLI_PATH;
+  }
+
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      const localCli = join(localAppData, "opencode", "opencode-cli.exe");
+      if (existsSync(localCli)) {
+        return localCli;
+      }
+    }
+  }
+
+  return "opencode";
+}
+
 async function waitForOpenCode(): Promise<void> {
   for (let i = 0; i < 60; i++) {
     try {
@@ -116,9 +136,7 @@ async function refreshSessionPath(): Promise<void> {
 async function main(): Promise<void> {
   // 1. Spawn OpenCode headless server
   console.log(`[opencode-remote] spawning opencode serve in ${config.opencodeDirectory}`);
-  const opencodeCmd = process.platform === "win32"
-    ? "C:\\Users\\Kevin\\AppData\\Local\\opencode\\opencode-cli.exe"
-    : "opencode";
+  const opencodeCmd = resolveOpenCodeCommand();
   const oc = spawn(
     opencodeCmd,
     ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],

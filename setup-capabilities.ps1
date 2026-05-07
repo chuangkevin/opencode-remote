@@ -20,6 +20,17 @@ function Get-DefaultHomeProjectRoot {
     return ""
 }
 
+function Get-DefaultOpenCodeCliPath {
+    if ($env:LOCALAPPDATA) {
+        $candidate = Join-Path $env:LOCALAPPDATA "opencode\opencode-cli.exe"
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    return ""
+}
+
 function Read-RequiredValue {
     param(
         [string]$Prompt,
@@ -204,6 +215,17 @@ if ([string]::IsNullOrWhiteSpace((Get-EnvValue $envLines "OPENCODE_PORT"))) {
 }
 if ([string]::IsNullOrWhiteSpace((Get-EnvValue $envLines "SESSION_REFRESH_INTERVAL_MS"))) {
     Set-EnvValue $envLines "SESSION_REFRESH_INTERVAL_MS" "30000"
+}
+
+$opencodeCliPath = Get-EnvValue $envLines "OPENCODE_CLI_PATH"
+if ([string]::IsNullOrWhiteSpace($opencodeCliPath) -and [string]::IsNullOrWhiteSpace((Get-DefaultOpenCodeCliPath))) {
+    $providedCliPath = Read-Host "Optional OPENCODE_CLI_PATH for non-standard opencode-cli.exe location (leave blank to use PATH fallback)"
+    if (-not [string]::IsNullOrWhiteSpace($providedCliPath)) {
+        if (-not (Test-Path -LiteralPath $providedCliPath)) {
+            throw "OPENCODE_CLI_PATH does not exist: $providedCliPath"
+        }
+        Set-EnvValue $envLines "OPENCODE_CLI_PATH" $providedCliPath.Trim()
+    }
 }
 
 if (-not $SkipGithubToken) {

@@ -38,9 +38,10 @@ OPENCODE_DIRECTORY=D:\GitClone\_HomeProject   # OpenCode 工作目錄
 PORT=9223                                       # Proxy 對外 port
 OPENCODE_PORT=4096                              # OpenCode 內部 port
 SESSION_REFRESH_INTERVAL_MS=30000              # Session 刷新間隔（ms）
+OPENCODE_CLI_PATH=                              # 可選：非標準 opencode-cli.exe 路徑
 ```
 
-複製 `.env.example` 建立 `.env`，修改 `OPENCODE_DIRECTORY` 為你的路徑。
+複製 `.env.example` 建立 `.env`，修改 `OPENCODE_DIRECTORY` 為你的路徑。缺本機設定時可跑 `./setup-capabilities.ps1` 互動輸入。
 
 ## 架構
 

@@ -20,12 +20,16 @@
 - [x] 2.3 Include Playwright MCP in the config with `enabled: false`.
 - [x] 2.4 Add conservative permission rules for edit and bash operations.
 - [x] 2.5 Update `.env.example` with `GITHUB_TOKEN=` documentation only.
+- [x] 2.6 Resolve `opencode-cli.exe` dynamically from local configuration or the
+      current Windows user's `%LOCALAPPDATA%` path.
 
       → MCP package names were verified where npm packages are used. Git and
         fetch use currently available packages: `@cyanheads/git-mcp-server` and
         `mcp-fetch-server`. GitHub uses GitHub's official remote MCP endpoint
         `https://api.githubcopilot.com/mcp/` with `GITHUB_TOKEN` auth because
-        the earlier npm GitHub MCP package is deprecated.
+        the earlier npm GitHub MCP package is deprecated. OpenCode CLI startup
+        no longer hard-codes a Windows user path; non-standard installs can set
+        `OPENCODE_CLI_PATH` in local `.env`.
 
 ## 3. Manual Workspace Wiring Documentation
 

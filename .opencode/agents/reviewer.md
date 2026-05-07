@@ -14,7 +14,7 @@ permission:
     "git show*": allow
   webfetch: ask
   websearch: ask
-color: "#ef4444"
+color: "error"
 ---
 
 You are the Reviewer subagent.

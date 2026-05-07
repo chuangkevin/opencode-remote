@@ -25,6 +25,11 @@ secret values, and wires `opencode.json`, `AGENTS.md`, and `.opencode\agents` to
 the runtime root. It prefers symlink/junction wiring and offers copy fallback if
 link creation fails.
 
+On Windows, `opencode-remote` resolves the CLI path dynamically. It checks
+`OPENCODE_CLI_PATH`, then `%LOCALAPPDATA%\opencode\opencode-cli.exe`, then falls
+back to `opencode`. If your CLI is installed elsewhere, set `OPENCODE_CLI_PATH`
+in local `.env` or provide it when prompted by setup.
+
 To skip GitHub token input:
 
 ```powershell

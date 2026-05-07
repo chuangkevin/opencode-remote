@@ -14,7 +14,7 @@ permission:
     "git show*": allow
   webfetch: ask
   websearch: ask
-color: "#a855f7"
+color: "accent"
 ---
 
 You are the Plan subagent.
