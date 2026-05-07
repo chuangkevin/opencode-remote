@@ -92,6 +92,18 @@ enabled integrations. It SHALL include Playwright MCP as disabled by default.
 - **THEN** its token is read from local environment such as `GITHUB_TOKEN`
 - **AND** the real token is not committed to git or printed in verification output
 
+#### Scenario: GitHub MCP token is missing
+
+- **WHEN** `GITHUB_TOKEN` is blank during local setup
+- **THEN** runtime config disables GitHub MCP instead of attempting an unauthenticated connection
+- **AND** filesystem, git, and fetch MCP can still start independently
+
+#### Scenario: Local MCP starts from npx cache miss
+
+- **WHEN** local MCP servers are started for the first time on a machine
+- **THEN** startup timeout allows first-run `npx` package resolution
+- **AND** filesystem, git, and fetch do not fail solely because cold start takes more than 10 seconds
+
 ### Requirement: Permissions SHALL use conservative boundaries
 
 The configuration SHALL deny edits to secret-bearing files and deny destructive

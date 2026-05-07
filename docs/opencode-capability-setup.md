@@ -24,6 +24,11 @@ and starts the service. It also removes user-level `pencil` MCP from the local
 OpenCode config so the shared HomeProject capability config is not polluted by a
 desktop-only MCP server.
 
+Local MCP servers use a 60-second startup timeout because first-run `npx` package
+resolution can exceed 10 seconds. GitHub MCP is enabled only when local `.env`
+has `GITHUB_TOKEN`; without a token it is disabled instead of showing a red
+failed status.
+
 Use the guided setup when `.env` is missing, `OPENCODE_DIRECTORY` is unknown, or
 GitHub MCP needs a local token:
 
@@ -100,7 +105,8 @@ Copy-Item (Join-Path $Repo '.opencode\agents\*.md') (Join-Path $HomeProjectRoot 
 
 ## Local GitHub Token
 
-GitHub MCP reads `GITHUB_TOKEN` from `opencode-remote/.env`. Add it locally only:
+GitHub MCP reads `GITHUB_TOKEN` from `opencode-remote/.env`. Add it locally only
+if GitHub API access is needed:
 
 ```env
 # Paste the real token locally only. Do not commit it.
@@ -108,6 +114,8 @@ GITHUB_TOKEN=
 ```
 
 Do not commit the real token.
+
+If `GITHUB_TOKEN` is blank, setup writes runtime config with GitHub MCP disabled.
 
 ## Restart And Verify Service
 

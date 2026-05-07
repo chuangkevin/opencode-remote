@@ -83,7 +83,11 @@ curl http://localhost:9223/
 
 # OpenCode instance config（確認 MCP 不是只載到 user-level config）
 curl http://localhost:4096/config
-# 預期: mcp 包含 filesystem / git / github / fetch；不包含 pencil
+# 預期: mcp 包含 filesystem / git / fetch connected；github 無 token 時 disabled；不包含 pencil
+
+# MCP 狀態摘要
+opencode mcp list
+# 預期: filesystem / git / fetch connected；github disabled 或 connected；playwright disabled
 
 # 外網訪問（需要 Tailscale 和 Caddy 正常）
 curl -L https://opencode.sisihome.org/

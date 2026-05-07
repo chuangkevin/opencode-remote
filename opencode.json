@@ -59,7 +59,7 @@
         "{env:OPENCODE_DIRECTORY}"
       ],
       "enabled": true,
-      "timeout": 10000
+      "timeout": 60000
     },
     "git": {
       "type": "local",
@@ -69,7 +69,7 @@
         "@cyanheads/git-mcp-server"
       ],
       "enabled": true,
-      "timeout": 10000
+      "timeout": 60000
     },
     "github": {
       "type": "remote",
@@ -78,7 +78,7 @@
         "Authorization": "Bearer {env:GITHUB_TOKEN}"
       },
       "enabled": true,
-      "timeout": 10000
+      "timeout": 60000
     },
     "fetch": {
       "type": "local",
@@ -91,7 +91,7 @@
         "DEFAULT_LIMIT": "10000"
       },
       "enabled": true,
-      "timeout": 10000
+      "timeout": 60000
     },
     "playwright": {
       "type": "local",

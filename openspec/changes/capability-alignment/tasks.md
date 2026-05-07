@@ -98,6 +98,8 @@
         `{env:GITHUB_TOKEN}` and never printed in proxy or opencode logs.
         One-click startup verification on 2026-05-07 returned
         `mcp=filesystem,git,github,fetch,playwright` and `hasPencil=False`.
+        `opencode mcp list` then returned filesystem/git/fetch connected,
+        github disabled because `GITHUB_TOKEN` is blank, and playwright disabled.
 
 - [ ] 6.3 Verify workspace `AGENTS.md` can be cited by opencode.
 

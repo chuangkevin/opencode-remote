@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 Write-Host "Preparing opencode capability config..." -ForegroundColor Cyan
-.\setup-capabilities.ps1 -SkipGithubToken -NonInteractive -Force
+.\setup-capabilities.ps1 -SkipGithubToken -NonInteractive -Force -CopyFallback
 
 Write-Host "Building opencode-remote..." -ForegroundColor Cyan
 npm run build

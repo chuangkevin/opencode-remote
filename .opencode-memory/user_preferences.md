@@ -15,3 +15,5 @@ type: user
   must prepare local config, build, and start without requiring manual setup.
 - Do not include or preserve user-level Pencil MCP in the shared
   `opencode-remote` runtime config.
+- GitHub MCP should be disabled when `GITHUB_TOKEN` is blank; local MCP startup
+  should allow enough timeout for first-run `npx` package resolution.

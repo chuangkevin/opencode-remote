@@ -12,6 +12,7 @@ cd D:\GitClone\_HomeProject\opencode-remote
 服務在背景執行，不阻塞終端。AI agent（Claude Code task）可直接用 PowerShell tool 執行此指令。
 
 `start-hidden.ps1` 是一鍵啟動：會自動準備本機 `.env`、同步 `opencode.json` / `AGENTS.md` / `.opencode\agents` 到 runtime root、移除 user-level Pencil MCP、build，然後啟動服務。
+GitHub MCP 需要 `GITHUB_TOKEN`；沒有 token 時會自動停用，避免啟動紅燈。
 
 > **手動備用（需開終端機）：** `npm start`（前景模式，日誌直接顯示，Ctrl+C 停止）
 

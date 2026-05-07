@@ -168,7 +168,7 @@ function Copy-CapabilityFiles {
     $agentsDirTarget = Join-Path $HomeProjectRoot ".opencode\agents"
 
     if (Ensure-TargetAvailable $configTarget (Join-Path $Repo "opencode.json")) {
-        Copy-Item -LiteralPath (Join-Path $Repo "opencode.json") -Destination $configTarget
+        Write-RuntimeConfig $HomeProjectRoot $configTarget
     }
     if (Ensure-TargetAvailable $agentsFileTarget (Join-Path $Repo "AGENTS.md")) {
         Copy-Item -LiteralPath (Join-Path $Repo "AGENTS.md") -Destination $agentsFileTarget
@@ -203,6 +203,36 @@ function Link-CapabilityFiles {
     }
 
     return $mode
+}
+
+function Write-RuntimeConfig {
+    param(
+        [string]$HomeProjectRoot,
+        [string]$Destination
+    )
+
+    $config = Get-Content -LiteralPath (Join-Path $Repo "opencode.json") -Raw | ConvertFrom-Json
+    $config.mcp.filesystem.command = @("npx", "-y", "@modelcontextprotocol/server-filesystem", $HomeProjectRoot)
+
+    foreach ($name in @("filesystem", "git", "fetch", "playwright")) {
+        if ($config.mcp.PSObject.Properties[$name]) {
+            $config.mcp.$name.timeout = 60000
+        }
+    }
+
+    $githubToken = Get-EnvValue $envLines "GITHUB_TOKEN"
+    if ($config.mcp.github) {
+        if ([string]::IsNullOrWhiteSpace($githubToken)) {
+            $config.mcp.github.enabled = $false
+        }
+        else {
+            $config.mcp.github.enabled = $true
+        }
+    }
+
+    $json = $config | ConvertTo-Json -Depth 50
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Destination, $json + [Environment]::NewLine, $utf8NoBom)
 }
 
 function Remove-UserPencilMcp {

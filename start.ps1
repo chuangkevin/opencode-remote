@@ -28,7 +28,7 @@ Start-Sleep -Seconds 1
 
 if (-not $NoPrepare) {
     Write-Host "Preparing opencode capability config..." -ForegroundColor Cyan
-    .\setup-capabilities.ps1 -SkipGithubToken -NonInteractive -Force
+    .\setup-capabilities.ps1 -SkipGithubToken -NonInteractive -Force -CopyFallback
 
     Write-Host "Building opencode-remote..." -ForegroundColor Cyan
     npm run build
