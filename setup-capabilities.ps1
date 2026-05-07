@@ -212,7 +212,7 @@ function Write-RuntimeConfig {
     )
 
     $config = Get-Content -LiteralPath (Join-Path $Repo "opencode.json") -Raw | ConvertFrom-Json
-    $config.mcp.filesystem.command = @("npx", "-y", "@modelcontextprotocol/server-filesystem", $HomeProjectRoot)
+    $config.mcp.filesystem.command = @("mcp-server-filesystem", $HomeProjectRoot)
 
     foreach ($name in @("filesystem", "git", "fetch", "playwright")) {
         if ($config.mcp.PSObject.Properties[$name]) {
@@ -233,6 +233,34 @@ function Write-RuntimeConfig {
     $json = $config | ConvertTo-Json -Depth 50
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Destination, $json + [Environment]::NewLine, $utf8NoBom)
+}
+
+function Ensure-McpBins {
+    # MCP servers are launched as global bins (not `npx -y`) because corporate
+    # networks add latency to npx's per-launch registry probe and OpenCode has
+    # a hard ~10s startup timeout. Install missing packages once per machine.
+    $required = @(
+        @{ bin = "mcp-server-filesystem"; pkg = "@modelcontextprotocol/server-filesystem" },
+        @{ bin = "git-mcp-server";        pkg = "@cyanheads/git-mcp-server" }
+    )
+
+    $missing = @()
+    foreach ($entry in $required) {
+        if (-not (Get-Command $entry.bin -ErrorAction SilentlyContinue)) {
+            $missing += $entry.pkg
+        }
+    }
+
+    if ($missing.Count -eq 0) {
+        Write-Host "MCP bins already on PATH." -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "Installing MCP bins globally: $($missing -join ', ')" -ForegroundColor Cyan
+    & npm install -g @missing
+    if ($LASTEXITCODE -ne 0) {
+        throw "npm install -g failed for: $($missing -join ', ')"
+    }
 }
 
 function Remove-UserPencilMcp {
@@ -327,6 +355,7 @@ if (-not $SkipGithubToken) {
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($EnvPath, ($envLines -join [Environment]::NewLine) + [Environment]::NewLine, $utf8NoBom)
 Write-Host "Wrote local .env without printing secret values." -ForegroundColor Green
+Ensure-McpBins
 Remove-UserPencilMcp
 
 if ($CopyFallback) {

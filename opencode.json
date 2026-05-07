@@ -53,9 +53,7 @@
     "filesystem": {
       "type": "local",
       "command": [
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
+        "mcp-server-filesystem",
         "{env:OPENCODE_DIRECTORY}"
       ],
       "enabled": true,
@@ -64,9 +62,7 @@
     "git": {
       "type": "local",
       "command": [
-        "npx",
-        "-y",
-        "@cyanheads/git-mcp-server"
+        "git-mcp-server"
       ],
       "enabled": true,
       "timeout": 60000
@@ -90,7 +86,7 @@
       "environment": {
         "DEFAULT_LIMIT": "10000"
       },
-      "enabled": true,
+      "enabled": false,
       "timeout": 60000
     },
     "playwright": {

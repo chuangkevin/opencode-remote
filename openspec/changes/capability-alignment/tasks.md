@@ -122,6 +122,44 @@
         JSON escape errors above. Bounded read-only behavior is enforced by
         the explicit `permission` blocks in each subagent file.
 
+      → 2026-05-07 stronger evidence: in a live session researching
+        media-processor, the primary `build` agent autonomously decomposed
+        the task and dispatched **three parallel** `explore` subagents
+        ("Map backend pipeline" / "Inspect media services" / "Map photo
+        frame app") via the `task` tool, mirroring Claude Code's Task-tool
+        parallel dispatch pattern. Confirms description-driven auto-routing
+        and parallel fan-out work end-to-end.
+
+## 8. Company-Network MCP Startup (2026-05-07)
+
+- [x] 8.1 Diagnose MCP red dots on company network.
+
+      → OpenCode imposes a hard ~10s MCP startup timeout (`Operation timed
+        out after 10000ms local mcp startup failed`). On the company network,
+        SSL inspection ("self signed certificate in certificate chain") slows
+        every `npx -y <pkg>` registry probe enough that filesystem / git /
+        fetch handshake exceeds 10s. `NODE_TLS_REJECT_UNAUTHORIZED=0` (Machine
+        scope) was already active and only disables verification, not the
+        handshake latency itself. At home, the same machine completes the
+        probe within budget so MCPs come up green.
+
+- [x] 8.2 Replace `npx -y` MCP commands with globally-installed bins.
+
+      → `opencode.json` now invokes `mcp-server-filesystem` and `git-mcp-server`
+        directly (no `npx` registry probe). Direct-bin cold start measured
+        ~2.9s for git-mcp-server and ~5.0s for mcp-server-filesystem — both
+        safely inside the 10s budget. `mcp-fetch-server` itself starts in
+        ~14s regardless of npx, so `fetch` is set `enabled: false`; OpenCode's
+        built-in webfetch covers the gap.
+
+- [x] 8.3 Make MCP bin install part of the one-click flow.
+
+      → `setup-capabilities.ps1` adds `Ensure-McpBins`: detects whether
+        `mcp-server-filesystem` and `git-mcp-server` are on PATH and runs
+        `npm install -g` for missing ones. Idempotent; no-ops when already
+        installed. Runs as part of `start-hidden.ps1` so a fresh user only
+        needs Node + opencode-cli pre-installed.
+
 - [x] 6.6 Run the repo's concrete validation command after file changes:
       `npm run typecheck` and `npm run build`.
 
