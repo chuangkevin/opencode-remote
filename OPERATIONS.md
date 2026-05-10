@@ -13,7 +13,7 @@ cd D:\GitClone\_HomeProject\opencode-remote
 
 服務在背景執行，不阻塞終端。**AI agent（Claude Code task）可直接透過 PowerShell tool 執行此指令。**
 
-`start-hidden.ps1` 是一鍵啟動：會自動準備 `.env`、同步 capability config 到 `OPENCODE_DIRECTORY`、移除 user-level Pencil MCP、執行 build，然後啟動服務。
+`start-hidden.ps1` 是一鍵啟動：會自動準備 `.env`、同步 capability config 到 `OPENCODE_DIRECTORY`、移除 user-level Pencil MCP、執行 build、安裝每 5 分鐘執行一次的 watchdog scheduled task，然後啟動服務。
 
 - 本地訪問: http://localhost:9223
 - 外網訪問: https://opencode.sisihome.org
@@ -38,6 +38,25 @@ curl http://localhost:9223/
 
 兩個都正常就代表服務完全就緒。
 
+### 手機工作階段列表
+
+OpenCode 原生 mobile layout 可能只顯示目前 session，不顯示完整工作階段列表。手機可直接開：
+
+```text
+https://opencode.sisihome.org/remote-sessions
+```
+
+這是 `opencode-remote` 提供的輕量 session picker，點選任一項會進入對應 OpenCode session。
+手機 User-Agent 打開 `/` 時，`opencode-remote` 會導到 `/remote-sessions`，避免 OpenCode 原生 mobile layout 看不到工作階段列表。
+
+### 確認手機走 opencode-remote
+
+```text
+https://opencode.sisihome.org/remote-health
+```
+
+回應中的 `proxy` 應為 `opencode-remote`，`remotePort` 應為 `9223`。
+
 ### 重新啟動服務
 
 ```powershell
@@ -61,6 +80,30 @@ cd D:\GitClone\_HomeProject\opencode-remote
 ```
 
 `stop.ps1` 會同時停止 proxy (port 9223) 和 OpenCode (port 4096) 兩個進程。
+預設也會停用 `opencode-remote-watchdog`，避免手動停止後被自動拉起。若要測試自動重啟，使用 `.\stop.ps1 -KeepWatchdog`。
+
+### 自動重啟 watchdog
+
+`start-hidden.ps1` 會安裝 Windows Scheduled Task：`opencode-remote-watchdog`。
+
+```powershell
+# 手動安裝或更新 watchdog
+.\install-watchdog.ps1
+
+# 立即跑一次健康檢查與自復原
+.\ensure-service.ps1
+
+# 查看 watchdog 狀態
+Get-ScheduledTask -TaskName opencode-remote-watchdog
+```
+
+watchdog 每 5 分鐘檢查：
+
+- `http://127.0.0.1:4096/global/health` 必須回 `healthy: true`
+- `http://127.0.0.1:9223/` 必須回 `200` 或 `302`
+
+任一檢查失敗時，會用 `start.ps1 -NoPrepare` 在背景重啟服務。紀錄寫入 `opencode-remote-watchdog.log`。
+排程透過 `run-watchdog-hidden.vbs` 啟動隱藏 PowerShell，不應跳出 console 視窗。
 
 如果需要用 PID 手動停止（例如 start-hidden.ps1 輸出的 PID）：
 

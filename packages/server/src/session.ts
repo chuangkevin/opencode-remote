@@ -5,11 +5,12 @@ type OpenCodeSession = {
   slug: string;
   projectID: string;
   directory: string;
+  path?: string;
   title: string;
   time: { created: number; updated: number };
 };
 
-async function listSessions(): Promise<OpenCodeSession[]> {
+export async function listSessions(): Promise<OpenCodeSession[]> {
   const res = await fetch(`${config.opencodeUrl}/session`);
   if (!res.ok) throw new Error(`OpenCode /session returned ${res.status}`);
   return res.json() as Promise<OpenCodeSession[]>;
@@ -33,7 +34,7 @@ function byUpdatedDesc(a: OpenCodeSession, b: OpenCodeSession): number {
  * OpenCode's SPA uses base64url(directory) as the workspace slug in the URL:
  *   /<base64url(directory)>/session/<sessionId>
  */
-function encodeDirSlug(dir: string): string {
+export function encodeDirSlug(dir: string): string {
   return Buffer.from(dir, "utf8")
     .toString("base64")
     .replace(/\+/g, "-")
@@ -63,4 +64,16 @@ export async function resolveActiveSessionPath(): Promise<string> {
 
   const dirSlug = encodeDirSlug(session.directory);
   return `/${dirSlug}/session/${session.id}`;
+}
+
+export async function resolveActiveWorkspaceSessionPath(): Promise<string> {
+  const sessions = await listSessions();
+
+  const byDir = sessions
+    .filter((s) => s.directory === config.opencodeDirectory)
+    .sort(byUpdatedDesc);
+
+  const session = byDir[0] ?? [...sessions].sort(byUpdatedDesc)[0];
+  const directory = session?.directory ?? config.opencodeDirectory;
+  return `/${encodeDirSlug(directory)}/session`;
 }

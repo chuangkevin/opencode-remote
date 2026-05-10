@@ -11,7 +11,7 @@ cd D:\GitClone\_HomeProject\opencode-remote
 
 服務在背景執行，不阻塞終端。AI agent（Claude Code task）可直接用 PowerShell tool 執行此指令。
 
-`start-hidden.ps1` 是一鍵啟動：會自動準備本機 `.env`、同步 `opencode.json` / `AGENTS.md` / `.opencode\agents` 到 runtime root、移除 user-level Pencil MCP、build，然後啟動服務。
+`start-hidden.ps1` 是一鍵啟動：會自動準備本機 `.env`、同步 `opencode.json` / `AGENTS.md` / `.opencode\agents` 到 runtime root、移除 user-level Pencil MCP、build、安裝每 5 分鐘健康檢查 watchdog，然後啟動服務。
 GitHub MCP 需要 `GITHUB_TOKEN`；沒有 token 時會自動停用，避免啟動紅燈。
 
 > **手動備用（需開終端機）：** `npm start`（前景模式，日誌直接顯示，Ctrl+C 停止）
@@ -28,11 +28,18 @@ curl http://localhost:9223/
 # 預期: 302 redirect 到 session URL
 ```
 
+手機如果 OpenCode 原生側欄看不到工作階段列表，可開 `https://opencode.sisihome.org/remote-sessions` 使用手機友善列表。
+要確認目前是否經過 opencode-remote proxy，可開 `https://opencode.sisihome.org/remote-health`。
+手機打開 `/` 會導到 `opencode-remote` 手機工作階段列表，桌面則維持導到最近 active session。
+
 ## 停止
 
 ```powershell
 .\stop.ps1
 ```
+
+`stop.ps1` 會停用 watchdog，避免手動停止後被自動拉起。若只想測試自復原，可用 `.\stop.ps1 -KeepWatchdog` 後等下一次排程重啟。
+watchdog 透過 `run-watchdog-hidden.vbs` 隱藏執行，不應每分鐘跳出 console 視窗。
 
 ## 設定（`.env`）
 

@@ -1,5 +1,9 @@
 # One-click background start for opencode-remote.
 
+param(
+    [switch]$NoWatchdog
+)
+
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
@@ -8,6 +12,11 @@ Write-Host "Preparing opencode capability config..." -ForegroundColor Cyan
 
 Write-Host "Building opencode-remote..." -ForegroundColor Cyan
 npm run build
+
+if (-not $NoWatchdog) {
+    Write-Host "Installing auto-restart watchdog..." -ForegroundColor Cyan
+    .\install-watchdog.ps1
+}
 
 Write-Host "Starting opencode-remote in background..." -ForegroundColor Cyan
 
