@@ -7,6 +7,42 @@ import { encodeDirSlug, listSessions, resolveActiveSessionPath } from "./session
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
+function isValidWorkspaceID(value: string): boolean {
+  return value.startsWith("wrk");
+}
+
+function sanitizeProxyPath(path: string | undefined): string {
+  if (!path) return "/";
+
+  let url: URL;
+  try {
+    url = new URL(path, "http://opencode-remote.local");
+  } catch {
+    return path;
+  }
+
+  const workspaces = url.searchParams.getAll("workspace");
+  if (workspaces.length === 0 || workspaces.every(isValidWorkspaceID)) {
+    return path;
+  }
+
+  url.searchParams.delete("workspace");
+  for (const workspace of workspaces.filter(isValidWorkspaceID)) {
+    url.searchParams.append("workspace", workspace);
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function sanitizeProxyHeaders(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+  const next: http.OutgoingHttpHeaders = { ...headers };
+  const workspace = next["x-opencode-workspace"];
+  const workspaces = Array.isArray(workspace) ? workspace : workspace === undefined ? [] : [String(workspace)];
+  if (workspaces.some((value) => value && !isValidWorkspaceID(value))) {
+    delete next["x-opencode-workspace"];
+  }
+  return next;
+}
+
 function proxy(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -14,9 +50,12 @@ function proxy(
   const options: http.RequestOptions = {
     hostname: "127.0.0.1",
     port: config.opencodePort,
-    path: req.url,
+    path: sanitizeProxyPath(req.url),
     method: req.method,
-    headers: { ...req.headers, host: `127.0.0.1:${config.opencodePort}` },
+    headers: {
+      ...sanitizeProxyHeaders(req.headers),
+      host: `127.0.0.1:${config.opencodePort}`,
+    },
   };
 
   let proxyReq: http.ClientRequest;
