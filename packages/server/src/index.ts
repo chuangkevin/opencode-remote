@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "./config.js";
-import { encodeDirSlug, listSessions, resolveActiveSessionPath } from "./session.js";
+import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } from "./session.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -214,7 +214,9 @@ function formatTime(timestamp: number): string {
 
 async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
   try {
-    const sessions = (await listSessions()).sort((a, b) => b.time.updated - a.time.updated);
+    const sessions = (await listSessions())
+      .filter(isUserSession)
+      .sort((a, b) => b.time.updated - a.time.updated);
     const items = sessions.map((session) => {
       const path = `/${encodeDirSlug(session.directory)}/session/${session.id}`;
       const title = session.title || session.slug || session.id;

@@ -4,6 +4,7 @@ type OpenCodeSession = {
   id: string;
   slug: string;
   projectID: string;
+  parentID?: string;
   directory: string;
   path?: string;
   title: string;
@@ -39,6 +40,10 @@ function isConfiguredDirectory(session: OpenCodeSession): boolean {
   return normalizeDirectory(session.directory) === normalizeDirectory(config.opencodeDirectory);
 }
 
+export function isUserSession(session: OpenCodeSession): boolean {
+  return !session.parentID;
+}
+
 /**
  * OpenCode's SPA uses base64url(directory) as the workspace slug in the URL:
  *   /<base64url(directory)>/session/<sessionId>
@@ -60,7 +65,7 @@ export function encodeDirSlug(dir: string): string {
  * using the session directory as the slug to match OpenCode's workspace key.
  */
 export async function resolveActiveSessionPath(): Promise<string> {
-  const sessions = await listSessions();
+  const sessions = (await listSessions()).filter(isUserSession);
 
   const byDir = sessions
     .filter(isConfiguredDirectory)
@@ -76,7 +81,7 @@ export async function resolveActiveSessionPath(): Promise<string> {
 }
 
 export async function resolveActiveWorkspaceSessionPath(): Promise<string> {
-  const sessions = await listSessions();
+  const sessions = (await listSessions()).filter(isUserSession);
 
   const byDir = sessions
     .filter(isConfiguredDirectory)
