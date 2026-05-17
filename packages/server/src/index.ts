@@ -11,6 +11,17 @@ function isValidWorkspaceID(value: string): boolean {
   return value.startsWith("wrk");
 }
 
+function decodeLegacyDirectorySlug(value: string): string | undefined {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
+    const decoded = Buffer.from(padded, "base64").toString("utf8");
+    return decoded && /^[A-Za-z]:[\\/]/.test(decoded) ? decoded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function sanitizeProxyPath(path: string | undefined): string {
   if (!path) return "/";
 
@@ -24,6 +35,11 @@ function sanitizeProxyPath(path: string | undefined): string {
   const workspaces = url.searchParams.getAll("workspace");
   if (workspaces.length === 0 || workspaces.every(isValidWorkspaceID)) {
     return path;
+  }
+
+  const legacyDirectory = workspaces.map(decodeLegacyDirectorySlug).find((value) => value !== undefined);
+  if (legacyDirectory && !url.searchParams.has("directory")) {
+    url.searchParams.set("directory", legacyDirectory);
   }
 
   url.searchParams.delete("workspace");
