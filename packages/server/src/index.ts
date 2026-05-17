@@ -19,22 +19,51 @@ function proxy(
     headers: { ...req.headers, host: `127.0.0.1:${config.opencodePort}` },
   };
 
-  const proxyReq = http.request(options, (proxyRes) => {
+  let proxyReq: http.ClientRequest;
+  let proxyRes: http.IncomingMessage | undefined;
+  let cleanedUp = false;
+
+  const cleanup = (): void => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    proxyReq.destroy();
+    proxyRes?.destroy();
+  };
+
+  proxyReq = http.request(options, (upstreamRes) => {
+    proxyRes = upstreamRes;
+    if (cleanedUp || res.destroyed) {
+      upstreamRes.destroy();
+      return;
+    }
+
     const isHead = req.method === "HEAD";
 
-    const headers = { ...proxyRes.headers, "x-opencode-remote": "true" };
+    upstreamRes.on("error", () => {
+      if (!res.destroyed) res.destroy();
+    });
+
+    const headers = { ...upstreamRes.headers, "x-opencode-remote": "true" };
     if (isHead && headers["content-length"] === "0") {
       delete headers["content-length"];
     }
-    res.writeHead(proxyRes.statusCode ?? 200, headers);
-    proxyRes.pipe(res, { end: true });
+    res.writeHead(upstreamRes.statusCode ?? 200, headers);
+    upstreamRes.pipe(res, { end: true });
   });
 
   proxyReq.on("error", () => {
-    if (!res.headersSent) {
+    if (!res.headersSent && !res.destroyed) {
       res.writeHead(502);
       res.end("Bad Gateway");
     }
+  });
+
+  req.on("aborted", cleanup);
+  req.on("close", () => {
+    if (!req.complete) cleanup();
+  });
+  res.on("close", () => {
+    if (!res.writableEnded) cleanup();
   });
 
   req.pipe(proxyReq, { end: true });
@@ -181,13 +210,17 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
   }
 }
 
-async function handleRootRedirect(res: http.ServerResponse): Promise<void> {
+function handleRootRedirect(res: http.ServerResponse): void {
+  redirectToSession(res, "/remote-sessions");
+}
+
+async function handleLatestRedirect(res: http.ServerResponse): Promise<void> {
   try {
     activeSessionPath = await resolveActiveSessionPath();
     redirectToSession(res, activeSessionPath);
     return;
   } catch (err) {
-    console.error("[opencode-remote] failed to resolve active session for /:", err);
+    console.error("[opencode-remote] failed to resolve active session for /latest:", err);
   }
 
   if (!activeSessionPath) {
@@ -197,15 +230,6 @@ async function handleRootRedirect(res: http.ServerResponse): Promise<void> {
   }
 
   redirectToSession(res, activeSessionPath);
-}
-
-function isMobileRequest(req: http.IncomingMessage): boolean {
-  const ua = req.headers["user-agent"] ?? "";
-  return /Android|iPhone|iPad|iPod|Mobile/i.test(Array.isArray(ua) ? ua.join(" ") : ua);
-}
-
-async function handleMobileRootRedirect(res: http.ServerResponse): Promise<void> {
-  redirectToSession(res, "/remote-sessions");
 }
 
 const server = http.createServer((req, res) => {
@@ -225,12 +249,12 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/") {
-    if (isMobileRequest(req)) {
-      void handleMobileRootRedirect(res);
-      return;
-    }
+    handleRootRedirect(res);
+    return;
+  }
 
-    void handleRootRedirect(res);
+  if (req.method === "GET" && req.url === "/latest") {
+    void handleLatestRedirect(res);
     return;
   }
   proxy(req, res);
@@ -240,24 +264,34 @@ const server = http.createServer((req, res) => {
 
 function startKeepAlive(): void {
   let delay = 1_000;
+  let reconnectTimer: NodeJS.Timeout | undefined;
+  let connect: () => void;
 
-  const connect = (): void => {
+  const scheduleReconnect = (): void => {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      connect();
+    }, delay);
+  };
+
+  connect = (): void => {
     const req = http.get(
       `${config.opencodeUrl}/event`,
       { headers: { Accept: "text/event-stream" } },
       (res) => {
         delay = 1_000;
         res.on("data", () => { /* consume to keep stream open */ });
-        res.on("end", () => setTimeout(connect, delay));
+        res.on("end", scheduleReconnect);
         res.on("error", () => {
           delay = Math.min(delay * 2, 30_000);
-          setTimeout(connect, delay);
+          scheduleReconnect();
         });
       },
     );
     req.on("error", () => {
       delay = Math.min(delay * 2, 30_000);
-      setTimeout(connect, delay);
+      scheduleReconnect();
     });
   };
 
@@ -352,7 +386,8 @@ async function main(): Promise<void> {
   // 6. Start HTTP proxy server
   server.listen(config.port, "0.0.0.0", () => {
     console.log(`[opencode-remote] proxy listening on http://0.0.0.0:${config.port}`);
-    console.log(`[opencode-remote] → redirecting / to ${activeSessionPath}`);
+    console.log("[opencode-remote] → redirecting / to /remote-sessions");
+    console.log(`[opencode-remote] → redirecting /latest to ${activeSessionPath}`);
   });
 }
 

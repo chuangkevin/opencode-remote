@@ -13,11 +13,11 @@ function Write-WatchdogLog {
     Add-Content -LiteralPath $logPath -Value "[$timestamp] $Message"
 }
 
-function Test-OpenCodeHealth {
+function Test-RemoteHealth {
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:4096/global/health" -TimeoutSec 5
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:9223/remote-health" -TimeoutSec 5
         $json = $response.Content | ConvertFrom-Json
-        return ($response.StatusCode -eq 200 -and $json.healthy -eq $true)
+        return ($response.StatusCode -eq 200 -and $json.upstreamHealth.healthy -eq $true)
     } catch {
         return $false
     }
@@ -25,14 +25,14 @@ function Test-OpenCodeHealth {
 
 function Test-ProxyHealth {
     try {
-        $request = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:9223/")
+        $request = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:9223/remote-sessions")
         $request.AllowAutoRedirect = $false
         $request.Timeout = 5000
         $request.Method = "GET"
         $response = $request.GetResponse()
         try {
             $statusCode = [int]$response.StatusCode
-            return ($statusCode -eq 200 -or $statusCode -eq 302)
+            return ($statusCode -eq 200)
         } finally {
             $response.Close()
         }
@@ -49,7 +49,7 @@ try {
         exit 0
     }
 
-    if ((Test-OpenCodeHealth) -and (Test-ProxyHealth)) {
+    if ((Test-RemoteHealth) -and (Test-ProxyHealth)) {
         exit 0
     }
 

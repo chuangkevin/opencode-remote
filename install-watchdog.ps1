@@ -21,4 +21,4 @@ $taskCommand = "`"$wscriptPath`" `"$runnerPath`""
 & schtasks.exe /Run /TN $taskName | Out-Null
 
 Write-Host "Installed watchdog scheduled task: $taskName" -ForegroundColor Green
-Write-Host "It checks http://127.0.0.1:9223 and http://127.0.0.1:4096 every 5 minutes." -ForegroundColor Cyan
+Write-Host "It checks http://127.0.0.1:9223/remote-health every 5 minutes." -ForegroundColor Cyan

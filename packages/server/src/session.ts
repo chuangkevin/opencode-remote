@@ -30,6 +30,15 @@ function byUpdatedDesc(a: OpenCodeSession, b: OpenCodeSession): number {
   return b.time.updated - a.time.updated;
 }
 
+function normalizeDirectory(dir: string): string {
+  const normalized = dir.replace(/[\\/]+/g, "\\").replace(/\\+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isConfiguredDirectory(session: OpenCodeSession): boolean {
+  return normalizeDirectory(session.directory) === normalizeDirectory(config.opencodeDirectory);
+}
+
 /**
  * OpenCode's SPA uses base64url(directory) as the workspace slug in the URL:
  *   /<base64url(directory)>/session/<sessionId>
@@ -48,13 +57,13 @@ export function encodeDirSlug(dir: string): string {
  * if no sessions exist at all.
  *
  * Returns the full SPA path: /<base64url(dir)>/session/<sessionId>
- * using the CONFIGURED directory as the slug (avoids corrupted stored paths).
+ * using the session directory as the slug to match OpenCode's workspace key.
  */
 export async function resolveActiveSessionPath(): Promise<string> {
   const sessions = await listSessions();
 
   const byDir = sessions
-    .filter((s) => s.directory === config.opencodeDirectory)
+    .filter(isConfiguredDirectory)
     .sort(byUpdatedDesc);
 
   const session =
@@ -70,7 +79,7 @@ export async function resolveActiveWorkspaceSessionPath(): Promise<string> {
   const sessions = await listSessions();
 
   const byDir = sessions
-    .filter((s) => s.directory === config.opencodeDirectory)
+    .filter(isConfiguredDirectory)
     .sort(byUpdatedDesc);
 
   const session = byDir[0] ?? [...sessions].sort(byUpdatedDesc)[0];
