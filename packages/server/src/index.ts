@@ -356,10 +356,11 @@ function proxy(
 ): void {
   const upstreamPath = sanitizeProxyPath(req.url);
   const debugRequest = shouldRecordProxyDebug(req.url, upstreamPath);
+  const retryableRequest = debugRequest && (req.method === "GET" || req.method === "HEAD");
   const debugStartedAt = Date.now();
   let debugLogged = false;
 
-  const logProxyDebug = (entry: Pick<RemoteDebugEntry, "status" | "error">): void => {
+  const logProxyDebug = (entry: Pick<RemoteDebugEntry, "status" | "error" | "note">): void => {
     if (!debugRequest || debugLogged) return;
     debugLogged = true;
     addRemoteDebugEntry({
@@ -386,93 +387,126 @@ function proxy(
   let proxyReq: http.ClientRequest;
   let proxyRes: http.IncomingMessage | undefined;
   let cleanedUp = false;
+  let retried = false;
+  let retryTimer: NodeJS.Timeout | undefined;
 
   const cleanup = (): void => {
     if (cleanedUp) return;
     cleanedUp = true;
+    if (retryTimer) clearTimeout(retryTimer);
     proxyReq.destroy();
     proxyRes?.destroy();
   };
 
-  proxyReq = http.request(options, (upstreamRes) => {
-    proxyRes = upstreamRes;
-    logProxyDebug({ status: upstreamRes.statusCode });
-    if (cleanedUp || res.destroyed) {
-      upstreamRes.destroy();
-      return;
-    }
-
-    const isHead = req.method === "HEAD";
-
-    upstreamRes.on("error", () => {
-      if (!res.destroyed) res.destroy();
+  const retryProxyRequest = (err: Error): boolean => {
+    if (!retryableRequest || retried || cleanedUp || res.headersSent || res.destroyed) return false;
+    retried = true;
+    addRemoteDebugEntry({
+      event: "proxy-retry",
+      method: req.method,
+      path: trimDebugValue(req.url),
+      upstreamPath: trimDebugValue(upstreamPath),
+      durationMs: Date.now() - debugStartedAt,
+      error: err.message,
+      note: "retrying safe request once",
     });
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      if (cleanedUp || res.destroyed) return;
+      startProxyRequest(false);
+    }, 150);
+    return true;
+  };
 
-    const headers = sanitizeResponseHeaders(upstreamRes.headers);
-    if (isHead && headers["content-length"] === "0") {
-      delete headers["content-length"];
-    }
-
-    const contentType = upstreamRes.headers["content-type"];
-    const isHtml = !isHead && typeof contentType === "string" && contentType.includes("text/html");
-    const isJsonSessionList = !isHead &&
-      typeof contentType === "string" &&
-      contentType.includes("application/json") &&
-      isSessionListRequest(req, upstreamPath);
-    if (isHtml) {
-      delete headers["content-length"];
-      delete headers["content-encoding"];
-      const pageSessionID = sessionIDFromPath(upstreamPath);
-      if (pageSessionID) {
-        appendSetCookie(
-          headers,
-          `opencode_remote_session=${encodeURIComponent(pageSessionID)}; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly`,
-        );
+  const startProxyRequest = (pipeBody: boolean): void => {
+    proxyReq = http.request(options, (upstreamRes) => {
+      proxyRes = upstreamRes;
+      logProxyDebug({ status: upstreamRes.statusCode });
+      if (cleanedUp || res.destroyed) {
+        upstreamRes.destroy();
+        return;
       }
-      const chunks: Buffer[] = [];
-      upstreamRes.on("data", (chunk: Buffer | string) => {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      });
-      upstreamRes.on("end", () => {
-        if (res.destroyed || cleanedUp) return;
-        const body = Buffer.from(injectRemoteReset(Buffer.concat(chunks).toString("utf8")), "utf8");
-        headers["content-length"] = String(body.byteLength);
-        res.writeHead(upstreamRes.statusCode ?? 200, headers);
-        res.end(body);
-      });
-      return;
-    }
 
-    if (isJsonSessionList) {
-      delete headers["content-length"];
-      delete headers["content-encoding"];
-      const chunks: Buffer[] = [];
-      upstreamRes.on("data", (chunk: Buffer | string) => {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const isHead = req.method === "HEAD";
+
+      upstreamRes.on("error", (err) => {
+        if (retryProxyRequest(err)) return;
+        if (!res.destroyed) res.destroy();
       });
-      upstreamRes.on("end", () => {
-        if (res.destroyed || cleanedUp) return;
-        void preserveCurrentSessionInList(Buffer.concat(chunks), req, upstreamPath).then((body) => {
+
+      const headers = sanitizeResponseHeaders(upstreamRes.headers);
+      if (isHead && headers["content-length"] === "0") {
+        delete headers["content-length"];
+      }
+
+      const contentType = upstreamRes.headers["content-type"];
+      const isHtml = !isHead && typeof contentType === "string" && contentType.includes("text/html");
+      const isJsonSessionList = !isHead &&
+        typeof contentType === "string" &&
+        contentType.includes("application/json") &&
+        isSessionListRequest(req, upstreamPath);
+      if (isHtml) {
+        delete headers["content-length"];
+        delete headers["content-encoding"];
+        const pageSessionID = sessionIDFromPath(upstreamPath);
+        if (pageSessionID) {
+          appendSetCookie(
+            headers,
+            `opencode_remote_session=${encodeURIComponent(pageSessionID)}; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly`,
+          );
+        }
+        const chunks: Buffer[] = [];
+        upstreamRes.on("data", (chunk: Buffer | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        upstreamRes.on("end", () => {
           if (res.destroyed || cleanedUp) return;
+          const body = Buffer.from(injectRemoteReset(Buffer.concat(chunks).toString("utf8")), "utf8");
           headers["content-length"] = String(body.byteLength);
           res.writeHead(upstreamRes.statusCode ?? 200, headers);
           res.end(body);
         });
-      });
+        return;
+      }
+
+      if (isJsonSessionList) {
+        delete headers["content-length"];
+        delete headers["content-encoding"];
+        const chunks: Buffer[] = [];
+        upstreamRes.on("data", (chunk: Buffer | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        upstreamRes.on("end", () => {
+          if (res.destroyed || cleanedUp) return;
+          void preserveCurrentSessionInList(Buffer.concat(chunks), req, upstreamPath).then((body) => {
+            if (res.destroyed || cleanedUp) return;
+            headers["content-length"] = String(body.byteLength);
+            res.writeHead(upstreamRes.statusCode ?? 200, headers);
+            res.end(body);
+          });
+        });
+        return;
+      }
+
+      res.writeHead(upstreamRes.statusCode ?? 200, headers);
+      upstreamRes.pipe(res, { end: true });
+    });
+
+    proxyReq.on("error", (err) => {
+      if (retryProxyRequest(err)) return;
+      logProxyDebug({ status: 502, error: err.message });
+      if (!res.headersSent && !res.destroyed) {
+        res.writeHead(502);
+        res.end("Bad Gateway");
+      }
+    });
+
+    if (pipeBody) {
+      req.pipe(proxyReq, { end: true });
       return;
     }
-
-    res.writeHead(upstreamRes.statusCode ?? 200, headers);
-    upstreamRes.pipe(res, { end: true });
-  });
-
-  proxyReq.on("error", (err) => {
-    logProxyDebug({ status: 502, error: err.message });
-    if (!res.headersSent && !res.destroyed) {
-      res.writeHead(502);
-      res.end("Bad Gateway");
-    }
-  });
+    proxyReq.end();
+  };
 
   req.on("aborted", cleanup);
   req.on("close", () => {
@@ -482,7 +516,7 @@ function proxy(
     if (!res.writableEnded) cleanup();
   });
 
-  req.pipe(proxyReq, { end: true });
+  startProxyRequest(true);
 }
 
 // ─── HTTP Server ─────────────────────────────────────────────────────────────
