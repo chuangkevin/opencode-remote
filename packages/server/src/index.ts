@@ -7,6 +7,29 @@ import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } 
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
+const remoteResetScript = `(() => {
+  const version = "2026-05-18-session-cache-v1";
+  const marker = "opencode-remote.reset-version";
+  if (localStorage.getItem(marker) === version) return;
+
+  for (const key of Object.keys(localStorage)) {
+    if (key === "opencode.global.dat" || key.startsWith("opencode.workspace.")) {
+      localStorage.removeItem(key);
+    }
+  }
+
+  localStorage.setItem(marker, version);
+})();
+`;
+
+function injectRemoteReset(html: string): string {
+  const script = `<script src="/remote-reset.js"></script>`;
+  if (html.includes(script)) return html;
+  return html.includes("</head>")
+    ? html.replace("</head>", `${script}</head>`)
+    : `${script}${html}`;
+}
+
 function isValidWorkspaceID(value: string): boolean {
   return value.startsWith("wrk");
 }
@@ -51,10 +74,29 @@ function sanitizeProxyPath(path: string | undefined): string {
 
 function sanitizeProxyHeaders(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
   const next: http.OutgoingHttpHeaders = { ...headers };
+  delete next["accept-encoding"];
+
   const workspace = next["x-opencode-workspace"];
   const workspaces = Array.isArray(workspace) ? workspace : workspace === undefined ? [] : [String(workspace)];
   if (workspaces.some((value) => value && !isValidWorkspaceID(value))) {
     delete next["x-opencode-workspace"];
+  }
+  return next;
+}
+
+function sanitizeResponseHeaders(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+  const next: http.OutgoingHttpHeaders = { ...headers, "x-opencode-remote": "true" };
+  for (const header of [
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+  ]) {
+    delete next[header];
   }
   return next;
 }
@@ -98,10 +140,30 @@ function proxy(
       if (!res.destroyed) res.destroy();
     });
 
-    const headers = { ...upstreamRes.headers, "x-opencode-remote": "true" };
+    const headers = sanitizeResponseHeaders(upstreamRes.headers);
     if (isHead && headers["content-length"] === "0") {
       delete headers["content-length"];
     }
+
+    const contentType = upstreamRes.headers["content-type"];
+    const isHtml = !isHead && typeof contentType === "string" && contentType.includes("text/html");
+    if (isHtml) {
+      delete headers["content-length"];
+      delete headers["content-encoding"];
+      const chunks: Buffer[] = [];
+      upstreamRes.on("data", (chunk: Buffer | string) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      upstreamRes.on("end", () => {
+        if (res.destroyed || cleanedUp) return;
+        const body = Buffer.from(injectRemoteReset(Buffer.concat(chunks).toString("utf8")), "utf8");
+        headers["content-length"] = String(body.byteLength);
+        res.writeHead(upstreamRes.statusCode ?? 200, headers);
+        res.end(body);
+      });
+      return;
+    }
+
     res.writeHead(upstreamRes.statusCode ?? 200, headers);
     upstreamRes.pipe(res, { end: true });
   });
@@ -152,6 +214,15 @@ function sendServiceWorkerCleanup(res: http.ServerResponse): void {
     "X-OpenCode-Remote": "true",
   });
   res.end(serviceWorkerCleanup);
+}
+
+function sendRemoteResetScript(res: http.ServerResponse): void {
+  res.writeHead(200, {
+    "Content-Type": "application/javascript; charset=utf-8",
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "X-OpenCode-Remote": "true",
+  });
+  res.end(remoteResetScript);
 }
 
 function redirectToSession(res: http.ServerResponse, sessionPath: string): void {
@@ -297,6 +368,11 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "GET" && req.url === "/sw.js") {
     sendServiceWorkerCleanup(res);
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/remote-reset.js") {
+    sendRemoteResetScript(res);
     return;
   }
 
