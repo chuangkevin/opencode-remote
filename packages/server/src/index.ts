@@ -98,6 +98,16 @@ type RemoteDebugEntry = {
   version?: string;
   removedCount?: number;
   removed?: string[];
+  note?: string;
+};
+
+type SessionListEntry = {
+  id?: string;
+  time?: {
+    created?: number;
+    updated?: number;
+    archived?: number;
+  };
 };
 
 const remoteDebugEntries: RemoteDebugEntry[] = [];
@@ -122,7 +132,143 @@ function addRemoteDebugEntry(entry: Omit<RemoteDebugEntry, "id" | "time">): void
 
 function shouldRecordProxyDebug(path: string | undefined, upstreamPath: string): boolean {
   const values = [path ?? "", upstreamPath];
-  return values.some((value) => value === "/session" || value.startsWith("/session/") || value.includes("/session/"));
+  return values.some((value) =>
+    value === "/session" ||
+    value.startsWith("/session?") ||
+    value.startsWith("/session/") ||
+    value.includes("/session/"),
+  );
+}
+
+function sessionIDFromReferer(headers: http.IncomingHttpHeaders): string | undefined {
+  const referer = Array.isArray(headers.referer) ? headers.referer[0] : headers.referer;
+  if (!referer) return undefined;
+  try {
+    const url = new URL(referer, "http://opencode-remote.local");
+    return url.pathname.match(/\/session\/(ses_[^/?#]+)/)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function sessionIDFromPath(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  try {
+    const url = new URL(path, "http://opencode-remote.local");
+    return url.pathname.match(/\/session\/(ses_[^/?#]+)/)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function sessionIDFromCookie(headers: http.IncomingHttpHeaders): string | undefined {
+  const cookie = Array.isArray(headers.cookie) ? headers.cookie.join("; ") : headers.cookie;
+  if (!cookie) return undefined;
+  const match = cookie.match(/(?:^|;\s*)opencode_remote_session=([^;]+)/);
+  if (!match?.[1]) return undefined;
+  try {
+    const value = decodeURIComponent(match[1]);
+    return value.startsWith("ses_") ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function appendSetCookie(
+  headers: http.OutgoingHttpHeaders,
+  value: string,
+): void {
+  const current = headers["set-cookie"];
+  if (Array.isArray(current)) {
+    headers["set-cookie"] = [...current, value];
+    return;
+  }
+  if (typeof current === "string") {
+    headers["set-cookie"] = [current, value];
+    return;
+  }
+  headers["set-cookie"] = value;
+}
+
+function isSessionListRequest(req: http.IncomingMessage, upstreamPath: string): boolean {
+  if (req.method !== "GET") return false;
+  try {
+    return new URL(upstreamPath, config.opencodeUrl).pathname === "/session";
+  } catch {
+    return false;
+  }
+}
+
+async function fetchSessionForList(sessionID: string, upstreamPath: string): Promise<SessionListEntry | undefined> {
+  const listUrl = new URL(upstreamPath, config.opencodeUrl);
+  const sessionUrl = new URL(`/session/${sessionID}`, config.opencodeUrl);
+  for (const key of ["directory", "workspace"]) {
+    for (const value of listUrl.searchParams.getAll(key)) {
+      sessionUrl.searchParams.append(key, value);
+    }
+  }
+
+  const res = await fetch(sessionUrl);
+  if (!res.ok) return undefined;
+  return await res.json() as SessionListEntry;
+}
+
+async function preserveCurrentSessionInList(
+  body: Buffer,
+  req: http.IncomingMessage,
+  upstreamPath: string,
+): Promise<Buffer> {
+  const sessionID = sessionIDFromReferer(req.headers) ?? sessionIDFromCookie(req.headers);
+  if (!sessionID) return body;
+
+  let sessions: unknown;
+  try {
+    sessions = JSON.parse(body.toString("utf8"));
+  } catch {
+    return body;
+  }
+  if (!Array.isArray(sessions)) return body;
+
+  const list = sessions as SessionListEntry[];
+  const maxUpdated = list.reduce((max, session) => Math.max(max, session.time?.updated ?? 0), 0);
+  const updated = Math.max(Date.now(), maxUpdated + 1);
+  const existing = list.find((session) => session.id === sessionID);
+
+  if (existing) {
+    existing.time = { ...existing.time, updated };
+    addRemoteDebugEntry({
+      event: "session-list-preserve",
+      method: req.method,
+      path: trimDebugValue(req.url),
+      upstreamPath: trimDebugValue(upstreamPath),
+      note: `bumped ${sessionID}`,
+    });
+    return Buffer.from(JSON.stringify(list), "utf8");
+  }
+
+  try {
+    const session = await fetchSessionForList(sessionID, upstreamPath);
+    if (!session?.id) return body;
+    session.time = { ...session.time, updated };
+    list.push(session);
+    addRemoteDebugEntry({
+      event: "session-list-preserve",
+      method: req.method,
+      path: trimDebugValue(req.url),
+      upstreamPath: trimDebugValue(upstreamPath),
+      note: `appended ${sessionID}`,
+    });
+    return Buffer.from(JSON.stringify(list), "utf8");
+  } catch (err) {
+    addRemoteDebugEntry({
+      event: "session-list-preserve-error",
+      method: req.method,
+      path: trimDebugValue(req.url),
+      upstreamPath: trimDebugValue(upstreamPath),
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return body;
+  }
 }
 
 function injectRemoteReset(html: string): string {
@@ -269,9 +415,20 @@ function proxy(
 
     const contentType = upstreamRes.headers["content-type"];
     const isHtml = !isHead && typeof contentType === "string" && contentType.includes("text/html");
+    const isJsonSessionList = !isHead &&
+      typeof contentType === "string" &&
+      contentType.includes("application/json") &&
+      isSessionListRequest(req, upstreamPath);
     if (isHtml) {
       delete headers["content-length"];
       delete headers["content-encoding"];
+      const pageSessionID = sessionIDFromPath(upstreamPath);
+      if (pageSessionID) {
+        appendSetCookie(
+          headers,
+          `opencode_remote_session=${encodeURIComponent(pageSessionID)}; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly`,
+        );
+      }
       const chunks: Buffer[] = [];
       upstreamRes.on("data", (chunk: Buffer | string) => {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -282,6 +439,25 @@ function proxy(
         headers["content-length"] = String(body.byteLength);
         res.writeHead(upstreamRes.statusCode ?? 200, headers);
         res.end(body);
+      });
+      return;
+    }
+
+    if (isJsonSessionList) {
+      delete headers["content-length"];
+      delete headers["content-encoding"];
+      const chunks: Buffer[] = [];
+      upstreamRes.on("data", (chunk: Buffer | string) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      upstreamRes.on("end", () => {
+        if (res.destroyed || cleanedUp) return;
+        void preserveCurrentSessionInList(Buffer.concat(chunks), req, upstreamPath).then((body) => {
+          if (res.destroyed || cleanedUp) return;
+          headers["content-length"] = String(body.byteLength);
+          res.writeHead(upstreamRes.statusCode ?? 200, headers);
+          res.end(body);
+        });
       });
       return;
     }
@@ -371,6 +547,7 @@ function handleRemoteDebug(res: http.ServerResponse): void {
       <td><code>${escapeHtml(entry.upstreamPath ?? "")}</code></td>
       <td>${escapeHtml(entry.error ?? "")}</td>
       <td>${escapeHtml(entry.version ?? "")}</td>
+      <td>${escapeHtml(entry.note ?? "")}</td>
       <td>${escapeHtml(entry.removedCount === undefined ? "" : String(entry.removedCount))}</td>
       <td><pre>${escapeHtml(details)}</pre></td>
     </tr>`;
@@ -409,10 +586,10 @@ function handleRemoteDebug(res: http.ServerResponse): void {
             <thead>
               <tr>
                 <th>ID</th><th>Time</th><th>Event</th><th>Method</th><th>Status</th><th>Duration</th>
-                <th>Path</th><th>Upstream Path</th><th>Error</th><th>Version</th><th>Removed</th><th>Removed Keys</th>
+                <th>Path</th><th>Upstream Path</th><th>Error</th><th>Version</th><th>Note</th><th>Removed</th><th>Removed Keys</th>
               </tr>
             </thead>
-            <tbody>${rows || `<tr><td colspan="12">No debug entries yet.</td></tr>`}</tbody>
+            <tbody>${rows || `<tr><td colspan="13">No debug entries yet.</td></tr>`}</tbody>
           </table>
         </div>
       </body>
