@@ -8,19 +8,122 @@ import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
 const remoteResetScript = `(() => {
-  const version = "2026-05-18-session-cache-v1";
+  const version = "2026-05-18-session-cache-v3";
   const marker = "opencode-remote.reset-version";
-  if (localStorage.getItem(marker) === version) return;
 
-  for (const key of Object.keys(localStorage)) {
-    if (key === "opencode.global.dat" || key.startsWith("opencode.workspace.")) {
-      localStorage.removeItem(key);
+  const report = (payload) => {
+    try {
+      const body = JSON.stringify(Object.assign({
+        version,
+        path: location.pathname + location.search,
+      }, payload));
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon("/remote-client-debug", new Blob([body], { type: "application/json" }));
+        return;
+      }
+      fetch("/remote-client-debug", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        keepalive: true,
+      }).catch(() => {});
+    } catch {}
+  };
+
+  const shouldRemove = (key) =>
+    key === "layout.page.v1" ||
+    key === "opencode.global.dat" ||
+    key === "opencode.global.dat:layout.page" ||
+    key.startsWith("opencode.global.dat:layout.") ||
+    key.startsWith("opencode.workspace.");
+
+  const removeMatching = (storage, name) => {
+    const removed = [];
+    try {
+      for (const key of Object.keys(storage)) {
+        if (shouldRemove(key)) {
+          storage.removeItem(key);
+          removed.push(name + ":" + key);
+        }
+      }
+    } catch (err) {
+      report({ event: "reset-error", storage: name, error: err instanceof Error ? err.message : String(err) });
     }
-  }
+    return removed;
+  };
 
-  localStorage.setItem(marker, version);
+  try {
+    if (localStorage.getItem(marker) === version) {
+      report({ event: "reset-skip" });
+      return;
+    }
+
+    const removed = removeMatching(localStorage, "localStorage").concat(removeMatching(sessionStorage, "sessionStorage"));
+
+    if ("caches" in window) {
+      caches.keys()
+        .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+        .catch(() => {});
+    }
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistrations()
+        .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+        .catch(() => {});
+    }
+
+    localStorage.setItem(marker, version);
+    report({ event: "reset-applied", removed });
+
+    if (removed.length > 0 && sessionStorage.getItem(marker + ".reload") !== version) {
+      sessionStorage.setItem(marker + ".reload", version);
+      location.reload();
+    }
+  } catch (err) {
+    report({ event: "reset-error", error: err instanceof Error ? err.message : String(err) });
+  }
 })();
 `;
+
+type RemoteDebugEntry = {
+  id: number;
+  time: string;
+  event: string;
+  method?: string;
+  path?: string;
+  upstreamPath?: string;
+  status?: number;
+  durationMs?: number;
+  error?: string;
+  version?: string;
+  removedCount?: number;
+  removed?: string[];
+};
+
+const remoteDebugEntries: RemoteDebugEntry[] = [];
+let nextRemoteDebugID = 1;
+
+function trimDebugValue(value: unknown, maxLength = 800): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function addRemoteDebugEntry(entry: Omit<RemoteDebugEntry, "id" | "time">): void {
+  remoteDebugEntries.push({
+    id: nextRemoteDebugID++,
+    time: new Date().toISOString(),
+    ...entry,
+  });
+  if (remoteDebugEntries.length > 100) {
+    remoteDebugEntries.splice(0, remoteDebugEntries.length - 100);
+  }
+}
+
+function shouldRecordProxyDebug(path: string | undefined, upstreamPath: string): boolean {
+  const values = [path ?? "", upstreamPath];
+  return values.some((value) => value === "/session" || value.startsWith("/session/") || value.includes("/session/"));
+}
 
 function injectRemoteReset(html: string): string {
   const script = `<script src="/remote-reset.js"></script>`;
@@ -105,10 +208,28 @@ function proxy(
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): void {
+  const upstreamPath = sanitizeProxyPath(req.url);
+  const debugRequest = shouldRecordProxyDebug(req.url, upstreamPath);
+  const debugStartedAt = Date.now();
+  let debugLogged = false;
+
+  const logProxyDebug = (entry: Pick<RemoteDebugEntry, "status" | "error">): void => {
+    if (!debugRequest || debugLogged) return;
+    debugLogged = true;
+    addRemoteDebugEntry({
+      event: "proxy",
+      method: req.method,
+      path: trimDebugValue(req.url),
+      upstreamPath: trimDebugValue(upstreamPath),
+      durationMs: Date.now() - debugStartedAt,
+      ...entry,
+    });
+  };
+
   const options: http.RequestOptions = {
     hostname: "127.0.0.1",
     port: config.opencodePort,
-    path: sanitizeProxyPath(req.url),
+    path: upstreamPath,
     method: req.method,
     headers: {
       ...sanitizeProxyHeaders(req.headers),
@@ -129,6 +250,7 @@ function proxy(
 
   proxyReq = http.request(options, (upstreamRes) => {
     proxyRes = upstreamRes;
+    logProxyDebug({ status: upstreamRes.statusCode });
     if (cleanedUp || res.destroyed) {
       upstreamRes.destroy();
       return;
@@ -168,7 +290,8 @@ function proxy(
     upstreamRes.pipe(res, { end: true });
   });
 
-  proxyReq.on("error", () => {
+  proxyReq.on("error", (err) => {
+    logProxyDebug({ status: 502, error: err.message });
     if (!res.headersSent && !res.destroyed) {
       res.writeHead(502);
       res.end("Bad Gateway");
@@ -223,6 +346,134 @@ function sendRemoteResetScript(res: http.ServerResponse): void {
     "X-OpenCode-Remote": "true",
   });
   res.end(remoteResetScript);
+}
+
+function sendRemoteDebugJson(res: http.ServerResponse): void {
+  res.writeHead(200, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-OpenCode-Remote": "true",
+  });
+  res.end(JSON.stringify({ entries: remoteDebugEntries }, null, 2));
+}
+
+function handleRemoteDebug(res: http.ServerResponse): void {
+  const rows = [...remoteDebugEntries].reverse().map((entry) => {
+    const details = entry.removed?.length ? entry.removed.join("\n") : "";
+    return `<tr>
+      <td>${entry.id}</td>
+      <td>${escapeHtml(new Date(entry.time).toLocaleString("zh-TW"))}</td>
+      <td>${escapeHtml(entry.event)}</td>
+      <td>${escapeHtml(entry.method ?? "")}</td>
+      <td>${escapeHtml(entry.status === undefined ? "" : String(entry.status))}</td>
+      <td>${escapeHtml(entry.durationMs === undefined ? "" : `${entry.durationMs}ms`)}</td>
+      <td><code>${escapeHtml(entry.path ?? "")}</code></td>
+      <td><code>${escapeHtml(entry.upstreamPath ?? "")}</code></td>
+      <td>${escapeHtml(entry.error ?? "")}</td>
+      <td>${escapeHtml(entry.version ?? "")}</td>
+      <td>${escapeHtml(entry.removedCount === undefined ? "" : String(entry.removedCount))}</td>
+      <td><pre>${escapeHtml(details)}</pre></td>
+    </tr>`;
+  }).join("");
+
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-OpenCode-Remote": "true",
+  });
+  res.end(`<!doctype html>
+    <html lang="zh-Hant">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>OpenCode Remote Debug</title>
+        <style>
+          :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+          body { margin: 0; padding: 16px; background: #09090b; color: #f4f4f5; }
+          h1 { font-size: 18px; margin: 0 0 8px; }
+          p { margin: 0 0 16px; color: #a1a1aa; font-size: 13px; }
+          a { color: #93c5fd; }
+          .wrap { overflow-x: auto; border: 1px solid #27272a; border-radius: 12px; }
+          table { width: 100%; border-collapse: collapse; min-width: 1200px; }
+          th, td { border-bottom: 1px solid #27272a; padding: 8px 10px; text-align: left; vertical-align: top; font-size: 12px; }
+          th { position: sticky; top: 0; background: #18181b; color: #d4d4d8; }
+          code, pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+          pre { margin: 0; }
+        </style>
+      </head>
+      <body>
+        <h1>OpenCode Remote Debug</h1>
+        <p>Recent session/API and browser reset events only. Prompt bodies are not recorded. JSON: <a href="/remote-debug.json">/remote-debug.json</a></p>
+        <div class="wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>Time</th><th>Event</th><th>Method</th><th>Status</th><th>Duration</th>
+                <th>Path</th><th>Upstream Path</th><th>Error</th><th>Version</th><th>Removed</th><th>Removed Keys</th>
+              </tr>
+            </thead>
+            <tbody>${rows || `<tr><td colspan="12">No debug entries yet.</td></tr>`}</tbody>
+          </table>
+        </div>
+      </body>
+    </html>`);
+}
+
+function handleRemoteClientDebug(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let tooLarge = false;
+
+  req.on("data", (chunk: Buffer | string) => {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > 16_384) {
+      tooLarge = true;
+      return;
+    }
+    chunks.push(buffer);
+  });
+
+  req.on("end", () => {
+    if (tooLarge) {
+      addRemoteDebugEntry({ event: "client-debug-error", status: 413, error: "payload too large" });
+      res.writeHead(413, { "Cache-Control": "no-store", "X-OpenCode-Remote": "true" });
+      res.end();
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      const removed = Array.isArray(payload.removed)
+        ? payload.removed.map((value) => trimDebugValue(value, 240) ?? "").filter(Boolean).slice(0, 30)
+        : undefined;
+      const entry: Omit<RemoteDebugEntry, "id" | "time"> = {
+        event: trimDebugValue(payload.event, 80) ?? "client-debug",
+        path: trimDebugValue(payload.path),
+        version: trimDebugValue(payload.version, 120),
+      };
+      if (typeof payload.error === "string") entry.error = trimDebugValue(payload.error);
+      if (removed) {
+        entry.removedCount = Array.isArray(payload.removed) ? payload.removed.length : removed.length;
+        entry.removed = removed;
+      }
+      addRemoteDebugEntry(entry);
+    } catch (err) {
+      addRemoteDebugEntry({
+        event: "client-debug-error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    res.writeHead(204, { "Cache-Control": "no-store", "X-OpenCode-Remote": "true" });
+    res.end();
+  });
+
+  req.on("error", (err) => {
+    addRemoteDebugEntry({ event: "client-debug-error", error: err.message });
+    if (!res.headersSent) res.writeHead(400, { "Cache-Control": "no-store", "X-OpenCode-Remote": "true" });
+    res.end();
+  });
 }
 
 function redirectToSession(res: http.ServerResponse, sessionPath: string): void {
@@ -376,17 +627,32 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === "GET" && req.url === "/remote-debug") {
+    handleRemoteDebug(res);
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/remote-debug.json") {
+    sendRemoteDebugJson(res);
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/remote-client-debug") {
+    handleRemoteClientDebug(req, res);
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/remote-sessions") {
     void handleRemoteSessions(res);
     return;
   }
 
-  if (req.method === "GET" && req.url === "/") {
+  if ((req.method === "GET" || req.method === "HEAD") && req.url === "/") {
     handleRootRedirect(res);
     return;
   }
 
-  if (req.method === "GET" && req.url === "/latest") {
+  if ((req.method === "GET" || req.method === "HEAD") && req.url === "/latest") {
     void handleLatestRedirect(res);
     return;
   }
