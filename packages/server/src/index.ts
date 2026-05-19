@@ -199,6 +199,15 @@ function isSessionListRequest(req: http.IncomingMessage, upstreamPath: string): 
   }
 }
 
+function isSessionMessageRequest(req: http.IncomingMessage, upstreamPath: string): boolean {
+  if (req.method !== "GET") return false;
+  try {
+    return /^\/session\/ses_[^/]+\/message$/.test(new URL(upstreamPath, config.opencodeUrl).pathname);
+  } catch {
+    return false;
+  }
+}
+
 async function fetchSessionForList(sessionID: string, upstreamPath: string): Promise<SessionListEntry | undefined> {
   const listUrl = new URL(upstreamPath, config.opencodeUrl);
   const sessionUrl = new URL(`/session/${sessionID}`, config.opencodeUrl);
@@ -389,6 +398,7 @@ function proxy(
   let cleanedUp = false;
   let retried = false;
   let retryTimer: NodeJS.Timeout | undefined;
+  let proxyAttempt = 0;
 
   const cleanup = (): void => {
     if (cleanedUp) return;
@@ -419,6 +429,7 @@ function proxy(
   };
 
   const startProxyRequest = (pipeBody: boolean): void => {
+    const attemptID = ++proxyAttempt;
     proxyReq = http.request(options, (upstreamRes) => {
       proxyRes = upstreamRes;
       logProxyDebug({ status: upstreamRes.statusCode });
@@ -445,6 +456,10 @@ function proxy(
         typeof contentType === "string" &&
         contentType.includes("application/json") &&
         isSessionListRequest(req, upstreamPath);
+      const isJsonSessionMessage = !isHead &&
+        typeof contentType === "string" &&
+        contentType.includes("application/json") &&
+        isSessionMessageRequest(req, upstreamPath);
       if (isHtml) {
         delete headers["content-length"];
         delete headers["content-encoding"];
@@ -484,6 +499,24 @@ function proxy(
             res.writeHead(upstreamRes.statusCode ?? 200, headers);
             res.end(body);
           });
+        });
+        return;
+      }
+
+      if (isJsonSessionMessage) {
+        delete headers["content-length"];
+        delete headers["content-encoding"];
+        const chunks: Buffer[] = [];
+        upstreamRes.on("data", (chunk: Buffer | string) => {
+          if (attemptID !== proxyAttempt) return;
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        upstreamRes.on("end", () => {
+          if (attemptID !== proxyAttempt || res.destroyed || cleanedUp) return;
+          const body = Buffer.concat(chunks);
+          headers["content-length"] = String(body.byteLength);
+          res.writeHead(upstreamRes.statusCode ?? 200, headers);
+          res.end(body);
         });
         return;
       }
