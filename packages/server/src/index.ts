@@ -786,14 +786,18 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
       .filter(isUserSession)
       .sort((a, b) => b.time.updated - a.time.updated);
     const items = sessions.map((session) => {
-      const path = `/${encodeDirSlug(session.directory)}/session/${session.id}`;
+      const nativePath = `/${encodeDirSlug(session.directory)}/session/${session.id}`;
+      const compactPath = `/c/session/${session.id}`;
       const title = session.title || session.slug || session.id;
       const directory = session.path ?? session.directory;
-      return `<a class="session" href="${path}">
-        <strong>${escapeHtml(title)}</strong>
-        <span>${escapeHtml(directory)}</span>
-        <small>${escapeHtml(formatTime(session.time.updated))}</small>
-      </a>`;
+      return `<div class="session">
+        <a class="session-link" href="${nativePath}">
+          <strong>${escapeHtml(title)}</strong>
+          <span>${escapeHtml(directory)}</span>
+          <small>${escapeHtml(formatTime(session.time.updated))}</small>
+        </a>
+        <a class="compact-btn" href="${compactPath}" title="開啟 compact 視圖">Compact</a>
+      </div>`;
     }).join("");
 
     res.writeHead(200, {
@@ -813,11 +817,27 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
             header { position: sticky; top: 0; z-index: 1; margin: -16px -16px 16px; padding: 18px 16px 12px; background: rgba(17,17,17,.94); backdrop-filter: blur(12px); border-bottom: 1px solid #27272a; }
             h1 { font-size: 20px; margin: 0 0 6px; }
             p { margin: 0; color: #a1a1aa; font-size: 13px; }
-            .session { display: grid; gap: 6px; padding: 14px; margin-bottom: 10px; border: 1px solid #2f2f35; border-radius: 14px; background: #18181b; color: inherit; text-decoration: none; }
+            .session { position: relative; padding: 14px; margin-bottom: 10px; border: 1px solid #2f2f35; border-radius: 14px; background: #18181b; }
+            .session-link { display: grid; gap: 6px; color: inherit; text-decoration: none; padding-right: 84px; }
+            .session-link:active { color: #fff; }
             .session:active { background: #27272a; }
             strong { font-size: 15px; line-height: 1.35; }
             span, small { color: #a1a1aa; overflow-wrap: anywhere; }
             small { font-size: 12px; }
+            .compact-btn {
+              position: absolute;
+              top: 14px;
+              right: 12px;
+              font-size: 12px;
+              padding: 6px 12px;
+              border-radius: 999px;
+              background: #312e81;
+              color: #c7d2fe;
+              border: 1px solid #4338ca;
+              text-decoration: none;
+              line-height: 1;
+            }
+            .compact-btn:active { background: #4338ca; color: #fff; }
           </style>
         </head>
         <body>
