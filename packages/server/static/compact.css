@@ -331,6 +331,8 @@ header.app-header {
   flex-direction: column;
   z-index: 200;
 }
+/* Ensure the HTML `hidden` attribute wins over display:flex above */
+.picker[hidden] { display: none !important; }
 .picker-header {
   display: flex;
   align-items: center;

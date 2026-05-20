@@ -32,9 +32,16 @@ async function api(path, init) {
     const body = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText} ${body.slice(0, 200)}`);
   }
-  return res.headers.get("content-type")?.includes("application/json")
-    ? res.json()
-    : res.text();
+  // 204 No Content (and any response with empty body) returns null.
+  // This is needed by prompt_async (T8) and abort (T10) which both return 204.
+  if (res.status === 204) return null;
+  const ct = res.headers.get("content-type") ?? "";
+  const text = await res.text().catch(() => "");
+  if (!text) return null;
+  if (ct.includes("application/json")) {
+    try { return JSON.parse(text); } catch { return text; }
+  }
+  return text;
 }
 
 function fmtTime(ms) {
@@ -403,3 +410,72 @@ els.compose.addEventListener("keydown", (e) => {
     els.actionBtn.click();
   }
 });
+
+// ─── Send ──────────────────────────────────────────────────
+let currentModel = null;     // { providerID, modelID, variant }
+// Filled in Task 11. For now, leave null — the server falls back to session.model.
+
+// Fire-and-forget endpoint:
+//   POST /session/:id/prompt_async returns 204 in ~300ms.
+//   The agent runs in the background; SSE delivers the response.
+//   We confirmed via probe that POST /message blocks for seconds and
+//   POST /message with noReply:true skips the reply, so /prompt_async
+//   is the only correct path here.
+async function sendMessage() {
+  if (isStreaming) {
+    // Treat the click as Stop in streaming state (handled in Task 10).
+    return abortMessage();
+  }
+  const text = els.compose.value.trim();
+  const attachments = pendingAttachments.slice();
+  if (!text && attachments.length === 0) return;
+
+  const parts = [];
+  if (text) parts.push({ type: "text", text });
+  for (const a of attachments) {
+    parts.push({ type: "file", mime: a.mime, url: a.dataUrl, filename: a.name });
+  }
+  const payload = { parts };
+  if (currentModel) {
+    payload.model = { providerID: currentModel.providerID, modelID: currentModel.modelID };
+    if (currentModel.variant) payload.variant = currentModel.variant;
+  }
+
+  // Optimistic UI: clear input + attachments, show streaming state.
+  els.compose.value = "";
+  resizeCompose();
+  clearAttachments();
+  setStreaming(true);
+
+  const t0 = performance.now();
+  try {
+    await api(`/session/${sessionID}/prompt_async`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const elapsed = performance.now() - t0;
+    console.info(`[compact] POST /prompt_async returned in ${Math.round(elapsed)}ms`);
+  } catch (err) {
+    setStreaming(false);
+    // Restore the user's input so they can retry.
+    els.compose.value = text;
+    pendingAttachments = attachments;
+    renderAttachments();
+    showToast("送出失敗：" + err.message, "error");
+  }
+}
+
+els.actionBtn.addEventListener("click", () => {
+  sendMessage();
+});
+
+// Task 9 / 10 stubs — replaced in those tasks. Leave them here.
+let pendingAttachments = [];
+function clearAttachments() {
+  pendingAttachments = [];
+  els.attachRow.innerHTML = "";
+  els.attachRow.hidden = true;
+}
+function renderAttachments() { /* Task 9 */ }
+async function abortMessage() { /* Task 10 */ }
