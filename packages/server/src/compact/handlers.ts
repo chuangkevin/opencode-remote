@@ -4,6 +4,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as appConfig } from "../config.js";
 import { renderCompactShell } from "./shell.js";
+import { ensureSessionTrust } from "./trust.js";
 
 const __filename = fileURLToPath(import.meta.url);
 // tsconfig has rootDir=src outDir=dist, so this file ends up at
@@ -57,6 +58,12 @@ export function handleCompactSession(sessionID: string, res: http.ServerResponse
     "X-OpenCode-Remote": "compact",
   });
   res.end(renderCompactShell(sessionID));
+  // Fire-and-forget: PATCH trust ruleset in the background so the user
+  // doesn't have to wait. If it fails the user will just see "ask" prompts
+  // (the existing behavior before trust mode existed).
+  ensureSessionTrust(appConfig.opencodeUrl, sessionID).catch((err) => {
+    console.warn(`[opencode-remote] ensureSessionTrust failed for ${sessionID}:`, err);
+  });
 }
 
 export async function handleCompactNewSession(res: http.ServerResponse): Promise<void> {
@@ -72,6 +79,14 @@ export async function handleCompactNewSession(res: http.ServerResponse): Promise
     }
     const session = await r.json() as { id?: string };
     if (!session.id) throw new Error("OpenCode response missing session id");
+    // Apply trust ruleset before redirecting so the session is ready for
+    // fire-and-forget from the very first prompt. Best-effort — if it
+    // fails, the next compact-session load will retry.
+    try {
+      await ensureSessionTrust(appConfig.opencodeUrl, session.id);
+    } catch (err) {
+      console.warn(`[opencode-remote] ensureSessionTrust on new session ${session.id} failed:`, err);
+    }
     res.writeHead(303, {
       Location: `/c/session/${session.id}`,
       "Cache-Control": "no-store",
