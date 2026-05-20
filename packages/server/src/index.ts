@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } from "./session.js";
-import { handleCompactStatic, handleCompactSession, matchCompactSessionPath } from "./compact/handlers.js";
+import { handleCompactStatic, handleCompactSession, handleCompactNewSession, matchCompactSessionPath } from "./compact/handlers.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -789,11 +789,9 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
       const nativePath = `/${encodeDirSlug(session.directory)}/session/${session.id}`;
       const compactPath = `/c/session/${session.id}`;
       const title = session.title || session.slug || session.id;
-      const directory = session.path ?? session.directory;
       return `<div class="session">
         <a class="session-link" href="${nativePath}">
           <strong>${escapeHtml(title)}</strong>
-          <span>${escapeHtml(directory)}</span>
           <small>${escapeHtml(formatTime(session.time.updated))}</small>
         </a>
         <a class="compact-btn" href="${compactPath}" title="開啟 compact 視圖">Compact</a>
@@ -813,39 +811,30 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
           <title>OpenCode Sessions</title>
           <style>
             :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-            body { margin: 0; background: #111; color: #f4f4f5; padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
-            header { position: sticky; top: 0; z-index: 1; margin: -16px -16px 16px; padding: 18px 16px 12px; background: rgba(17,17,17,.94); backdrop-filter: blur(12px); border-bottom: 1px solid #27272a; }
-            h1 { font-size: 20px; margin: 0 0 6px; }
-            p { margin: 0; color: #a1a1aa; font-size: 13px; }
-            .session { position: relative; padding: 14px; margin-bottom: 10px; border: 1px solid #2f2f35; border-radius: 14px; background: #18181b; }
-            .session-link { display: grid; gap: 6px; color: inherit; text-decoration: none; padding-right: 84px; }
-            .session-link:active { color: #fff; }
-            .session:active { background: #27272a; }
-            strong { font-size: 15px; line-height: 1.35; }
-            span, small { color: #a1a1aa; overflow-wrap: anywhere; }
-            small { font-size: 12px; }
-            .compact-btn {
-              position: absolute;
-              top: 14px;
-              right: 12px;
-              font-size: 12px;
-              padding: 6px 12px;
-              border-radius: 999px;
-              background: #312e81;
-              color: #c7d2fe;
-              border: 1px solid #4338ca;
-              text-decoration: none;
-              line-height: 1;
-            }
+            * { box-sizing: border-box; }
+            body { margin: 0; background: #0f0f10; color: #f4f4f5; padding: max(8px, env(safe-area-inset-top)) 10px max(14px, env(safe-area-inset-bottom)); font-size: 14px; line-height: 1.4; }
+            header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 10px 12px; background: rgba(15,15,16,.94); backdrop-filter: blur(12px); border-bottom: 1px solid #27272a; display: flex; align-items: center; gap: 8px; }
+            h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
+            .new-btn { background: #6366f1; color: #fff; border: none; border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; text-decoration: none; line-height: 1; }
+            .new-btn:active { background: #4f46e5; }
+            .session { position: relative; padding: 8px 10px; margin-bottom: 4px; border: 1px solid #27272a; border-radius: 8px; background: #18181b; }
+            .session:active { background: #1f1f23; }
+            .session-link { display: flex; align-items: baseline; gap: 8px; color: inherit; text-decoration: none; padding-right: 76px; min-width: 0; }
+            .session-link strong { flex: 1; font-size: 13.5px; font-weight: 500; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: #f4f4f5; }
+            .session-link small { flex-shrink: 0; font-size: 11px; color: #71717a; font-weight: normal; }
+            .compact-btn { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); font-size: 11px; font-weight: 500; padding: 4px 10px; border-radius: 999px; background: #312e81; color: #c7d2fe; border: 1px solid #4338ca; text-decoration: none; line-height: 1; }
             .compact-btn:active { background: #4338ca; color: #fff; }
+            .empty { padding: 24px 12px; color: #71717a; font-size: 13px; text-align: center; }
           </style>
         </head>
         <body>
           <header>
             <h1>工作階段</h1>
-            <p>點選後會進入對應 OpenCode session。</p>
+            <form method="post" action="/c/new-session" style="margin:0;">
+              <button class="new-btn" type="submit">+ 新</button>
+            </form>
           </header>
-          ${items || "<p>目前沒有工作階段。</p>"}
+          ${items || "<div class='empty'>目前沒有工作階段</div>"}
         </body>
       </html>`);
   } catch (err) {
@@ -947,6 +936,11 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "GET" && req.url?.startsWith("/c/static/")) {
     handleCompactStatic(req, res);
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/c/new-session") {
+    void handleCompactNewSession(res);
     return;
   }
 
