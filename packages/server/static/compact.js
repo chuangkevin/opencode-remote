@@ -626,4 +626,11 @@ function clearAttachments() {
   renderAttachments();
 }
 
-async function abortMessage() { /* Task 10 */ }
+async function abortMessage() {
+  try {
+    await api(`/session/${sessionID}/abort`, { method: "POST" });
+    setStreaming(false);
+  } catch (err) {
+    showToast("中止失敗：" + err.message, "error");
+  }
+}
