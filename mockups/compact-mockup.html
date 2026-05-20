@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>OpenCode Compact — Mockup</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f0f10;
+      --surface: #18181b;
+      --surface-hi: #1f1f23;
+      --border: #2a2a2f;
+      --border-hi: #3a3a40;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --dim: #71717a;
+      --accent-user: #818cf8;   /* indigo-400, for "Kevin" label */
+      --accent-ai: #34d399;     /* emerald-400, for "AI" label */
+      --accent-tool: #fbbf24;   /* amber-400, for tool calls */
+      --danger: #f87171;        /* red-400, for Stop */
+      --send: #6366f1;          /* indigo-500, for Send */
+      --code-bg: #1a1a1d;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #050505;
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* Desktop preview frame: simulates RG DS DualStack 640x960 canvas */
+    .frame-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+    }
+    .frame-label {
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+    }
+    .frame {
+      position: relative;
+      width: 640px;
+      height: 960px;
+      background: var(--bg);
+      border: 1px solid var(--border-hi);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 24px 60px -20px rgba(0,0,0,.6);
+    }
+    /* Dual-screen divider hint */
+    .frame::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 480px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
+      pointer-events: none;
+      z-index: 100;
+    }
+
+    @media (max-width: 720px) {
+      .frame-wrap { padding: 0; gap: 0; }
+      .frame-label { display: none; }
+      .frame { width: 100vw; height: 100vh; border: none; border-radius: 0; }
+      .frame::before { display: none; }
+    }
+
+    /* State switcher (top of preview, dev only) */
+    .switcher {
+      display: flex;
+      gap: 6px;
+      padding: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+      background: #1a1a1f;
+      border-radius: 8px;
+    }
+    .switcher button {
+      background: var(--surface);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .switcher button.active {
+      background: var(--surface-hi);
+      color: var(--text);
+      border-color: var(--border-hi);
+    }
+
+    /* App layout */
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: var(--bg);
+    }
+
+    /* Header */
+    header.app-header {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(15,15,16,.94);
+      backdrop-filter: blur(12px);
+      flex-shrink: 0;
+    }
+    .header-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 13px;
+      text-decoration: none;
+      padding: 6px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .header-back:active { background: var(--surface); }
+    .header-spacer { flex: 1; }
+    .model-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 5px 12px 5px 10px;
+      font-size: 12px;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .model-chip:active { background: var(--surface-hi); }
+    .model-chip .variant { color: var(--muted); }
+    .model-chip .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent-ai);
+    }
+    .header-more {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 18px;
+      padding: 6px 8px;
+      cursor: pointer;
+    }
+
+    /* Message scroll area */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 14px 20px;
+      scroll-behavior: smooth;
+    }
+
+    .msg {
+      margin: 0 0 22px;
+    }
+    .msg-head {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 4px;
+      font-size: 12px;
+    }
+    .msg-role {
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .msg-role.user { color: var(--accent-user); }
+    .msg-role.ai { color: var(--accent-ai); }
+    .msg-time { color: var(--dim); font-size: 11px; }
+    .msg-status {
+      color: var(--dim);
+      font-size: 11px;
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .msg-status .spin {
+      display: inline-block;
+      animation: spin 1.4s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .msg-body {
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.55;
+      word-wrap: break-word;
+      overflow-wrap: anywhere;
+    }
+    .msg-body p { margin: 0 0 8px; }
+    .msg-body p:last-child { margin-bottom: 0; }
+    .msg-body ul, .msg-body ol { margin: 4px 0 8px; padding-left: 20px; }
+    .msg-body li { margin-bottom: 2px; }
+    .msg-body strong { color: #fff; font-weight: 600; }
+    .msg-body code {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 12.5px;
+      color: #fbbf24;
+    }
+    .msg-body pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      overflow-x: auto;
+      margin: 8px 0;
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+    .msg-body pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      color: var(--text);
+      font-size: 12.5px;
+    }
+    .msg-body h1, .msg-body h2, .msg-body h3 {
+      font-size: 14px;
+      margin: 12px 0 6px;
+      color: #fff;
+    }
+    .msg-body a { color: #93c5fd; }
+    .msg-body blockquote {
+      border-left: 3px solid var(--border-hi);
+      padding-left: 10px;
+      margin: 6px 0;
+      color: var(--muted);
+    }
+
+    /* Tool call rows */
+    .tool {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      color: var(--muted);
+      padding: 3px 0;
+    }
+    .tool-icon {
+      color: var(--accent-tool);
+      flex-shrink: 0;
+    }
+    .tool-name {
+      color: var(--text);
+      font-weight: 500;
+    }
+    .tool-detail {
+      color: var(--muted);
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    /* Streaming cursor */
+    .cursor {
+      display: inline-block;
+      width: 7px;
+      height: 14px;
+      vertical-align: text-bottom;
+      background: var(--accent-ai);
+      animation: blink 1s steps(2) infinite;
+      margin-left: 2px;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* Sticky-scroll chip */
+    .scroll-chip {
+      position: absolute;
+      right: 14px;
+      bottom: 110px;
+      background: var(--surface-hi);
+      border: 1px solid var(--border-hi);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: var(--text);
+      box-shadow: 0 6px 20px -6px rgba(0,0,0,.5);
+      cursor: pointer;
+      z-index: 5;
+    }
+
+    /* Attachment thumbnails (above input bar) */
+    .attach-row {
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+      overflow-x: auto;
+      flex-shrink: 0;
+    }
+    .attach-thumb {
+      position: relative;
+      width: 48px;
+      height: 48px;
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--surface-hi);
+      flex-shrink: 0;
+    }
+    .attach-thumb img {
+      width: 100%; height: 100%; object-fit: cover;
+    }
+    .attach-thumb .x {
+      position: absolute;
+      top: 2px; right: 2px;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: rgba(0,0,0,.7);
+      color: #fff;
+      font-size: 11px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+    }
+
+    /* Input bar */
+    .input-bar {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 10px 12px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+      flex-shrink: 0;
+    }
+    .icon-btn {
+      width: 38px; height: 38px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .icon-btn:active { background: var(--surface-hi); }
+    .send-btn {
+      background: var(--send);
+      border-color: var(--send);
+      color: #fff;
+    }
+    .stop-btn {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: #1a0a0a;
+    }
+    .compose {
+      flex: 1;
+      min-height: 38px;
+      max-height: 140px;
+      border-radius: 19px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 9px 14px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.4;
+      resize: none;
+      outline: none;
+    }
+    .compose:focus { border-color: var(--border-hi); }
+    .compose::placeholder { color: var(--dim); }
+
+    /* Keyboard placeholder (simulates OS soft keyboard occupying bottom) */
+    .kb-placeholder {
+      position: absolute;
+      left: 0; right: 0;
+      bottom: 0;
+      height: 480px;
+      background: #0a0a0c;
+      border-top: 1px solid var(--border-hi);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--dim);
+      font-size: 13px;
+      letter-spacing: 0.5px;
+      z-index: 90;
+    }
+
+    /* Model picker overlay */
+    .picker {
+      position: absolute;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      z-index: 200;
+    }
+    .picker-header {
+      display: flex;
+      align-items: center;
+      height: 48px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .picker-header h2 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .picker-close {
+      margin-left: auto;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 22px;
+      padding: 6px 8px;
+      cursor: pointer;
+    }
+    .picker-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 0 24px;
+    }
+    .trust-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .trust-label {
+      flex: 1;
+    }
+    .trust-label .t1 {
+      font-size: 14px;
+      color: var(--text);
+      font-weight: 500;
+    }
+    .trust-label .t2 {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .toggle {
+      width: 44px;
+      height: 24px;
+      border-radius: 999px;
+      background: var(--accent-ai);
+      position: relative;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .toggle.off { background: var(--border-hi); }
+    .toggle::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 22px;
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      transition: left .12s;
+    }
+    .toggle.off::after { left: 2px; }
+
+    .provider-group {
+      padding: 12px 14px 6px;
+    }
+    .provider-name {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin: 0 0 8px;
+    }
+    .model-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 0;
+      border-bottom: 1px solid #1a1a1d;
+    }
+    .model-name {
+      flex: 1;
+      font-size: 14px;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .variants {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .variant-pill {
+      font-size: 11px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .variant-pill.active {
+      background: var(--accent-ai);
+      color: #082f1d;
+      border-color: var(--accent-ai);
+      font-weight: 600;
+    }
+    .no-variants {
+      font-size: 11px;
+      color: var(--dim);
+      padding: 4px 9px;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame-wrap">
+    <div class="frame-label">RG DS / GammaOS DualStack — 640 × 960</div>
+
+    <div class="switcher">
+      <button data-state="idle" class="active">1. Idle</button>
+      <button data-state="streaming">2. Streaming</button>
+      <button data-state="typing">3. Typing (keyboard up)</button>
+      <button data-state="attached">4. With attachments</button>
+      <button data-state="picker">5. Model picker</button>
+    </div>
+
+    <div class="frame" id="frame">
+      <div class="app">
+        <header class="app-header">
+          <a class="header-back" id="backBtn">← Sessions</a>
+          <div class="header-spacer"></div>
+          <button class="model-chip" id="modelBtn">
+            <span class="dot"></span>
+            <span>gpt-5.5</span>
+            <span class="variant">· medium</span>
+          </button>
+          <button class="header-more" title="more">⋯</button>
+        </header>
+
+        <div class="messages" id="messages"></div>
+
+        <div class="attach-row" id="attachRow" style="display:none;">
+          <div class="attach-thumb">
+            <img src="https://placehold.co/96x96/3f3f46/a1a1aa?text=img1" alt="" />
+            <span class="x">×</span>
+          </div>
+          <div class="attach-thumb">
+            <img src="https://placehold.co/96x96/3f3f46/a1a1aa?text=img2" alt="" />
+            <span class="x">×</span>
+          </div>
+        </div>
+
+        <div class="input-bar">
+          <button class="icon-btn" title="附圖">📎</button>
+          <textarea
+            class="compose"
+            id="compose"
+            placeholder="輸入訊息..."
+            rows="1"></textarea>
+          <button class="icon-btn send-btn" id="actionBtn" title="送出">▶</button>
+        </div>
+
+        <div class="kb-placeholder" id="kb" style="display:none;">— Android 軟鍵盤 480px —</div>
+
+        <div class="picker" id="picker" style="display:none;">
+          <div class="picker-header">
+            <h2>Model &amp; Settings</h2>
+            <button class="picker-close" id="pickerClose">✕</button>
+          </div>
+          <div class="picker-body">
+            <div class="trust-row">
+              <div class="trust-label">
+                <div class="t1">🔓 Trust mode</div>
+                <div class="t2">Auto-allow tool calls (keep deny rules)</div>
+              </div>
+              <div class="toggle" id="trustToggle"></div>
+            </div>
+
+            <div class="provider-group">
+              <h3 class="provider-name">OpenAI</h3>
+              <div class="model-row">
+                <div class="model-name">gpt-5.5</div>
+                <div class="variants">
+                  <span class="variant-pill">low</span>
+                  <span class="variant-pill active">med</span>
+                  <span class="variant-pill">high</span>
+                </div>
+              </div>
+              <div class="model-row">
+                <div class="model-name">gpt-5.5-mini</div>
+                <div class="variants">
+                  <span class="variant-pill">low</span>
+                  <span class="variant-pill">med</span>
+                  <span class="variant-pill">high</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="provider-group">
+              <h3 class="provider-name">Anthropic</h3>
+              <div class="model-row">
+                <div class="model-name">claude-opus-4.7</div>
+                <div class="variants">
+                  <span class="variant-pill">low</span>
+                  <span class="variant-pill">med</span>
+                  <span class="variant-pill">high</span>
+                </div>
+              </div>
+              <div class="model-row">
+                <div class="model-name">claude-sonnet-4.6</div>
+                <span class="no-variants">no variants</span>
+              </div>
+              <div class="model-row">
+                <div class="model-name">claude-haiku-4.5</div>
+                <span class="no-variants">no variants</span>
+              </div>
+            </div>
+
+            <div class="provider-group">
+              <h3 class="provider-name">Helicone (proxied)</h3>
+              <div class="model-row">
+                <div class="model-name">gemini-2.5-pro</div>
+                <div class="variants">
+                  <span class="variant-pill">low</span>
+                  <span class="variant-pill">med</span>
+                  <span class="variant-pill">high</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─── Sample conversation data ─────────────────────────
+    const samples = {
+      idle: [
+        {
+          role: "user",
+          time: "14:23",
+          body: "用 vanilla JS 做 compact UI，markdown 要會渲染，code block 不需要 highlight。",
+        },
+        {
+          role: "ai",
+          time: "14:23",
+          body: "好，**先列範圍**：\n\n- 載入時取最近 30 則 message\n- `marked` 渲染，no syntax highlight\n- 三顆按鈕：附圖 / 送出 / 停止\n\n再來看現在的 server 結構。",
+          tools: [
+            { name: "read", detail: "packages/server/src/index.ts" },
+            { name: "grep", detail: '"remoteResetScript"' },
+          ],
+        },
+        {
+          role: "ai",
+          time: "14:24",
+          body: "現有 `index.ts` 的 route handler 寫法可以直接沿用，例如：\n\n```ts\nif (req.url?.startsWith(\"/c/session/\")) {\n  return handleCompactSession(req, res);\n}\n```\n\n新檔放在 `packages/server/src/compact/handlers.ts` 比較不會讓 `index.ts` 再膨脹。",
+        },
+        {
+          role: "user",
+          time: "14:25",
+          body: "OK，動手吧",
+        },
+      ],
+      streaming: [
+        {
+          role: "user",
+          time: "14:23",
+          body: "加一個搜尋功能，可以在 session 內找之前對話。",
+        },
+        {
+          role: "ai",
+          time: "14:24",
+          body: "先看現在 search 是怎麼做的：",
+          tools: [
+            { name: "grep", detail: '"search" in packages/server' },
+            { name: "read", detail: "packages/server/src/session.ts" },
+          ],
+        },
+        {
+          role: "ai",
+          time: "14:24",
+          body: "看起來 session.ts 只處理列表與切換，沒有訊息層級的搜尋。要新增的話可以",
+          streaming: true,
+        },
+      ],
+      typing: [
+        {
+          role: "ai",
+          time: "14:24",
+          body: "現有 `index.ts` 的 route handler 寫法可以直接沿用，例如：\n\n```ts\nif (req.url?.startsWith(\"/c/session/\")) {\n  return handleCompactSession(req, res);\n}\n```",
+        },
+      ],
+      attached: [
+        {
+          role: "ai",
+          time: "14:24",
+          body: "上一則回完了，你接下來要做什麼？",
+        },
+      ],
+    };
+
+    // ─── Renderers ────────────────────────────────────────
+    function renderMessage(m) {
+      const div = document.createElement("div");
+      div.className = "msg";
+      const head = document.createElement("div");
+      head.className = "msg-head";
+      head.innerHTML = `<span class="msg-role ${m.role}">${m.role === "user" ? "Kevin" : "AI"}</span><span class="msg-time">· ${m.time}</span>${m.streaming ? '<span class="msg-status"><span class="spin">⏳</span> thinking…</span>' : ""}`;
+      div.appendChild(head);
+
+      const body = document.createElement("div");
+      body.className = "msg-body";
+      body.innerHTML = marked.parse(m.body || "");
+      if (m.streaming) {
+        body.innerHTML += '<span class="cursor"></span>';
+      }
+      div.appendChild(body);
+
+      if (m.tools) {
+        for (const t of m.tools) {
+          const row = document.createElement("div");
+          row.className = "tool";
+          row.innerHTML = `<span class="tool-icon">🔧</span><span class="tool-name">${t.name}</span><span class="tool-detail">· ${t.detail}</span>`;
+          div.appendChild(row);
+        }
+      }
+      return div;
+    }
+
+    function applyState(name) {
+      const messages = document.getElementById("messages");
+      messages.innerHTML = "";
+      const list = samples[name] || samples.idle;
+      for (const m of list) {
+        messages.appendChild(renderMessage(m));
+      }
+
+      // attach row
+      document.getElementById("attachRow").style.display = name === "attached" ? "flex" : "none";
+
+      // keyboard placeholder
+      document.getElementById("kb").style.display = name === "typing" ? "flex" : "none";
+
+      // compose text
+      const compose = document.getElementById("compose");
+      compose.value = name === "typing" ? "我想加搜尋功能，可以找之前的對話嗎" : (name === "attached" ? "看一下這兩張畫面" : "");
+
+      // action button toggles to Stop when streaming
+      const action = document.getElementById("actionBtn");
+      if (name === "streaming") {
+        action.classList.remove("send-btn");
+        action.classList.add("stop-btn");
+        action.textContent = "■";
+        action.title = "停止";
+      } else {
+        action.classList.add("send-btn");
+        action.classList.remove("stop-btn");
+        action.textContent = "▶";
+        action.title = "送出";
+      }
+
+      // picker overlay
+      document.getElementById("picker").style.display = name === "picker" ? "flex" : "none";
+
+      // scroll to bottom of messages
+      requestAnimationFrame(() => {
+        messages.scrollTop = messages.scrollHeight;
+      });
+    }
+
+    document.querySelectorAll(".switcher button").forEach((b) => {
+      b.addEventListener("click", () => {
+        document.querySelectorAll(".switcher button").forEach((x) => x.classList.remove("active"));
+        b.classList.add("active");
+        applyState(b.dataset.state);
+      });
+    });
+
+    document.getElementById("modelBtn").addEventListener("click", () => {
+      document.querySelector('.switcher button[data-state="picker"]').click();
+    });
+
+    document.getElementById("pickerClose").addEventListener("click", () => {
+      document.querySelector('.switcher button[data-state="idle"]').click();
+    });
+
+    document.getElementById("trustToggle").addEventListener("click", (e) => {
+      e.currentTarget.classList.toggle("off");
+    });
+
+    // initial render
+    applyState("idle");
+  </script>
+</body>
+</html>
