@@ -559,12 +559,71 @@ els.actionBtn.addEventListener("click", () => {
   sendMessage();
 });
 
-// Task 9 / 10 stubs — replaced in those tasks. Leave them here.
+// ─── Attachments ───────────────────────────────────────────
 let pendingAttachments = [];
+const MAX_BYTES_PER_FILE = 5 * 1024 * 1024;   // 5 MB
+const MAX_TOTAL_BYTES = 20 * 1024 * 1024;     // 20 MB
+
+els.attachBtn.addEventListener("click", () => els.fileInput.click());
+els.fileInput.addEventListener("change", (e) => {
+  const files = Array.from(e.target.files ?? []);
+  e.target.value = "";  // allow same file twice
+  for (const f of files) addAttachment(f);
+});
+
+function addAttachment(file) {
+  if (!file.type.startsWith("image/")) {
+    showToast("僅支援圖片：" + file.name, "error");
+    return;
+  }
+  if (file.size > MAX_BYTES_PER_FILE) {
+    showToast(`圖片太大（>5MB）：${file.name}`, "error");
+    return;
+  }
+  const totalAfter = pendingAttachments.reduce((s, a) => s + a.size, 0) + file.size;
+  if (totalAfter > MAX_TOTAL_BYTES) {
+    showToast("附件總量超過 20MB", "error");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    pendingAttachments.push({
+      name: file.name,
+      mime: file.type,
+      size: file.size,
+      dataUrl: reader.result,
+    });
+    renderAttachments();
+  };
+  reader.onerror = () => showToast("讀取失敗：" + file.name, "error");
+  reader.readAsDataURL(file);
+}
+
+function renderAttachments() {
+  els.attachRow.innerHTML = "";
+  if (pendingAttachments.length === 0) {
+    els.attachRow.hidden = true;
+    return;
+  }
+  els.attachRow.hidden = false;
+  pendingAttachments.forEach((a, i) => {
+    const thumb = document.createElement("div");
+    thumb.className = "attach-thumb";
+    thumb.innerHTML = `<img src="${a.dataUrl}" alt="" /><span class="x" data-i="${i}">×</span>`;
+    els.attachRow.appendChild(thumb);
+  });
+}
+els.attachRow.addEventListener("click", (e) => {
+  const x = e.target.closest(".x");
+  if (!x) return;
+  const i = Number(x.dataset.i);
+  pendingAttachments.splice(i, 1);
+  renderAttachments();
+});
+
 function clearAttachments() {
   pendingAttachments = [];
-  els.attachRow.innerHTML = "";
-  els.attachRow.hidden = true;
+  renderAttachments();
 }
-function renderAttachments() { /* Task 9 */ }
+
 async function abortMessage() { /* Task 10 */ }
