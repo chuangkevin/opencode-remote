@@ -464,22 +464,37 @@ titleEls.input.addEventListener("keydown", (e) => {
 titleEls.input.addEventListener("blur", commitEditTitle);
 
 // ─── Fullscreen toggle ─────────────────────────────────────
-function refreshFullscreenButton() {
-  titleEls.fs.classList.toggle("active", !!document.fullscreenElement);
-}
-titleEls.fs.addEventListener("click", async () => {
-  try {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen();
-    } else {
-      await document.documentElement.requestFullscreen();
-    }
-  } catch (err) {
-    showToast("全螢幕失敗：" + err.message, "error");
+// iOS Safari does NOT support Element.requestFullscreen on arbitrary
+// elements (only <video>). Hide the button entirely on iOS — users
+// should "Add to Home Screen" for a chrome-less PWA experience.
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const fsSupported = !isIOS && (
+  document.documentElement.requestFullscreen ||
+  document.documentElement.webkitRequestFullscreen ||
+  document.documentElement.mozRequestFullScreen
+);
+
+if (!fsSupported) {
+  titleEls.fs.hidden = true;
+} else {
+  function refreshFullscreenButton() {
+    titleEls.fs.classList.toggle("active", !!document.fullscreenElement);
   }
-});
-document.addEventListener("fullscreenchange", refreshFullscreenButton);
-refreshFullscreenButton();
+  titleEls.fs.addEventListener("click", async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch (err) {
+      showToast("全螢幕失敗：" + err.message, "error");
+    }
+  });
+  document.addEventListener("fullscreenchange", refreshFullscreenButton);
+  refreshFullscreenButton();
+}
 
 // ─── Header refresh ────────────────────────────────────────
 async function refreshHeader() {

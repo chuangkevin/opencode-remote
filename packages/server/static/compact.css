@@ -29,11 +29,15 @@ html, body {
   height: 100%;
   overflow: hidden;
 }
-body { height: 100vh; }
+body {
+  height: 100vh;        /* fallback */
+  height: 100dvh;       /* iOS / Android: account for URL bar dynamically */
+}
 .app {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   background: var(--bg);
 }
@@ -275,7 +279,7 @@ header.app-header {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 10px 12px 12px;
+  padding: 10px 12px max(12px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
   background: var(--bg);
   flex-shrink: 0;
