@@ -795,6 +795,107 @@ function renderProviders(providers) {
   });
 }
 
-// Trust mode stubs filled in Task 12.
-async function toggleTrust() { /* Task 12 */ }
-async function refreshTrustToggle() { /* Task 12 */ }
+// ── Trust mode ──────────────────────────────────────────────────────────────
+// OpenCode v1.14.30's PATCH /session/:id appends permission rules (it does not
+// replace). Rules are evaluated in order; the LAST matching rule wins.
+//
+// Trust ON  → append TRUST_PERMISSION_ARRAY (markers: bash * allow, edit * allow).
+// Trust OFF → append TRUST_OFF_ARRAY (markers: bash * ask, edit * ask) to override.
+//
+// refreshTrustToggle checks the LAST bash-* or edit-* wildcard rule to determine
+// the effective state.
+//
+// The allow / deny patterns below mirror opencode.json. Keep them in sync if
+// the deny set changes there.
+const TRUST_PERMISSION_ARRAY = [
+  // ── edit (most "ask" → "allow"; secrets stay "deny") ──
+  { permission: "edit", pattern: "*", action: "allow" },
+  { permission: "edit", pattern: ".env", action: "deny" },
+  { permission: "edit", pattern: ".env.*", action: "deny" },
+  { permission: "edit", pattern: "*service-account*.json", action: "deny" },
+  { permission: "edit", pattern: "*credential*.json", action: "deny" },
+  { permission: "edit", pattern: "secrets/**", action: "deny" },
+  { permission: "edit", pattern: ".claude-memory/**", action: "deny" },
+  { permission: "edit", pattern: "**/.env", action: "deny" },
+  { permission: "edit", pattern: "**/.env.*", action: "deny" },
+  { permission: "edit", pattern: "**/*service-account*.json", action: "deny" },
+  { permission: "edit", pattern: "**/*credential*.json", action: "deny" },
+  { permission: "edit", pattern: "**/secrets/**", action: "deny" },
+  { permission: "edit", pattern: "**/.claude-memory/**", action: "deny" },
+  // ── bash (most "ask" → "allow"; destructive stays "deny") ──
+  { permission: "bash", pattern: "*", action: "allow" },
+  { permission: "bash", pattern: "git reset --hard*", action: "deny" },
+  { permission: "bash", pattern: "git push --force*", action: "deny" },
+  { permission: "bash", pattern: "git clean*", action: "deny" },
+  { permission: "bash", pattern: "Remove-Item *", action: "deny" },
+  { permission: "bash", pattern: "del *", action: "deny" },
+  { permission: "bash", pattern: "rmdir *", action: "deny" },
+  { permission: "bash", pattern: "* > .env*", action: "deny" },
+  // ── git_git_* (preserve deny; allow the rest) ──
+  { permission: "git_git_reset", pattern: "*", action: "deny" },
+  { permission: "git_git_clean", pattern: "*", action: "deny" },
+  { permission: "git_git_clear_working_dir", pattern: "*", action: "deny" },
+  { permission: "git_git_push", pattern: "*", action: "allow" },
+  { permission: "git_git_commit", pattern: "*", action: "allow" },
+  // ── MCP wildcards (allow all) ──
+  { permission: "github_*", pattern: "*", action: "allow" },
+  { permission: "filesystem_*", pattern: "*", action: "allow" },
+  { permission: "fetch_*", pattern: "*", action: "allow" },
+];
+
+// OFF markers: appended after TRUST_PERMISSION_ARRAY to override the allow
+// wildcards. Last-wins evaluation means these take effect immediately.
+const TRUST_OFF_ARRAY = [
+  { permission: "bash", pattern: "*", action: "ask" },
+  { permission: "edit", pattern: "*", action: "ask" },
+];
+
+async function setTrustMode(on) {
+  // PATCH is append-only in OpenCode v1.14.30 — not replace. Sending the full
+  // ON array or the OFF override array both accumulate, but since rules are
+  // evaluated last-wins the most-recently appended wildcard wins.
+  const payload = { permission: on ? TRUST_PERMISSION_ARRAY : TRUST_OFF_ARRAY };
+  try {
+    await api(`/session/${sessionID}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    showToast("Trust mode 切換失敗：" + err.message, "error");
+    throw err;
+  }
+}
+
+async function refreshTrustToggle() {
+  try {
+    const session = await api(`/session/${sessionID}`);
+    const perms = Array.isArray(session.permission) ? session.permission : [];
+    // Find the last entry for the bash or edit wildcard ("*") — that is the
+    // effective state since PATCH appends and last-wins evaluation applies.
+    let on = false;
+    for (const p of perms) {
+      if (
+        (p.permission === "edit" || p.permission === "bash") &&
+        p.pattern === "*"
+      ) {
+        on = p.action === "allow";
+      }
+    }
+    const toggle = document.getElementById("trustToggle");
+    if (toggle) toggle.classList.toggle("off", !on);
+  } catch (err) {
+    console.warn("refreshTrustToggle failed", err);
+  }
+}
+
+async function toggleTrust(e) {
+  const el = e.currentTarget;
+  const willBeOn = el.classList.contains("off");
+  el.classList.toggle("off", !willBeOn); // optimistic
+  try {
+    await setTrustMode(willBeOn);
+  } catch {
+    el.classList.toggle("off", willBeOn); // revert
+  }
+}
