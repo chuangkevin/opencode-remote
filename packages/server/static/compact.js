@@ -170,3 +170,16 @@ function showToast(text, kind) {
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => { els.toast.hidden = true; }, 4000);
 }
+
+// ─── Textarea: auto-grow + Enter submits, Shift+Enter newline ─
+function resizeCompose() {
+  els.compose.style.height = "auto";
+  els.compose.style.height = Math.min(els.compose.scrollHeight, 140) + "px";
+}
+els.compose.addEventListener("input", resizeCompose);
+els.compose.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    els.actionBtn.click();
+  }
+});
