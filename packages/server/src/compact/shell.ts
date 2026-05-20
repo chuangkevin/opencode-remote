@@ -20,12 +20,17 @@ export function renderCompactShell(sessionID: string): string {
   <div class="app">
     <header class="app-header">
       <a class="header-back" href="/remote-sessions">← Sessions</a>
+      <button class="header-title" id="titleBtn" type="button" title="點擊重新命名">
+        <span id="titleText">…</span>
+      </button>
+      <input class="header-title-input" id="titleInput" type="text" hidden />
       <div class="header-spacer"></div>
       <button class="model-chip" id="modelBtn" type="button">
         <span class="dot"></span>
         <span id="modelName">…</span>
         <span class="variant" id="modelVariant"></span>
       </button>
+      <button class="header-fs-btn" id="fsBtn" type="button" aria-label="全螢幕">⛶</button>
       <button class="header-more" id="moreBtn" type="button" aria-label="more">⋯</button>
     </header>
 

@@ -168,6 +168,8 @@ function scrollToBottom() {
     console.error(err);
     showToast("載入歷史失敗：" + err.message, "error");
   }
+  // Load session meta in parallel — does not block rendering history.
+  loadSessionMeta().catch((err) => console.warn("loadSessionMeta boot:", err));
 })();
 
 function showToast(text, kind) {
@@ -395,8 +397,95 @@ els.scrollChip.addEventListener("click", () => {
   scrollToBottom();
 });
 
-// ─── Header refresh stub (Task 11 fills it in) ────────────
-async function refreshHeader() { /* implemented in Task 11 */ }
+// ─── Session meta (title + rename) ─────────────────────────
+const titleEls = {
+  btn: document.getElementById("titleBtn"),
+  text: document.getElementById("titleText"),
+  input: document.getElementById("titleInput"),
+  fs: document.getElementById("fsBtn"),
+};
+
+let currentTitle = "";
+
+async function loadSessionMeta() {
+  try {
+    const s = await api(`/session/${sessionID}`);
+    setTitle(s.title ?? "");
+  } catch (err) {
+    console.warn("loadSessionMeta failed", err);
+  }
+}
+
+function setTitle(title) {
+  currentTitle = title;
+  titleEls.text.textContent = title || "(no title)";
+  document.title = title ? `${title} · OpenCode` : "OpenCode";
+}
+
+function beginEditTitle() {
+  titleEls.input.value = currentTitle;
+  titleEls.btn.hidden = true;
+  titleEls.input.hidden = false;
+  titleEls.input.focus();
+  titleEls.input.select();
+}
+
+function cancelEditTitle() {
+  titleEls.input.hidden = true;
+  titleEls.btn.hidden = false;
+}
+
+async function commitEditTitle() {
+  const newTitle = titleEls.input.value.trim();
+  if (!newTitle || newTitle === currentTitle) {
+    cancelEditTitle();
+    return;
+  }
+  const prevTitle = currentTitle;
+  setTitle(newTitle);
+  cancelEditTitle();
+  try {
+    await api(`/session/${sessionID}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: newTitle }),
+    });
+  } catch (err) {
+    showToast("改名失敗：" + err.message, "error");
+    setTitle(prevTitle);
+  }
+}
+
+titleEls.btn.addEventListener("click", beginEditTitle);
+titleEls.input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); commitEditTitle(); }
+  else if (e.key === "Escape") { e.preventDefault(); cancelEditTitle(); }
+});
+titleEls.input.addEventListener("blur", commitEditTitle);
+
+// ─── Fullscreen toggle ─────────────────────────────────────
+function refreshFullscreenButton() {
+  titleEls.fs.classList.toggle("active", !!document.fullscreenElement);
+}
+titleEls.fs.addEventListener("click", async () => {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await document.documentElement.requestFullscreen();
+    }
+  } catch (err) {
+    showToast("全螢幕失敗：" + err.message, "error");
+  }
+});
+document.addEventListener("fullscreenchange", refreshFullscreenButton);
+refreshFullscreenButton();
+
+// ─── Header refresh (T7 stub — now real; T11 will extend) ──
+async function refreshHeader() {
+  await loadSessionMeta();
+  // Task 11 will append model loading here.
+}
 
 // ─── Textarea: auto-grow + Enter submits, Shift+Enter newline ─
 function resizeCompose() {
