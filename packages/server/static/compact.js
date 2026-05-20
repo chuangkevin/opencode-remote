@@ -168,8 +168,8 @@ function scrollToBottom() {
     console.error(err);
     showToast("載入歷史失敗：" + err.message, "error");
   }
-  // Load session meta in parallel — does not block rendering history.
-  loadSessionMeta().catch((err) => console.warn("loadSessionMeta boot:", err));
+  // Load session meta + model in parallel — does not block rendering history.
+  refreshHeader().catch((err) => console.warn("refreshHeader boot:", err));
 })();
 
 function showToast(text, kind) {
@@ -481,10 +481,12 @@ titleEls.fs.addEventListener("click", async () => {
 document.addEventListener("fullscreenchange", refreshFullscreenButton);
 refreshFullscreenButton();
 
-// ─── Header refresh (T7 stub — now real; T11 will extend) ──
+// ─── Header refresh ────────────────────────────────────────
 async function refreshHeader() {
-  await loadSessionMeta();
-  // Task 11 will append model loading here.
+  await Promise.all([
+    loadSessionMeta(),
+    loadModelForHeader(),
+  ]);
 }
 
 // ─── Textarea: auto-grow + Enter submits, Shift+Enter newline ─
@@ -634,3 +636,165 @@ async function abortMessage() {
     showToast("中止失敗：" + err.message, "error");
   }
 }
+
+// ─── Model picker ──────────────────────────────────────────
+let providersCache = null;
+let authedProviderIds = null;
+let defaultModelFromConfig = null;
+
+async function loadProviders() {
+  if (providersCache) return providersCache;
+  const [provResp, authResp] = await Promise.all([
+    api("/provider"),
+    api("/provider/auth").catch(() => ({})),
+  ]);
+  authedProviderIds = new Set(Object.keys(authResp ?? {}));
+  // OpenCode /provider returns { all: [...] }
+  const all = Array.isArray(provResp?.all) ? provResp.all : (Array.isArray(provResp) ? provResp : []);
+  // Keep only providers the user has authed AND that have at least one active model.
+  providersCache = all
+    .filter((p) => authedProviderIds.has(p.id))
+    .map((p) => ({
+      id: p.id,
+      name: p.name ?? p.id,
+      models: Object.values(p.models ?? {}).filter((m) => m.status === "active"),
+    }))
+    .filter((p) => p.models.length > 0);
+  return providersCache;
+}
+
+async function loadDefaultModelFromConfig() {
+  if (defaultModelFromConfig !== null) return defaultModelFromConfig;
+  try {
+    const config = await api("/config");
+    if (typeof config?.model === "string" && config.model.includes("/")) {
+      const sep = config.model.indexOf("/");
+      defaultModelFromConfig = {
+        providerID: config.model.slice(0, sep),
+        modelID: config.model.slice(sep + 1),
+      };
+    } else {
+      defaultModelFromConfig = false;
+    }
+  } catch {
+    defaultModelFromConfig = false;
+  }
+  return defaultModelFromConfig;
+}
+
+async function loadModelForHeader() {
+  try {
+    const session = await api(`/session/${sessionID}`);
+    const m = session.model;
+    if (m && m.providerID && m.id) {
+      currentModel = { providerID: m.providerID, modelID: m.id, variant: m.variant ?? null };
+    } else {
+      const fallback = await loadDefaultModelFromConfig();
+      if (fallback) currentModel = { ...fallback, variant: null };
+    }
+    if (currentModel) {
+      els.modelName.textContent = currentModel.modelID;
+      els.modelVariant.textContent = currentModel.variant && currentModel.variant !== "none"
+        ? `· ${currentModel.variant}`
+        : "";
+    } else {
+      els.modelName.textContent = "(no model)";
+      els.modelVariant.textContent = "";
+    }
+  } catch (err) {
+    console.error("loadModelForHeader failed", err);
+  }
+}
+
+async function openPicker() {
+  els.picker.hidden = false;
+  els.picker.innerHTML = `
+    <div class="picker-header">
+      <h2>Model &amp; Settings</h2>
+      <button class="picker-close" id="pickerClose" type="button">✕</button>
+    </div>
+    <div class="picker-body" id="pickerBody">
+      <div class="trust-row">
+        <div class="trust-label">
+          <div class="t1">🔓 Trust mode</div>
+          <div class="t2">Auto-allow tool calls (keep deny rules)</div>
+        </div>
+        <div class="toggle off" id="trustToggle"></div>
+      </div>
+      <div id="providersList">載入中…</div>
+    </div>`;
+  document.getElementById("pickerClose").addEventListener("click", closePicker);
+  document.getElementById("trustToggle").addEventListener("click", toggleTrust);
+
+  try {
+    const providers = await loadProviders();
+    renderProviders(providers);
+  } catch (err) {
+    document.getElementById("providersList").textContent = "載入失敗：" + err.message;
+  }
+  await refreshTrustToggle();
+}
+
+function closePicker() { els.picker.hidden = true; }
+
+els.modelBtn.addEventListener("click", openPicker);
+
+function renderProviders(providers) {
+  const list = document.getElementById("providersList");
+  list.innerHTML = "";
+  for (const provider of providers) {
+    const group = document.createElement("div");
+    group.className = "provider-group";
+    const name = document.createElement("h3");
+    name.className = "provider-name";
+    name.textContent = provider.name;
+    group.appendChild(name);
+    for (const m of provider.models) {
+      const row = document.createElement("div");
+      row.className = "model-row";
+      // Build variant pills, hiding the "none" variant pill (we render it as the
+      // model row's single-button fallback instead). If a model has NO variants
+      // at all, render a single "—" button to allow selecting it.
+      const allVariants = m.variants ? Object.keys(m.variants) : [];
+      const variantsExcludingNone = allVariants.filter((v) => v !== "none");
+      const isCurrent = currentModel && currentModel.providerID === provider.id && currentModel.modelID === m.id;
+      let pills;
+      if (variantsExcludingNone.length > 0) {
+        pills = variantsExcludingNone.map((v) => {
+          const active = isCurrent && currentModel.variant === v;
+          return `<span class="variant-pill${active ? " active" : ""}" data-provider="${escapeHTML(provider.id)}" data-model="${escapeHTML(m.id)}" data-variant="${escapeHTML(v)}">${escapeHTML(v)}</span>`;
+        }).join("");
+        // If "none" is also a valid variant (model supports running without
+        // reasoning), add a no-variant pill too.
+        if (allVariants.includes("none")) {
+          const active = isCurrent && (currentModel.variant === "none" || !currentModel.variant);
+          pills = `<span class="variant-pill${active ? " active" : ""}" data-provider="${escapeHTML(provider.id)}" data-model="${escapeHTML(m.id)}" data-variant="">—</span>` + pills;
+        }
+      } else {
+        const active = isCurrent && !currentModel.variant;
+        pills = `<span class="variant-pill${active ? " active" : ""}" data-provider="${escapeHTML(provider.id)}" data-model="${escapeHTML(m.id)}" data-variant="">—</span>`;
+      }
+      row.innerHTML = `<div class="model-name">${escapeHTML(m.id)}</div><div class="variants">${pills}</div>`;
+      group.appendChild(row);
+    }
+    list.appendChild(group);
+  }
+  list.addEventListener("click", (e) => {
+    const pill = e.target.closest(".variant-pill");
+    if (!pill) return;
+    currentModel = {
+      providerID: pill.dataset.provider,
+      modelID: pill.dataset.model,
+      variant: pill.dataset.variant || null,
+    };
+    els.modelName.textContent = currentModel.modelID;
+    els.modelVariant.textContent = currentModel.variant && currentModel.variant !== "none"
+      ? `· ${currentModel.variant}`
+      : "";
+    closePicker();
+  });
+}
+
+// Trust mode stubs filled in Task 12.
+async function toggleTrust() { /* Task 12 */ }
+async function refreshTrustToggle() { /* Task 12 */ }
