@@ -5,6 +5,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } from "./session.js";
+import { handleCompactStatic } from "./compact/handlers.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -913,6 +914,11 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "GET" && req.url === "/c-mockup") {
     sendCompactMockup(res);
+    return;
+  }
+
+  if (req.method === "GET" && req.url?.startsWith("/c/static/")) {
+    handleCompactStatic(req, res);
     return;
   }
 
