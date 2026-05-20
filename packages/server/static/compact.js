@@ -899,3 +899,16 @@ async function toggleTrust(e) {
     el.classList.toggle("off", willBeOn); // revert
   }
 }
+
+// ─── Refresh on visibility return ──────────────────────────
+// When the tab is backgrounded (phone locked, switched app) the SSE
+// connection can silently stall without firing onerror. On return we
+// force a history refetch and a fresh SSE connection so the user sees
+// whatever happened while they were away.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  loadHistory().catch((err) => console.warn("focus reload failed", err));
+  try { sse.close(); } catch { /* noop */ }
+  sse = connectSSE();
+  refreshHeader();
+});
