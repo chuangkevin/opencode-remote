@@ -2,6 +2,7 @@ import http from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderCompactShell } from "./shell.js";
 
 const __filename = fileURLToPath(import.meta.url);
 // tsconfig has rootDir=src outDir=dist, so this file ends up at
@@ -38,4 +39,21 @@ export function handleCompactStatic(req: http.IncomingMessage, res: http.ServerR
     "Cache-Control": "no-store",
   });
   res.end(body);
+}
+
+const SESSION_PATH_RE = /^\/c\/session\/(ses_[A-Za-z0-9]+)\/?$/;
+
+export function matchCompactSessionPath(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  const m = SESSION_PATH_RE.exec(path);
+  return m ? m[1] : undefined;
+}
+
+export function handleCompactSession(sessionID: string, res: http.ServerResponse): void {
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-OpenCode-Remote": "compact",
+  });
+  res.end(renderCompactShell(sessionID));
 }
