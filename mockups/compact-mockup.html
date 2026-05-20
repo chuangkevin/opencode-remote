@@ -37,73 +37,126 @@
       min-height: 100vh;
     }
 
-    /* Desktop preview frame: simulates RG DS DualStack 640x960 canvas */
+    /* Default (small screens): switcher strip on top, frame fills the rest. */
     .frame-wrap {
+      position: relative;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      gap: 12px;
-      padding: 16px;
+      width: 100vw;
+      height: 100vh;
+      padding: 0;
     }
-    .frame-label {
-      font-size: 12px;
-      color: var(--muted);
-      letter-spacing: 0.5px;
-    }
+    .frame-label { display: none; }
     .frame {
       position: relative;
-      width: 640px;
-      height: 960px;
+      width: 100%;
+      flex: 1;
+      min-height: 0;
       background: var(--bg);
-      border: 1px solid var(--border-hi);
-      border-radius: 14px;
+      border: none;
+      border-radius: 0;
       overflow: hidden;
-      box-shadow: 0 24px 60px -20px rgba(0,0,0,.6);
     }
-    /* Dual-screen divider hint */
-    .frame::before {
-      content: "";
-      position: absolute;
-      left: 0;
-      right: 0;
-      top: 480px;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
-      pointer-events: none;
-      z-index: 100;
+    .frame::before { display: none; }
+
+    /* Big desktop only: show the 640x960 device-frame preview centered. */
+    @media (min-width: 760px) and (min-height: 1020px) {
+      body { background: #050505; }
+      .frame-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 12px;
+        padding: 24px 16px;
+        width: 100vw;
+        height: auto;
+        min-height: 100vh;
+      }
+      .frame-label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.5px;
+      }
+      .frame {
+        width: 640px;
+        height: 960px;
+        background: var(--bg);
+        border: 1px solid var(--border-hi);
+        border-radius: 14px;
+        box-shadow: 0 24px 60px -20px rgba(0,0,0,.6);
+      }
+      /* Dual-screen divider hint (only shown in the framed preview) */
+      .frame::before {
+        content: "";
+        display: block;
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 480px;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
+        pointer-events: none;
+        z-index: 100;
+      }
     }
 
-    @media (max-width: 720px) {
-      .frame-wrap { padding: 0; gap: 0; }
-      .frame-label { display: none; }
-      .frame { width: 100vw; height: 100vh; border: none; border-radius: 0; }
-      .frame::before { display: none; }
-    }
-
-    /* State switcher (top of preview, dev only) */
+    /* State switcher — normal-flow strip at top of viewport on small screens
+       (does not overlap header), inline above frame on big-preview screens. */
     .switcher {
+      flex-shrink: 0;
       display: flex;
-      gap: 6px;
-      padding: 8px;
-      flex-wrap: wrap;
-      justify-content: center;
-      background: #1a1a1f;
-      border-radius: 8px;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 6px;
+      background: #15151a;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    .switcher::before {
+      content: "preview";
+      color: var(--dim);
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin: 0 6px 0 2px;
+      flex-shrink: 0;
     }
     .switcher button {
       background: var(--surface);
       color: var(--muted);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 6px 10px;
+      border-radius: 5px;
+      padding: 3px 8px;
       font: inherit;
-      font-size: 12px;
+      font-size: 11px;
       cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .switcher button.active {
       background: var(--surface-hi);
       color: var(--text);
       border-color: var(--border-hi);
+    }
+
+    /* On big preview, switcher goes above frame, centered, slightly larger. */
+    @media (min-width: 760px) and (min-height: 1020px) {
+      .switcher {
+        justify-content: center;
+        padding: 8px;
+        background: transparent;
+        border-bottom: none;
+        border-radius: 8px;
+      }
+      .switcher::before { display: none; }
+      .switcher button {
+        font-size: 12px;
+        padding: 6px 10px;
+        border-radius: 6px;
+      }
     }
 
     /* App layout */
@@ -398,12 +451,14 @@
     .compose:focus { border-color: var(--border-hi); }
     .compose::placeholder { color: var(--dim); }
 
-    /* Keyboard placeholder (simulates OS soft keyboard occupying bottom) */
+    /* Keyboard placeholder (simulates OS soft keyboard occupying bottom).
+       Caps at 50% of viewport so iPhone landscape (393px tall) does not
+       cover the entire screen. */
     .kb-placeholder {
       position: absolute;
       left: 0; right: 0;
       bottom: 0;
-      height: 480px;
+      height: min(480px, 50vh);
       background: #0a0a0c;
       border-top: 1px solid var(--border-hi);
       display: flex;
@@ -413,6 +468,8 @@
       font-size: 13px;
       letter-spacing: 0.5px;
       z-index: 90;
+      text-align: center;
+      padding: 0 16px;
     }
 
     /* Model picker overlay */
@@ -548,11 +605,11 @@
     <div class="frame-label">RG DS / GammaOS DualStack — 640 × 960</div>
 
     <div class="switcher">
-      <button data-state="idle" class="active">1. Idle</button>
-      <button data-state="streaming">2. Streaming</button>
-      <button data-state="typing">3. Typing (keyboard up)</button>
-      <button data-state="attached">4. With attachments</button>
-      <button data-state="picker">5. Model picker</button>
+      <button data-state="idle" class="active">Idle</button>
+      <button data-state="streaming">Streaming</button>
+      <button data-state="typing">Typing</button>
+      <button data-state="attached">Attached</button>
+      <button data-state="picker">Picker</button>
     </div>
 
     <div class="frame" id="frame">

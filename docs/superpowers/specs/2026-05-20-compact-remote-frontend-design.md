@@ -355,6 +355,52 @@ After implementation, the following must hold:
 - Voice input.
 - Push notifications when a long-running task finishes.
 
+## Visual reference
+
+The approved visual direction is captured in `mockups/compact-mockup.html`
+(temporarily served by the proxy at `/c-mockup` for preview). The mockup
+demonstrates five states (idle, streaming, typing with OS keyboard,
+pending image attachments, model picker) and codifies the following
+decisions that the implementation must follow:
+
+- **Layout style**: flat document (role label + timestamp on its own line,
+  no bubbles, content directly below). Whitespace separates turns; no
+  borders between messages.
+- **Color palette** (dark theme, matching `/remote-sessions`):
+  - background `#0f0f10`, surfaces `#18181b` / `#1f1f23`
+  - borders `#2a2a2f` / `#3a3a40`
+  - text `#f4f4f5` (primary), `#a1a1aa` (muted), `#71717a` (dim)
+  - user role label: indigo-400 `#818cf8`
+  - AI role label + streaming cursor: emerald-400 `#34d399`
+  - tool-call icon: amber-400 `#fbbf24`
+  - send button: indigo-500 `#6366f1`
+  - stop button: red-400 `#f87171`
+  - code block bg: `#1a1a1d`, inline code text: amber-400
+- **Header**: 48px tall, sticky. `← Sessions` (left), model chip
+  `● gpt-5.5 · medium` (right), `⋯` overflow button. Tapping the model
+  chip opens the picker overlay.
+- **Input bar**: sticky bottom. 📎 attach button (38px circle), auto-grow
+  textarea (38–140px tall, 19px border-radius), send button (▶ when idle,
+  ■ red when streaming). Pending attachments render as a 60px-tall row of
+  48×48 thumbnails above the input bar.
+- **Tool calls**: `🔧 <tool_name> · <detail>` — one row per call, amber
+  icon, tool name in primary text color, detail in muted monospace with
+  ellipsis on overflow.
+- **Streaming cursor**: 7×14px emerald block, 1Hz blink, appended to the
+  end of the assistant body during streaming.
+- **Sticky-scroll chip**: `↓ N 則新訊息` pill at bottom-right when the
+  user has scrolled away from the bottom during streaming.
+- **Picker overlay**: full-frame, header `Model & Settings ✕`. Trust mode
+  toggle as the first row (with description "Auto-allow tool calls (keep
+  deny rules)"). Models grouped by provider with uppercase tracked
+  labels; variants render as a row of pill buttons (`low` / `med` /
+  `high`), active variant in solid emerald.
+
+The mockup is preview-only. It is **not** loaded into the production
+bundle. Before merging the implementation, the `/c-mockup` route and the
+`mockups/` directory are removed (or kept under an explicit dev-only
+guard).
+
 ## Notes for the implementer
 
 - The OpenAPI doc at `GET /doc` is the authoritative source for request

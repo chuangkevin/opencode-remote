@@ -1,7 +1,8 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } from "./session.js";
 
@@ -833,6 +834,25 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
   }
 }
 
+function sendCompactMockup(res: http.ServerResponse): void {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  // dist/index.js → repo root is ../../../..  (packages/server/dist → repo)
+  const mockupPath = join(__dirname, "..", "..", "..", "mockups", "compact-mockup.html");
+  try {
+    const html = readFileSync(mockupPath, "utf8");
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    res.end(html);
+  } catch (err) {
+    console.error("[opencode-remote] failed to read compact mockup:", err);
+    res.writeHead(404, { "Cache-Control": "no-store" });
+    res.end(`Mockup not found at ${mockupPath}`);
+  }
+}
+
 function handleRootRedirect(res: http.ServerResponse): void {
   redirectToSession(res, "/remote-sessions");
 }
@@ -888,6 +908,11 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "GET" && req.url === "/remote-sessions") {
     void handleRemoteSessions(res);
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/c-mockup") {
+    sendCompactMockup(res);
     return;
   }
 
