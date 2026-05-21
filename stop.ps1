@@ -15,35 +15,58 @@ if (-not $KeepWatchdog) {
     }
 }
 
-# Use Get-NetTCPConnection (NUMERIC port match) rather than
-# `netstat | Select-String ":<port>.*LISTENING"`. The substring match in
-# the old code was killing Docker Desktop processes whose ephemeral ports
-# happened to contain "4096" or "9223" as a substring (e.g. 40961, 14096,
-# 92230). See start.ps1 for the same fix in Stop-PortProcess.
+# Numeric port match (Get-NetTCPConnection) + process-name allowlist.
+# Earlier substring-style `netstat | Select-String ":<port>.*LISTENING"`
+# wrecked Docker by killing vpnkit when ports overlapped (e.g. Docker
+# Desktop ephemeral 40961 / 14096; the docker-compose.yml in this repo
+# publishing 4096). The allowlist is the second layer: even if a legit
+# non-opencode process owns the port, we must not kill it.
 function Stop-PortProcessExact {
     param(
         [int]$Port,
         [string]$Label
     )
 
-    $processIds = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+    $candidates = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
         ForEach-Object { $_.OwningProcess } |
         Select-Object -Unique
 
-    if (-not $processIds) {
+    if (-not $candidates) {
         Write-Host "  No $Label running on port $Port" -ForegroundColor Gray
         return
     }
 
-    foreach ($processId in $processIds) {
-        Write-Host "  Stopping $Label (PID $processId)..." -ForegroundColor Yellow
+    $killed = $false
+    foreach ($processId in $candidates) {
+        $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
+        if (-not $proc) { continue }
+        $name = $proc.ProcessName
+        $isOurs = $name -ieq "node" -or $name -ieq "opencode-cli" -or $name -ieq "opencode"
+        if (-not $isOurs) {
+            Write-Host "  Port $Port held by '$name' (PID $processId); skipping — not an opencode process." -ForegroundColor Yellow
+            continue
+        }
+        Write-Host "  Stopping $Label '$name' (PID $processId)..." -ForegroundColor Yellow
         Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+        $killed = $true
     }
-    Write-Host "✓ $Label stopped" -ForegroundColor Green
+    if ($killed) { Write-Host "✓ $Label stopped" -ForegroundColor Green }
 }
 
+# Read OPENCODE_PORT from .env so this stays in sync if the user changes it.
+function Get-EnvValue {
+    param([string]$Name, [string]$Fallback)
+    $envPath = Join-Path $PSScriptRoot ".env"
+    if (Test-Path -LiteralPath $envPath) {
+        $line = Get-Content -LiteralPath $envPath | Where-Object { $_ -match "^$([regex]::Escape($Name))=" } | Select-Object -First 1
+        if ($line) { return ($line -replace "^$([regex]::Escape($Name))=", "").Trim() }
+    }
+    return $Fallback
+}
+
+$opencodePort = [int](Get-EnvValue "OPENCODE_PORT" "4096")
 Stop-PortProcessExact -Port 9223 -Label "proxy"
-Stop-PortProcessExact -Port 4096 -Label "OpenCode"
+Stop-PortProcessExact -Port $opencodePort -Label "OpenCode"
 
 Write-Host ""
 Write-Host "✓ All services stopped" -ForegroundColor Green

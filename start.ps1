@@ -10,23 +10,35 @@ Set-Location $PSScriptRoot
 function Stop-PortProcess {
     param([int]$Port)
 
-    # Use Get-NetTCPConnection so the port match is NUMERIC, not substring.
-    # The old `netstat -ano | Select-String ":$Port.*LISTENING"` was a
-    # substring match that accidentally killed processes on ports like
-    # 40961, 14096, 92230, 49612 — Docker Desktop's vpnkit / backend pick
-    # high ephemeral ports that often contain "4096" or "9223" as a
-    # substring, and the watchdog's 5-minute restart was nuking them,
-    # crashing Docker (verified — every Docker crash timestamp lined up
-    # with a watchdog "Service unhealthy; restarting" log entry).
-    $processIds = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+    # Two-layer defense to stop us from killing the wrong process:
+    #   1. Numeric port match via Get-NetTCPConnection (the previous
+    #      substring `netstat | Select-String ":$Port.*LISTENING"` matched
+    #      40961, 14096, 92230 etc.).
+    #   2. Process-name allowlist — even if a process LEGITIMATELY owns
+    #      our target port (e.g. a Docker container publishing 4096 via
+    #      vpnkit), we must not kill it. That happened: the repo's own
+    #      docker-compose.yml publishes 4096, vpnkit binds 4096 on host,
+    #      and Stop-PortProcess murdered vpnkit → Docker stack collapsed.
+    $candidates = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
         ForEach-Object { $_.OwningProcess } |
         Select-Object -Unique
 
-    foreach ($processId in $processIds) {
-        if ($processId) {
-            Write-Host "Stopping process on port $Port (PID $processId)..." -ForegroundColor Yellow
-            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    foreach ($processId in $candidates) {
+        if (-not $processId) { continue }
+        $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
+        if (-not $proc) { continue }
+
+        $name = $proc.ProcessName
+        # Allowlist: our proxy (node) and the OpenCode CLI. Anything else
+        # owns the port for a legit reason — leave it alone.
+        $isOurs = $name -ieq "node" -or $name -ieq "opencode-cli" -or $name -ieq "opencode"
+        if (-not $isOurs) {
+            Write-Host "Port $Port is held by '$name' (PID $processId); skipping — not an opencode process." -ForegroundColor Yellow
+            continue
         }
+
+        Write-Host "Stopping $name on port $Port (PID $processId)..." -ForegroundColor Yellow
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
     }
 }
 
