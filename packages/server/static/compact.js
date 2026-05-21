@@ -1223,6 +1223,115 @@ async function toggleTrust(e) {
   }
 }
 
+// ─── Header overflow menu (⋯) ──────────────────────────────
+// Small dropdown anchored to the moreBtn. Actions: create new session,
+// open the same session in the native SPA, delete session.
+const moreBtn = document.getElementById("moreBtn");
+let moreMenu = null;
+
+function base64urlEncode(str) {
+  // UTF-8 safe — directories may contain CJK or path separators.
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function buildMoreMenu() {
+  const menu = document.createElement("div");
+  menu.className = "header-menu";
+  menu.hidden = true;
+  menu.innerHTML = `
+    <button type="button" data-action="new">+ 新 session</button>
+    <button type="button" data-action="native">在 OpenCode 原生介面打開</button>
+    <button type="button" data-action="delete" class="danger">刪除此 session</button>
+  `;
+  document.body.appendChild(menu);
+  menu.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const action = btn.dataset.action;
+    closeMoreMenu();
+    if (action === "new") doNewSession();
+    else if (action === "native") doOpenNative();
+    else if (action === "delete") doDeleteSession();
+  });
+  return menu;
+}
+
+function openMoreMenu() {
+  if (!moreMenu) moreMenu = buildMoreMenu();
+  const r = moreBtn.getBoundingClientRect();
+  moreMenu.style.top = `${r.bottom + 4}px`;
+  moreMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+  moreMenu.hidden = false;
+  // Defer adding outside-click listener so the current click that opened
+  // the menu does not also close it.
+  setTimeout(() => {
+    document.addEventListener("click", outsideMoreClickHandler);
+    document.addEventListener("keydown", escMoreHandler);
+  }, 0);
+}
+
+function closeMoreMenu() {
+  if (moreMenu) moreMenu.hidden = true;
+  document.removeEventListener("click", outsideMoreClickHandler);
+  document.removeEventListener("keydown", escMoreHandler);
+}
+
+function outsideMoreClickHandler(e) {
+  if (!moreMenu) return;
+  if (moreMenu.contains(e.target) || e.target === moreBtn) return;
+  closeMoreMenu();
+}
+
+function escMoreHandler(e) {
+  if (e.key === "Escape") closeMoreMenu();
+}
+
+if (moreBtn) {
+  moreBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (moreMenu && !moreMenu.hidden) closeMoreMenu();
+    else openMoreMenu();
+  });
+}
+
+function doNewSession() {
+  // POST /c/new-session handles session creation + trust ruleset + 303
+  // redirect — use a form submission so the browser follows automatically.
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = "/c/new-session";
+  document.body.appendChild(form);
+  form.submit();
+}
+
+async function doOpenNative() {
+  try {
+    const s = await api(`/session/${sessionID}`);
+    const dir = s?.directory ?? "";
+    if (!dir) {
+      showToast("此 session 沒有 directory，無法開啟原生介面", "error");
+      return;
+    }
+    const slug = base64urlEncode(dir);
+    window.open(`/${slug}/session/${sessionID}`, "_blank");
+  } catch (err) {
+    showToast("無法取得 session 路徑：" + err.message, "error");
+  }
+}
+
+async function doDeleteSession() {
+  if (!window.confirm("確定要刪除這個 session？此動作無法復原。")) return;
+  try {
+    await api(`/session/${sessionID}`, { method: "DELETE" });
+    window.location.href = "/remote-sessions";
+  } catch (err) {
+    showToast("刪除失敗：" + err.message, "error");
+  }
+}
+
 // ─── Refresh on visibility return ──────────────────────────
 // When the tab is backgrounded (phone locked, switched app) the SSE
 // connection can silently stall without firing onerror. On return we

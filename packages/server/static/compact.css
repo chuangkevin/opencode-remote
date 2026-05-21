@@ -94,6 +94,35 @@ header.app-header {
   padding: 6px 8px;
   cursor: pointer;
 }
+.header-more:active { color: var(--text); }
+
+/* Overflow menu (⋯ dropdown) — anchored absolute below the header-more button */
+.header-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 220px;
+  background: var(--surface-hi);
+  border: 1px solid var(--border-hi);
+  border-radius: 10px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.header-menu[hidden] { display: none; }
+.header-menu button {
+  background: none;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.header-menu button:hover { background: var(--surface); }
+.header-menu button.danger { color: var(--danger); }
+.header-menu button.danger:hover { background: rgba(248, 113, 113, 0.1); }
 
 /* Message scroll area */
 .messages {
