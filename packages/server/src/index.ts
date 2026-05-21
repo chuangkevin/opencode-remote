@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, matchCompactSessionPath } from "./compact/handlers.js";
+import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -782,14 +783,32 @@ function formatTime(timestamp: number): string {
 
 async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
   try {
-    const sessions = (await listSessions())
-      .filter(isUserSession)
+    const [allSessions, pinnedIds] = await Promise.all([
+      listSessions(),
+      listPins(),
+    ]);
+    const pinnedSet = new Set(pinnedIds);
+    const filtered = allSessions.filter(isUserSession);
+    // Pinned first (each group sorted by recency); pinned references that no
+    // longer correspond to a real session are silently dropped here — we do
+    // not auto-prune the file, the next pin/unpin write rewrites it anyway.
+    const pinnedSessions = filtered
+      .filter((s) => pinnedSet.has(s.id))
       .sort((a, b) => b.time.updated - a.time.updated);
-    const items = sessions.map((session) => {
+    const otherSessions = filtered
+      .filter((s) => !pinnedSet.has(s.id))
+      .sort((a, b) => b.time.updated - a.time.updated);
+    const ordered = [...pinnedSessions, ...otherSessions];
+
+    const items = ordered.map((session) => {
       const nativePath = `/${encodeDirSlug(session.directory)}/session/${session.id}`;
       const compactPath = `/c/session/${session.id}`;
       const title = session.title || session.slug || session.id;
-      return `<div class="session">
+      const pinned = pinnedSet.has(session.id);
+      const pinClass = pinned ? "pin-btn pinned" : "pin-btn";
+      const pinLabel = pinned ? "取消釘選" : "釘選";
+      return `<div class="session${pinned ? " is-pinned" : ""}" data-session-id="${session.id}">
+        <button class="${pinClass}" type="button" data-pin-toggle="${session.id}" data-pinned="${pinned ? "1" : "0"}" aria-label="${pinLabel}" title="${pinLabel}">📌</button>
         <a class="session-link" href="${nativePath}">
           <strong>${escapeHtml(title)}</strong>
           <small>${escapeHtml(formatTime(session.time.updated))}</small>
@@ -817,8 +836,12 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
             h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
             .new-btn { background: #6366f1; color: #fff; border: none; border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; text-decoration: none; line-height: 1; }
             .new-btn:active { background: #4f46e5; }
-            .session { position: relative; padding: 8px 10px; margin-bottom: 4px; border: 1px solid #27272a; border-radius: 8px; background: #18181b; }
+            .session { position: relative; padding: 8px 10px 8px 36px; margin-bottom: 4px; border: 1px solid #27272a; border-radius: 8px; background: #18181b; }
             .session:active { background: #1f1f23; }
+            .session.is-pinned { border-color: #4338ca; background: #1a1827; }
+            .pin-btn { position: absolute; top: 50%; left: 6px; transform: translateY(-50%); width: 24px; height: 24px; padding: 0; background: none; border: 0; cursor: pointer; opacity: 0.35; font-size: 13px; line-height: 1; color: inherit; filter: grayscale(1); }
+            .pin-btn.pinned { opacity: 1; filter: none; }
+            .pin-btn:active { transform: translateY(-50%) scale(0.92); }
             .session-link { display: flex; align-items: baseline; gap: 8px; color: inherit; text-decoration: none; padding-right: 76px; min-width: 0; }
             .session-link strong { flex: 1; font-size: 13.5px; font-weight: 500; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: #f4f4f5; }
             .session-link small { flex-shrink: 0; font-size: 11px; color: #71717a; font-weight: normal; }
@@ -835,12 +858,74 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
             </form>
           </header>
           ${items || "<div class='empty'>目前沒有工作階段</div>"}
+          <script>
+            document.addEventListener("click", async function (e) {
+              const btn = e.target.closest("[data-pin-toggle]");
+              if (!btn) return;
+              e.preventDefault();
+              e.stopPropagation();
+              const id = btn.dataset.pinToggle;
+              const wasPinned = btn.dataset.pinned === "1";
+              btn.disabled = true;
+              try {
+                const r = await fetch("/c/pins/" + id, { method: wasPinned ? "DELETE" : "POST" });
+                if (!r.ok) throw new Error("pin toggle failed: " + r.status);
+                // Re-fetch the page to get the canonical sort order so the
+                // user immediately sees the pinned item bubble up.
+                window.location.reload();
+              } catch (err) {
+                btn.disabled = false;
+                console.error(err);
+                alert("釘選操作失敗：" + err.message);
+              }
+            });
+          </script>
         </body>
       </html>`);
   } catch (err) {
     console.error("[opencode-remote] failed to render remote sessions:", err);
     res.writeHead(500, { "Cache-Control": "no-store" });
     res.end("Failed to load sessions");
+  }
+}
+
+async function handleListPins(res: http.ServerResponse): Promise<void> {
+  try {
+    const ids = await listPins();
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-OpenCode-Remote": "true",
+    });
+    res.end(JSON.stringify(ids));
+  } catch (err) {
+    console.error("[opencode-remote] listPins failed:", err);
+    res.writeHead(500, { "Cache-Control": "no-store" });
+    res.end("Failed to list pins");
+  }
+}
+
+async function handlePinSession(id: string, res: http.ServerResponse): Promise<void> {
+  try {
+    await pinSession(id);
+    res.writeHead(204, { "Cache-Control": "no-store", "X-OpenCode-Remote": "true" });
+    res.end();
+  } catch (err) {
+    console.error(`[opencode-remote] pin ${id} failed:`, err);
+    res.writeHead(500, { "Cache-Control": "no-store" });
+    res.end("Failed to pin");
+  }
+}
+
+async function handleUnpinSession(id: string, res: http.ServerResponse): Promise<void> {
+  try {
+    await unpinSession(id);
+    res.writeHead(204, { "Cache-Control": "no-store", "X-OpenCode-Remote": "true" });
+    res.end();
+  } catch (err) {
+    console.error(`[opencode-remote] unpin ${id} failed:`, err);
+    res.writeHead(500, { "Cache-Control": "no-store" });
+    res.end("Failed to unpin");
   }
 }
 
@@ -942,6 +1027,22 @@ const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/c/new-session") {
     void handleCompactNewSession(res);
     return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && req.url === "/c/pins") {
+    void handleListPins(res);
+    return;
+  }
+  const pinMatch = /^\/c\/pins\/(ses_[A-Za-z0-9]+)\/?$/.exec(req.url ?? "");
+  if (pinMatch) {
+    if (req.method === "POST") {
+      void handlePinSession(pinMatch[1], res);
+      return;
+    }
+    if (req.method === "DELETE") {
+      void handleUnpinSession(pinMatch[1], res);
+      return;
+    }
   }
 
   if ((req.method === "GET" || req.method === "HEAD") && req.url === "/") {

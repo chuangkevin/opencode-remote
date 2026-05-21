@@ -1242,6 +1242,7 @@ function buildMoreMenu() {
   menu.className = "header-menu";
   menu.hidden = true;
   menu.innerHTML = `
+    <button type="button" data-action="pin" data-pinned="0">📌 釘選此 session</button>
     <button type="button" data-action="new">+ 新 session</button>
     <button type="button" data-action="native">在 OpenCode 原生介面打開</button>
     <button type="button" data-action="delete" class="danger">刪除此 session</button>
@@ -1252,11 +1253,40 @@ function buildMoreMenu() {
     if (!btn) return;
     const action = btn.dataset.action;
     closeMoreMenu();
-    if (action === "new") doNewSession();
+    if (action === "pin") doTogglePin();
+    else if (action === "new") doNewSession();
     else if (action === "native") doOpenNative();
     else if (action === "delete") doDeleteSession();
   });
   return menu;
+}
+
+async function refreshPinMenuLabel() {
+  if (!moreMenu) return;
+  const btn = moreMenu.querySelector('[data-action="pin"]');
+  if (!btn) return;
+  try {
+    const pins = await api("/c/pins");
+    const pinned = Array.isArray(pins) && pins.includes(sessionID);
+    btn.dataset.pinned = pinned ? "1" : "0";
+    btn.textContent = pinned ? "✕ 取消釘選此 session" : "📌 釘選此 session";
+  } catch (err) {
+    console.warn("refreshPinMenuLabel:", err);
+  }
+}
+
+async function doTogglePin() {
+  if (!moreMenu) return;
+  const btn = moreMenu.querySelector('[data-action="pin"]');
+  const wasPinned = btn?.dataset.pinned === "1";
+  try {
+    await api(`/c/pins/${encodeURIComponent(sessionID)}`, {
+      method: wasPinned ? "DELETE" : "POST",
+    });
+    showToast(wasPinned ? "已取消釘選" : "已釘選");
+  } catch (err) {
+    showToast("釘選操作失敗：" + err.message, "error");
+  }
 }
 
 function openMoreMenu() {
@@ -1265,6 +1295,9 @@ function openMoreMenu() {
   moreMenu.style.top = `${r.bottom + 4}px`;
   moreMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
   moreMenu.hidden = false;
+  // Fetch fresh pin state on every open so the label is correct even if
+  // another device toggled it.
+  refreshPinMenuLabel();
   // Defer adding outside-click listener so the current click that opened
   // the menu does not also close it.
   setTimeout(() => {
