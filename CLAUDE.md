@@ -9,8 +9,12 @@
 ## 架構
 
 ```
-瀏覽器 → proxy (port 9223) → opencode serve (port 4096, localhost only)
+瀏覽器 → proxy (port 9223) → opencode serve (port 4196, localhost only)
 ```
+
+> **Port 注意**：OpenCode CLI 預設是 4096，但這個 repo 的 `docker-compose.yml`
+> 也 publish 4096，會跟本機 `opencode-cli` 衝。`.env` 把 `OPENCODE_PORT` 改成
+> **4196** 避開。詳見「重大修復記錄 / 2026-05-21」。
 
 `packages/server/src/index.ts` — proxy 主程式：
 - `GET /` → 302 redirect 到最近 session 的完整 SPA URL
@@ -247,9 +251,9 @@ curl http://localhost:4096/global/health
 ## 設定（`.env`）
 
 ```env
-OPENCODE_DIRECTORY=D:\Projects\_HomeProject   # OpenCode 工作目錄
+OPENCODE_DIRECTORY=D:/Projects/_HomeProject   # OpenCode 工作目錄（正斜線）
 PORT=9223                                       # proxy 對外 port
-OPENCODE_PORT=4096                              # OpenCode 內部 port
+OPENCODE_PORT=4196                              # OpenCode 內部 port（4096 已被本機 Docker 容器占用）
 SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 ```
 
@@ -270,7 +274,8 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 
 **Health check 確認啟動成功（AI 可執行）：**
 ```powershell
-curl http://localhost:4096/global/health   # 應返回 {"healthy":true,...}
+curl http://localhost:9223/remote-health   # 應返回 JSON 含 "healthy": true（最可靠）
+curl http://localhost:4196/global/health   # 直接打 opencode-cli（如果 .env 沒改就是 4096）
 curl http://localhost:9223/                # 應返回 302 redirect
 ```
 
@@ -281,6 +286,96 @@ curl http://localhost:9223/                # 應返回 302 redirect
 - Volume `opencode_data:/root/.opencode` 持久化 session 資料
 - Bind mount `${WORKSPACE_PATH}:/workspace` 讓 OpenCode 存取工作目錄
 - Healthcheck: `GET /global/health`
+
+> **⚠️ Port 衝突**：本 repo 的 `docker-compose.yml` publish `4096:4096`，跟本機
+> `opencode-cli` 的預設 port 撞。如果同時跑「本機 opencode-cli + Docker compose」，
+> 兩邊會搶 host port 4096。解法：本機 opencode-cli 改用 `.env` 的
+> `OPENCODE_PORT=4196`（已是目前 default），Docker 留 4096。詳見後面「重大修復記錄」。
+
+## Compact UI（手機 / 小螢幕用 frontend）
+
+OpenCode 原生 SPA 在小螢幕橫向（iPhone landscape、Anbernic RG DS dual screen）
+不可用，且關掉瀏覽器分頁就中斷 AI 對話。Compact UI 解決這兩個問題 — server-side
+HTML + 單一 vanilla ES module，無 build step。
+
+### 路徑
+
+| 路徑 | 用途 |
+|---|---|
+| `GET /remote-sessions` | session 列表頁（含 📌 釘選、Compact pill、新 session 按鈕）|
+| `GET /c/session/:id` | compact 對話 UI 主畫面 |
+| `GET /c/static/<file>` | 服 `compact.js` / `compact.css` / `marked.min.js`（白名單檢查）|
+| `POST /c/new-session` | 新建 session（**不帶 title** 讓 OpenCode 自動命名）+ 套 trust ruleset + 303 redirect |
+| `GET /c/pins` | 列出已釘選的 sessionID（從 `<OPENCODE_DIRECTORY>/.opencode-remote/pins.json` 讀）|
+| `POST /c/pins/:id` | 釘選（idempotent，原子寫檔）|
+| `DELETE /c/pins/:id` | 取消釘選（idempotent）|
+
+### 主要檔案
+
+| File | 內容 |
+|---|---|
+| `packages/server/src/compact/handlers.ts` | 三條 route：static / session shell / new-session |
+| `packages/server/src/compact/shell.ts` | session 頁的 HTML template |
+| `packages/server/src/compact/trust.ts` | session permission allowlist + `ensureSessionTrust()` |
+| `packages/server/src/compact/pins.ts` | file-backed pin store（atomic tmp + rename）|
+| `packages/server/static/compact.js` | 整個 client（state / SSE / send / queue / pins / question UI ...）|
+| `packages/server/static/compact.css` | 樣式 |
+| `packages/server/static/marked.min.js` | vendored `marked@12.0.2` 渲染 markdown |
+
+### Phase 2 已實作的功能
+
+**1. AI 問答互動（`question.asked` / `permission.asked`）**
+- `question.asked` SSE → 在 chat 中渲染卡片（每子問題顯示標題 + markdown + 選項按鈕）。
+  單選按一下就送、多選有「送出」+「略過」。
+- `permission.asked` SSE → 自動 POST `/permission/:id/reply {reply:"always"}` —
+  使用者預設不會看到任何權限對話。trust mode PATCH 已涵蓋多數 pattern，這層是保險。
+- 路徑：`GET /permission` / `POST /permission/:id/reply` / `GET /question` /
+  `POST /question/:id/reply` / `POST /question/:id/reject`
+- Reply schema 已對齊上游 `sst/opencode src/{permission,question}/index.ts`
+
+**2. Optimistic user message + AI thinking indicator**
+- 按 send 當下立刻在 chat 區插入 `data-optimistic="true"` 的 Kevin 訊息（pseudo-render），
+  真正 SSE `message.updated` 一到就 `removeOptimisticUserMessages()`。
+- Assistant message 還沒 part 進來時顯示三點脈動動畫（`.thinking-indicator`），
+  第一個 text delta 到 `applyDelta()` 就移除。
+
+**3. ⋯ Header overflow menu**
+- 右上 ⋯ 開 dropdown：「📌 釘選此 session / + 新 session / 在 OpenCode 原生介面打開 / 刪除此 session」
+- 「在原生介面打開」走 base64url(directory)/session/:id 格式，跟 proxy 的 `/` redirect 一致
+- 「刪除」會 confirm → `DELETE /session/:id` → 跳回 `/remote-sessions`
+- 「釘選」狀態每次開選單時 `GET /c/pins` 重抓，多裝置不會 stale
+
+**4. Pin sessions**
+- File-backed：`<OPENCODE_DIRECTORY>/.opencode-remote/pins.json`，atomic tmp+rename
+- 跨重啟保留；不是 client-only 所以多裝置共享同一份
+- `/remote-sessions` 把 pinned 排在 unpinned 之前，各自再依 `time.updated` 排序
+- 每張卡片左側 📌 button：淡灰=未釘 / 純色=已釘，點一下 toggle
+
+**5. Prompt queue（streaming 中可繼續送）**
+- AI 回應期間（`isStreaming === true`）submit 進 queue 不立刻送
+- 持久化：`localStorage["compact-queue:<sessionID>"]` = `[{id, text, attachments, model, queuedAt}]`
+- 排隊訊息顯示在 chat（灰底 `⏳ 已排入佇列` + × 移除按鈕），reload 從 storage 重畫
+- SSE `session.idle` / `session.status idle` → `drainQueueIfIdle()` 依序 POST `/prompt_async`
+- Boot 時若 queue 非空，2 秒後 fallback drain（讓 SSE 有時間把 busy 狀態送來）
+- Action button 拆兩顆：▶ send（一律送出/排入），■ stop（streaming 時才出現，只 abort 不清 queue）
+
+**6. Session auto-title**
+- `POST /c/new-session` 不帶 `title` 欄位（之前寫 `"compact"` 把 OpenCode 自動命名擋掉了）
+- OpenCode `isDefaultTitle()` 只認 `"New session - <timestamp>"` pattern，符合才會跑 LLM 改名
+- 舊的 "compact" session 不會 retroactive 改 — 要靠 ⋯ menu 改名或手動 PATCH
+
+**7. Trust mode（auto-enable on every compact session）**
+- `handleCompactSession` 載入時 fire-and-forget `ensureSessionTrust(sessionID)`
+- PATCH 一組 allow-most-deny-destructive 規則（見 `trust.ts`）
+- 使用者第一個 prompt 就不會被擋
+
+### 已知限制（compact UI）
+
+- **Per-device queue**：localStorage 不跨裝置同步，多 tab 同 session 可能各 drain 一次造成重送
+- **Model 選擇不跨 reload 持久化**：OpenCode v1.14.30 沒把 `model`/`variant` 寫回 `session.model`，每次 reload 回 workspace default
+- **Trust mode `permission` array 是 append-only**：toggle off 用 `[bash * ask, edit * ask]` 末位覆寫；陣列會越長
+- **無語法高亮 / 分頁 / 工具呼叫展開** — 為保持 bundle 小
+- **無自動 reload script**：HTML 修改會破壞 chunked encoding → Caddy 斷線，無解（見「2026-04-22 Caddy HTTPS 修復」）
 
 ## OpenSpec（規格來源）
 
@@ -416,15 +511,29 @@ head -20 packages/server/dist/index.js
 
 ### Port 衝突
 
-如果 `npm start` 失敗並顯示 port 已被占用：
-```bash
-# Windows
-netstat -ano | findstr :9223
-netstat -ano | findstr :4096
-
-# 停止占用 port 的進程
-Stop-Process -Id <PID> -Force
+如果 `start-hidden.ps1` 失敗或 proxy 沒起來：
+```powershell
+# 先用 NUMERIC port 比對找出真正持有者
+Get-NetTCPConnection -LocalPort 9223 -State Listen | ForEach-Object {
+    Get-Process -Id $_.OwningProcess | Select-Object Id, ProcessName, Path
+}
+Get-NetTCPConnection -LocalPort 4196 -State Listen | ForEach-Object {
+    Get-Process -Id $_.OwningProcess | Select-Object Id, ProcessName, Path
+}
 ```
+
+> **不要直接 kill 4096**：本機通常有 Docker 容器 publish 4096。要先確認 ProcessName
+> 是 `node` 或 `opencode-cli` 才能殺。`stop.ps1` 已加 allowlist，碰到不是這兩個名字
+> 會自動跳過 — 詳見「重大修復記錄 / 2026-05-21」。
+
+### Watchdog 觸發頻繁重啟
+
+`opencode-remote-watchdog.log` 一直出現 `Service unhealthy; restarting`：
+
+1. **確認 health check 端點**：`curl http://localhost:9223/remote-health` 應回 200 + `upstreamHealth.healthy: true`。
+2. **確認 ports 沒被 Docker / 其他服務搶走**：見上方 Port 衝突。
+3. **若 watchdog 每幾十分鐘就觸發**：歷史上是 substring port 比對誤殺，已在 `6b46836` + `1441227` 修。檢查 `start.ps1` / `stop.ps1` 是否含 `Get-NetTCPConnection -LocalPort` + process-name allowlist。
+4. **停 watchdog**：`stop.ps1` 預設會 disable scheduled task；`stop.ps1 -KeepWatchdog` 才保留。
 
 ### Caddy Gzip 錯誤導致空白頁面
 
@@ -494,6 +603,56 @@ docker logs caddy 2>&1 | grep 'gzip'
 - `032ba68` — **Runtime 載入修復**：BOM-free `.env`、`Read-EnvLines` 回傳保留、`OPENCODE_DIRECTORY` 正斜線、subagent `color` 改 hex；確認 `GET /config` 完整載入
 
 ## 重大修復記錄
+
+### 2026-05-21: Watchdog 每 5 分鐘把 Docker 殺一次
+
+**症狀：** Docker Desktop 每隔幾十分鐘就 crash 重啟，時間幾乎全部對齊 `opencode-remote-watchdog.log` 的 `Service unhealthy; restarting` 行。
+
+**根本原因鏈（兩層）：**
+
+1. **`start.ps1` / `stop.ps1` 用 substring 比對 netstat 行**：
+   ```powershell
+   netstat -ano | Select-String ":$Port.*LISTENING" | ...
+   ```
+   `:4096` 在字串裡能 match `:40961`、`:14096`、`:49612` 等。Docker Desktop 的 vpnkit / com.docker.backend 分配大量 ephemeral 高 port，任一含 `4096` 或 `9223` 數字串都中。Watchdog 每 5 分鐘觸發一次 `start.ps1 -NoPrepare` → 隨機殺到 Docker 內部 process → Docker 整個 stack 掛。
+
+2. **本機 opencode-cli 預設 port = 4096，跟本 repo 的 `docker-compose.yml` 衝**：
+   `docker compose up` 會起 `opencode-opencode-1` 容器 publish `0.0.0.0:4096->4096/tcp` →
+   host 4096 被 Docker vpnkit 持有。即使把 substring 改成精準比對，`Get-NetTCPConnection -LocalPort 4096` 仍會回 vpnkit 的 PID，`Stop-Process` 一樣殺 Docker。
+
+**修法（兩層防禦）：**
+
+1. **numeric port match**：`netstat | Select-String` → `Get-NetTCPConnection -LocalPort <int> -State Listen`。`LocalPort` 是 int 參數，根治 substring 誤殺。
+
+2. **process name allowlist**：抓到 PID 後再 `Get-Process` 檢查名字，只殺 `node` / `opencode-cli` / `opencode`。其他名字一律 log `Port X held by 'Y' (PID Z); skipping` 跳過。
+
+3. **改用 4196 避開衝突**：`.env` 設 `OPENCODE_PORT=4196`，opencode-cli 不再跟 docker-compose 搶 4096。
+
+**相關 commit：**
+- `6b46836` — substring → numeric (Get-NetTCPConnection)
+- `1441227` — process-name allowlist + `stop.ps1` 從 `.env` 讀 `OPENCODE_PORT`
+
+**驗證證據（2026-05-21）：**
+- watchdog log 從 `15:14:59` 之後沒新 "Service unhealthy" 條目
+- `docker ps` 顯示 `opencode-opencode-1 Up 52 minutes` 跨多次 watchdog 5 分鐘 tick 沒重啟
+- `Get-NetTCPConnection LocalPort=4096` 只回 `com.docker.backend` + `wslrelay`，4196 只回 `opencode-cli`，無交集
+
+**經驗教訓：**
+- PowerShell 用 netstat 字串解析 port 是地雷，永遠用 `Get-NetTCPConnection -LocalPort <int>`
+- Port 殺 process 一定要加 process-name allowlist。本機 dev 常跑各種 service，預設 port 撞機率不低
+- 看 log 對時間軸：每筆 unhealthy + 對齊外部服務 crash time 就是強訊號
+
+### 2026-05-21: Compact UI Phase 2 — 一系列 UX 修補
+
+近期 commit（compact remote frontend 既有完成後）：
+- `cd4a2c6` — AI question UI + permission auto-accept
+- `aac28a4` — Optimistic user message + thinking indicator
+- `a2dacf2` — Header ⋯ overflow menu
+- `93db006` — Pin sessions（file-backed）
+- `4acc2ca` — Auto-title fix（`POST /session` 不帶 title）
+- `0f62ecf` — Prompt queue（localStorage persist + drain on idle）
+
+詳見上方「Compact UI」章節。
 
 ### 2026-05-06: Capability 設定無法載入（三個串聯 bug）
 

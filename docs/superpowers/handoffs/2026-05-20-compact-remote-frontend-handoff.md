@@ -269,3 +269,207 @@ b34c5a2 docs: add compact frontend HTML mockup
 0ffe288 docs: lock visual reference + serve compact mockup via proxy
 c20749f docs: add compact remote frontend implementation plan
 ```
+
+---
+
+## Phase 2 additions (2026-05-21)
+
+After Phase 1 landed, the user exercised the UI and we found a series of
+gaps. All of the following shipped on `origin/main` between
+`bba6f0a` (T13 / iOS Safari fix) and `0f62ecf`:
+
+### 1. AI question UI + always-on permission auto-accept — `cd4a2c6`
+
+**Problem:** The agent could call the `question` tool to ask the user a
+multi-choice question, but compact had no handler — the agent stalled
+forever. Same for `permission.asked` events when trust mode didn't
+cover a pattern.
+
+**Implementation (`packages/server/static/compact.js`):**
+- `permission.asked` → auto POST `/permission/:id/reply {reply:"always"}`,
+  always-on, no UI. Deduped by ID via `_autoAcceptedPermissions` Set.
+- `question.asked` → render an inline card under `els.messages` with
+  per sub-question header + markdown body + option buttons. Single-select
+  submits on first click; multi-select uses a "送出" / "略過" footer.
+  Maps to `POST /question/:id/reply { answers: string[][] }` or
+  `POST /question/:id/reject`.
+- `question.replied` / `question.rejected` mark the card answered/skipped
+  and disable buttons.
+- `drainPendingInteractive()` on boot + visibilitychange to handle
+  events that fired while the tab was closed.
+
+**Schema reference:** verified against upstream
+`sst/opencode src/{permission,question}/index.ts` (commit didn't fork —
+the API matches what's documented in those files).
+
+### 2. Optimistic user message + AI thinking indicator — `aac28a4`
+
+**Problem:**
+- After hitting send, the user's own message stayed invisible for
+  300–800ms until SSE round-tripped. Looked like nothing happened.
+- After assistant `message.updated` arrived but before any `part.delta`
+  fired (reasoning phase), the AI bubble was empty for several seconds.
+  Easy to mistake for a hung agent.
+
+**Implementation:**
+- `renderOptimisticUserMessage()` inserts a Kevin bubble tagged
+  `data-optimistic="true"` synchronously inside `sendMessage()`. Cleaned
+  up when the real user `message.updated` arrives.
+- `renderMessage()` tracks `hasContent`; if assistant message has no
+  text/tool/file parts and `isStreaming` is true, appends three pulsing
+  dots (`.thinking-indicator`). Removed on first `applyDelta()` call.
+- Send-failure path also removes the optimistic placeholder.
+
+### 3. Header ⋯ overflow menu — `a2dacf2`
+
+**Problem:** The `⋯` button in the header was a placeholder mockup
+artifact with no JS handler — looked clickable, did nothing.
+
+**Implementation:**
+- Lazy-built dropdown with 4 items: 📌 Pin / + 新 session / 在 OpenCode 原生介面打開 / 刪除此 session
+- "Native SPA" uses `base64url(TextEncoder.encode(directory))` to
+  produce the same URL format as `handleRootRedirect`
+- "Delete" → `window.confirm` → `DELETE /session/:id` → navigate to `/remote-sessions`
+- Outside-click + Escape close the menu, listeners attached/removed
+  symmetrically so menu state is the only source of truth
+- Pin label refreshes on each open via `GET /c/pins` (label flips
+  between "📌 釘選此 session" and "✕ 取消釘選此 session")
+
+### 4. Pin sessions — `93db006`
+
+**Problem:** OpenCode upstream has no per-session pin (its native SPA's
+`pin`/`unpin` is an internal directory-cache mechanism). We built our own.
+
+**Server-side (`packages/server/src/compact/pins.ts`):**
+- Storage: `<OPENCODE_DIRECTORY>/.opencode-remote/pins.json`,
+  shape `{ "pinned": ["ses_xxx", ...] }`
+- Atomic write via tmp + rename
+- Module-level Set cache, lazy-loaded
+- `listPins()` / `isPinned(id)` / `pinSession(id)` / `unpinSession(id)`
+- ID validation: `/^ses_[A-Za-z0-9]+$/`
+
+**Routes (`packages/server/src/index.ts`):**
+- `GET    /c/pins`            → string[]
+- `POST   /c/pins/:sessionID` → 204 (idempotent)
+- `DELETE /c/pins/:sessionID` → 204 (idempotent)
+- Regex guard on URL prevents path-segment shenanigans
+
+**UI integration:**
+- `/remote-sessions`: pinned sessions partitioned to top, `.is-pinned`
+  class for visual highlight, inline script POSTs/DELETEs + reloads
+- Compact `⋯` menu: pin/unpin toggle (see #3)
+
+**Verified end-to-end before commit:**
+- POST twice → idempotent, file has single entry
+- DELETE non-pinned → 204, no-op
+- `/remote-sessions` shows pinned card on top with `.is-pinned`
+- Click pin → POST → reload → reordered
+- Proxy stop+start → `pins.json` reloaded, state preserved
+- No regression on other endpoints
+
+### 5. Auto-title fix — `4acc2ca`
+
+**Problem:** `handleCompactNewSession` POSTed
+`{ title: "compact" }` → OpenCode's auto-titling never ran. Sessions
+stayed called "compact" forever.
+
+**Root cause:** OpenCode's `session.ts isDefaultTitle()` only triggers
+LLM-generated titles when the current title matches
+`"New session - YYYY-MM-DDTHH:MM:SS.sssZ"`. Any custom title is treated
+as user intent and left alone.
+
+**Fix:** POST `{}` (empty body) instead. OpenCode applies its own
+timestamp default, then upgrades it after the first exchange.
+
+**Verified:** new session via `/c/new-session` returns title=
+`"New session - 2026-05-21T05:33:26.207Z"` (default pattern, auto-title eligible).
+
+**Limitation:** old "compact"-titled sessions are not retroactively
+auto-titled. User has to rename via ⋯ menu or PATCH the title manually.
+
+### 6. Watchdog + port-killing safety — `6b46836` + `1441227`
+
+**Problem (not strictly compact, but adjacent):** Docker Desktop
+crashed every few tens of minutes. Watchdog log timestamps lined up
+exactly with `Service unhealthy; restarting` lines.
+
+**Root cause (two layers):**
+1. `start.ps1` / `stop.ps1` used `netstat | Select-String ":$Port.*LISTENING"` —
+   substring match. `:4096` matched `:40961` / `:14096` / `:49612` etc.
+   Docker Desktop's vpnkit picks random high ephemeral ports, ones
+   containing "4096" or "9223" as substring got nuked.
+2. This repo's own `docker-compose.yml` publishes 4096 — same port as
+   the default `opencode-cli`. Even numeric matching would correctly
+   identify and kill Docker's vpnkit binding port 4096.
+
+**Fixes:**
+- `6b46836`: substring → `Get-NetTCPConnection -LocalPort <int> -State Listen`
+- `1441227`: added process-name allowlist (only kill `node` /
+  `opencode-cli` / `opencode`); `stop.ps1` now reads `OPENCODE_PORT`
+  from `.env` instead of hardcoding 4096
+- User set `OPENCODE_PORT=4196` in `.env` to sidestep the port conflict
+  entirely
+
+**Verified:** Docker `Up XX minutes` kept rising across multiple
+watchdog ticks. `Get-NetTCPConnection LocalPort=4096` returned only
+`com.docker.backend` + `wslrelay`; 4196 returned only `opencode-cli`.
+
+### 7. Prompt queue — `0f62ecf`
+
+**Problem:** While AI was responding, the send button doubled as Stop
+and there was no way to queue follow-up prompts. User had to wait for
+each response to complete.
+
+**Implementation:**
+- Action button stays as ▶ "send" regardless of streaming state.
+- New ■ Stop button (in shell.ts) shown only while `isStreaming === true`.
+- `sendMessage()` splits into thin entry point + `sendNow()`. When
+  streaming, prompt is appended to the queue instead of POSTed.
+- Storage: `localStorage["compact-queue:<sessionID>"]`,
+  shape `[{ id, text, attachments, model, queuedAt }, ...]`
+- Queued items render inline as `.msg.queued` with `⏳ 已排入佇列` header
+  and × remove button. Muted styling (opacity 0.72 + left border).
+- `drainQueueIfIdle()` runs on `session.idle` / `session.status idle`
+  SSE events. Pops head, calls `sendNow()`. If POST fails, item is
+  put back at head for next retry. `_draining` flag prevents re-entry.
+- Boot + visibilitychange: queue items re-rendered from localStorage.
+  Boot also schedules a +2s fallback drain attempt to handle the case
+  where AI was idle when the tab loaded but no idle event arrives.
+- `loadHistory()` clears `queueNodes` alongside other DOM-node caches.
+
+**Verified end-to-end via Playwright on a fresh session:**
+1. Send first prompt → AI replies "ack"
+2. While streaming, click ▶ twice with different text → both render as
+   queued; both persist to localStorage
+3. AI completes → drain auto-sends queued ONE → AI replies "ack"
+4. Idle again → drain auto-sends queued TWO → AI replies "ack"
+5. End state: chat has 3 Kevin/AI pairs, queue empty, ■ Stop hidden
+
+**Known limitations:**
+- localStorage isn't synced across browsers → per-device queue
+- Two open tabs of same session may both drain head → duplicate sends
+- Stop button aborts in-flight response but leaves queue intact (user
+  removes items individually with ×)
+
+### File touch summary (Phase 2)
+
+| File | New / Modified |
+|---|---|
+| `packages/server/src/compact/handlers.ts` | M (auto-title body change) |
+| `packages/server/src/compact/pins.ts` | **N** |
+| `packages/server/src/compact/shell.ts` | M (added `stopBtn`) |
+| `packages/server/src/index.ts` | M (`/c/pins/*` routes + `/remote-sessions` pin partition) |
+| `packages/server/static/compact.js` | M (large: question UI, queue, ⋯ menu, optimistic, thinking) |
+| `packages/server/static/compact.css` | M (queued styling, question card, thinking dots, dropdown) |
+| `start.ps1` / `stop.ps1` | M (numeric port + allowlist) |
+| `.env` | M (`OPENCODE_PORT=4196`) — local only, gitignored |
+
+### Phase 2 known gaps (left for later)
+
+- Cross-device queue sync (would need server-side queue endpoint)
+- Multi-tab drain coordination (broadcast channel or server-side lock)
+- Auto-title retroactive backfill for old "compact" sessions
+- Pin order within pinned group (currently `time.updated` desc; could
+  honor pin time order from `pins.json` array order)
+- Question UI custom answer text input (`custom: true` field) — not
+  rendered; only listed options are clickable

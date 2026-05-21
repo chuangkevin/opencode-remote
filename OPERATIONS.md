@@ -27,9 +27,9 @@ cd D:\GitClone\_HomeProject\opencode-remote
 啟動後約 10 秒，執行以下 health check：
 
 ```powershell
-# 1. 確認 OpenCode 本身健康
-curl http://localhost:4096/global/health
-# 預期：{"healthy":true,"version":"1.4.3"}
+# 1. 確認 proxy 健康（最可靠 — 內含 upstream 檢查）
+curl http://localhost:9223/remote-health
+# 預期：{"proxy":"opencode-remote","remotePort":9223,"upstream":"http://127.0.0.1:4196","upstreamHealth":{"healthy":true,...}}
 
 # 2. 確認 proxy 正常轉導
 curl http://localhost:9223/
@@ -37,6 +37,10 @@ curl http://localhost:9223/
 ```
 
 兩個都正常就代表服務完全就緒。
+
+> **Port 提醒**：本機 OpenCode CLI 預設用 **4196**（不是 4096），因為 4096 已被
+> 本 repo 的 `docker-compose.yml` 容器占用。`.env` 的 `OPENCODE_PORT` 控制；
+> 直接打 `http://localhost:4196/global/health` 可以驗證 upstream。詳見「故障排除 / Docker 容器跟 OpenCode 搶 port」。
 
 ### 手機工作階段列表
 
@@ -79,7 +83,8 @@ cd D:\GitClone\_HomeProject\opencode-remote
 .\stop.ps1
 ```
 
-`stop.ps1` 會同時停止 proxy (port 9223) 和 OpenCode (port 4096) 兩個進程。
+`stop.ps1` 會同時停止 proxy (port 9223) 和 OpenCode (port 從 `.env` `OPENCODE_PORT` 讀，預設 4196)。
+殺 process 前有 **process-name allowlist 防呆** — 只殺 `node` / `opencode-cli` / `opencode`，碰到其他持有者（例如 Docker vpnkit）會 log `skipping` 跳過。
 預設也會停用 `opencode-remote-watchdog`，避免手動停止後被自動拉起。若要測試自動重啟，使用 `.\stop.ps1 -KeepWatchdog`。
 
 ### 自動重啟 watchdog
@@ -99,11 +104,16 @@ Get-ScheduledTask -TaskName opencode-remote-watchdog
 
 watchdog 每 5 分鐘檢查：
 
-- `http://127.0.0.1:4096/global/health` 必須回 `healthy: true`
-- `http://127.0.0.1:9223/` 必須回 `200` 或 `302`
+- `http://127.0.0.1:9223/remote-health` 必須回 `200` 且 `upstreamHealth.healthy === true`
+- `http://127.0.0.1:9223/remote-sessions` 必須回 `200`
 
 任一檢查失敗時，會用 `start.ps1 -NoPrepare` 在背景重啟服務。紀錄寫入 `opencode-remote-watchdog.log`。
 排程透過 `run-watchdog-hidden.vbs` 啟動隱藏 PowerShell，不應跳出 console 視窗。
+
+> **歷史地雷（2026-05-21 已修）**：舊版 `start.ps1` 用 `netstat | Select-String ":<port>.*LISTENING"`
+> 做字串比對，`:4096` 在字串中能 match `:40961` / `:14096` 等 — Docker Desktop 的
+> 高位 ephemeral port 撞到就被當作 opencode 殺掉，每 5 分鐘觸發一次 Docker crash。
+> 修法：改用 `Get-NetTCPConnection -LocalPort <int>` + process-name allowlist。詳見「故障排除」。
 
 如果需要用 PID 手動停止（例如 start-hidden.ps1 輸出的 PID）：
 
@@ -116,16 +126,26 @@ taskkill /F /PID <PID>
 ### 完整 Health Check
 
 ```powershell
-# OpenCode health（核心服務）
-curl http://localhost:4096/global/health
-# 預期: {"healthy":true,"version":"1.4.3"}
+# 推薦：打 proxy 的 remote-health，內含 upstream 檢查
+curl http://localhost:9223/remote-health
+# 預期: {"proxy":"opencode-remote","upstream":"http://127.0.0.1:4196","upstreamHealth":{"healthy":true,...}}
 
-# Proxy health（確認轉導正常）
+# 直接打 opencode-cli（OPENCODE_PORT 從 .env 讀；預設 4196）
+curl http://localhost:4196/global/health
+# 預期: {"healthy":true,"version":"1.x.x"}
+
+# Proxy 根路徑（轉導測試）
 curl http://localhost:9223/
-# 預期: 302 redirect 到 /<base64(dir)>/session/<id>
+# 預期: 302 redirect 到 /<base64(dir)>/session/<id> 或 /remote-sessions
+
+# Compact UI 三個關鍵端點
+curl -o /dev/null -w "%{http_code}\n" http://localhost:9223/remote-sessions
+curl -o /dev/null -w "%{http_code}\n" http://localhost:9223/c/static/compact.js
+curl http://localhost:9223/c/pins
+# 預期: 200 / 200 / JSON 陣列（已釘選的 sessionID）
 
 # OpenCode instance config（確認 MCP 不是只載到 user-level config）
-curl http://localhost:4096/config
+curl http://localhost:4196/config
 # 預期: mcp 包含 filesystem / git / fetch connected；github 無 token 時 disabled；不包含 pencil
 
 # MCP 狀態摘要
@@ -134,17 +154,23 @@ opencode mcp list
 
 # 外網訪問（需要 Tailscale 和 Caddy 正常）
 curl -L https://opencode.sisihome.org/
-# 預期: 完整 HTML（約 59 行）
+# 預期: 完整 HTML
 ```
 
 ### 檢查端口是否在監聽
 
 ```powershell
-netstat -ano | findstr :9223   # proxy
-netstat -ano | findstr :4096   # OpenCode
+# 用 NUMERIC 比對，不要用 netstat | findstr 字串
+Get-NetTCPConnection -LocalPort 9223 -State Listen   # proxy (node)
+Get-NetTCPConnection -LocalPort 4196 -State Listen   # OpenCode CLI（或 .env 設的 port）
+
+# 確認持有者名字
+Get-NetTCPConnection -LocalPort 9223 -State Listen | ForEach-Object {
+    Get-Process -Id $_.OwningProcess | Select-Object Id, ProcessName
+}
 ```
 
-兩個端口都應顯示 LISTENING 狀態。
+兩個端口都應有持有者，名字應為 `node`（9223）和 `opencode-cli`（4196）。
 
 ## 修改代碼後的流程
 
@@ -178,19 +204,80 @@ curl http://localhost:4096/global/health
 
 ### 問題: Port 已被占用
 
-**原因:** 之前的進程未正確關閉
+**原因:** 之前的進程未正確關閉，或別的服務在用我們的 port
 
 **解決:**
 ```powershell
-# 找出占用端口的進程
-netstat -ano | findstr :9223
-netstat -ano | findstr :4096
+# 用 NUMERIC port 比對找出真正持有者（不要用 netstat | findstr 字串）
+Get-NetTCPConnection -LocalPort 9223 -State Listen | ForEach-Object {
+    Get-Process -Id $_.OwningProcess | Select-Object Id, ProcessName, Path
+}
+Get-NetTCPConnection -LocalPort 4196 -State Listen | ForEach-Object {
+    Get-Process -Id $_.OwningProcess | Select-Object Id, ProcessName, Path
+}
 
-# 強制終止進程 (替換 <PID> 為實際進程 ID)
-taskkill /F /PID <PID>
+# 只有當 ProcessName 是 node / opencode-cli / opencode 才能殺
+# 如果是其他 (例如 com.docker.backend, vpnkit, wslrelay) 千萬不要殺 — 那是 Docker
+Stop-Process -Id <PID> -Force
 
-# 重新啟動
+# 或乾脆走 stop.ps1，它已內建 allowlist 防呆
+.\stop.ps1
 .\start-hidden.ps1
+```
+
+### 問題: Docker 容器跟 OpenCode 搶 port
+
+**症狀:** `start-hidden.ps1` 失敗、`/remote-health` 回 502、Docker 容器無法 bind 4096，或 Docker Desktop 反覆 crash。
+
+**原因:** 本 repo 的 `docker-compose.yml` 在 `0.0.0.0:4096->4096/tcp` publish port，跟 OpenCode CLI 預設 4096 衝突。
+
+**解決:**
+```powershell
+# 確認衝突方
+Get-NetTCPConnection -LocalPort 4096 -State Listen | ForEach-Object {
+    Get-Process -Id $_.OwningProcess | Select-Object Id, ProcessName
+}
+# 同時看到 com.docker.backend + opencode-cli 兩個就代表撞了
+
+# 解法 A（已採用）：本機 opencode-cli 改用 4196
+# 編輯 .env，把 OPENCODE_PORT 改成 4196，然後重啟
+.\stop.ps1
+.\start-hidden.ps1
+
+# 解法 B：不跑 docker compose
+docker compose down
+```
+
+### 問題: Watchdog 每幾分鐘觸發重啟（或 Docker 反覆 crash）
+
+**症狀:** `opencode-remote-watchdog.log` 一直出現 `Service unhealthy; restarting`，或 Docker Desktop 反覆重啟，crash 時間幾乎全部對齊 watchdog log 條目。
+
+**歷史 root cause（2026-05-21 已修）:**
+1. `start.ps1` / `stop.ps1` 用 `netstat | Select-String ":<port>.*LISTENING"` 字串比對 — `:4096` 在字串裡能 match `:40961` / `:14096`，誤殺 Docker 的高位 ephemeral port
+2. 本 repo `docker-compose.yml` 跟 opencode-cli 搶 host 4096 — 即使 numeric 比對也會精準殺到 Docker vpnkit
+
+**現在的防禦（兩層）:**
+- `Get-NetTCPConnection -LocalPort <int>` (numeric, 不會 substring 誤中)
+- process-name allowlist (只殺 `node` / `opencode-cli` / `opencode`，碰到其他 log skipping 跳過)
+
+**檢查方式:**
+```powershell
+# Watchdog 排程狀態
+Get-ScheduledTask -TaskName 'opencode-remote-watchdog' | Get-ScheduledTaskInfo
+
+# 最近 watchdog log
+Get-Content opencode-remote-watchdog.log -Tail 10
+
+# 殺 port 時是否有 allowlist 訊息
+.\stop.ps1
+# 看 output 是否有 "skipping — not an opencode process" 表示有別人占用
+```
+
+**緊急停用 watchdog（不再自動重啟）:**
+```powershell
+Disable-ScheduledTask -TaskName 'opencode-remote-watchdog'
+# 或
+.\stop.ps1   # 預設會 disable watchdog
 ```
 
 ### 問題: OpenCode 立即退出 (exit code 0 或 1)
@@ -246,14 +333,15 @@ OPENCODE_CLI_PATH=C:\path\to\opencode-cli.exe
 服務從 `.env` 自動載入設定（`npm start` / `npm run dev` 已設定 `--env-file`）：
 
 ```env
-# OpenCode 工作目錄 — 決定要顯示哪個目錄的 sessions
-OPENCODE_DIRECTORY=D:\GitClone\_HomeProject
+# OpenCode 工作目錄 — 決定要顯示哪個目錄的 sessions（建議用正斜線）
+OPENCODE_DIRECTORY=D:/Projects/_HomeProject
 
 # Proxy 對外 port（瀏覽器訪問的 port）
 PORT=9223
 
 # OpenCode 內部 port（僅 localhost）
-OPENCODE_PORT=4096
+# 4096 已被本 repo docker-compose.yml 占用 → 改用 4196 避開
+OPENCODE_PORT=4196
 
 # Session 刷新間隔（毫秒）— 多久重新抓最新 session
 SESSION_REFRESH_INTERVAL_MS=30000
@@ -341,12 +429,36 @@ opencode.sisihome.org (DNS: 100.126.226.79)
     ↓ Tailscale
 RPi Caddy (100.79.242.43:443)
     ↓ HTTP Reverse Proxy
-Windows opencode-remote (100.83.112.20:9223)
+Windows opencode-remote (100.83.112.20:9223)            ← node proxy
     ↓ HTTP Proxy
-OpenCode Server (127.0.0.1:4096)
+OpenCode Server (127.0.0.1:4196)                         ← opencode-cli
     ↓ 文件系統
-D:\GitClone\_HomeProject
+D:\Projects\_HomeProject
+
+(Docker compose 容器另外跑在 4096:4096，跟 opencode-cli 各走各的)
 ```
+
+## Compact UI（手機 / 小螢幕用）
+
+OpenCode 原生 SPA 在手機橫向 / 雙螢幕不可用，因此提供獨立 compact frontend。
+
+**進入點：**
+- `https://opencode.sisihome.org/remote-sessions` — session 列表（有 📌 釘選、Compact pill）
+- 點 Compact pill → `/c/session/:id` — 精簡對話 UI
+
+**功能（按主題）：**
+| 主題 | 行為 |
+|---|---|
+| 對話 | Markdown 渲染 / 圖片附件 / fire-and-forget 送出 |
+| 串流 | SSE live update / sticky scroll / 三點脈動「思考中」/ optimistic user message |
+| Stop / Queue | streaming 時：紅色 ■ stop 中止 AI；▶ send 變排隊（localStorage 持久化，跨 reload）|
+| AI 提問 | `question.asked` 卡片 + 選項按鈕（單選自動送、多選有送出/略過）|
+| 權限 | `permission.asked` 自動 allow（trust mode + always-on 兜底）|
+| Session 管理 | 標題 inline 編輯 / ⋯ menu (釘選 / 新建 / 原生 SPA / 刪除) |
+| 釘選 | 跨重啟 + 跨裝置（檔案：`<OPENCODE_DIRECTORY>/.opencode-remote/pins.json`）|
+| 模型 | 點 header chip 開 picker（provider × model × variant）|
+
+**詳細：** 見 `CLAUDE.md` 的「Compact UI」章節。
 
 ## 相關文件
 
@@ -356,6 +468,12 @@ D:\GitClone\_HomeProject
 - `.env` - 環境變量配置
 
 ## 更新歷史
+
+### 2026-05-21
+- **Watchdog 殺 Docker 兇案修復**：`start.ps1` / `stop.ps1` 殺 process 改用 `Get-NetTCPConnection -LocalPort <int>` (numeric port) + process-name allowlist (`node` / `opencode-cli` / `opencode`)。歷史上 substring 比對誤殺 Docker 的高位 ephemeral port，每 5 分鐘 watchdog tick → Docker crash
+- **OPENCODE_PORT 預設改 4196**：避開 `docker-compose.yml` 容器佔用的 4096
+- **Compact UI Phase 2**：AI question UI / permission auto-accept / optimistic user message / thinking indicator / ⋯ overflow menu / pin sessions / prompt queue / auto-title fix
+- Commits：`6b46836` `1441227` `cd4a2c6` `aac28a4` `a2dacf2` `93db006` `4acc2ca` `0f62ecf`
 
 ### 2026-04-22
 - 禁用 HTML 修改功能以解決 Caddy HTTPS 兼容性問題
