@@ -559,6 +559,28 @@ header.app-header {
 .header-fs-btn:active { background: var(--surface); }
 .header-fs-btn.active { color: var(--accent-ai); }
 
+/* Queued user prompts — submitted while AI was responding; drained on next idle */
+.msg.queued {
+  opacity: 0.72;
+}
+.msg.queued .msg-body {
+  border-left: 2px solid var(--dim);
+  padding-left: 8px;
+  color: var(--muted);
+}
+.msg.queued .msg-time { color: var(--muted); font-size: 11px; }
+.msg.queued .queue-remove {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  margin-left: auto;
+}
+.msg.queued .queue-remove:hover { color: var(--danger); }
+
 /* AI typing indicator — shown when an assistant message has no parts yet */
 .thinking-indicator {
   display: inline-flex;

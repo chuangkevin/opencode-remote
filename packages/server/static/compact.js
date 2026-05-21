@@ -4,6 +4,7 @@ const els = {
   messages: document.getElementById("messages"),
   compose: document.getElementById("compose"),
   actionBtn: document.getElementById("actionBtn"),
+  stopBtn: document.getElementById("stopBtn"),
   attachBtn: document.getElementById("attachBtn"),
   fileInput: document.getElementById("fileInput"),
   attachRow: document.getElementById("attachRow"),
@@ -58,6 +59,16 @@ const _autoAcceptedPermissions = new Set();
 
 // Inline question cards mounted under els.messages, keyed by question id.
 const questionNodes = new Map();
+
+// Persisted prompt queue (see the "Prompt queue" section below). Hoisted
+// here so loadHistory() can clear queueNodes / re-render queue without
+// caring about module evaluation order.
+const QUEUE_KEY = `compact-queue:${sessionID}`;
+let queue = (() => {
+  try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); }
+  catch { return []; }
+})();
+const queueNodes = new Map();
 
 // The OpenCode message API wraps metadata inside an `info` sub-object:
 // { info: { id, role, time: { created }, ... }, parts: [...] }
@@ -174,12 +185,17 @@ async function loadHistory() {
   const messages = await api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`);
   els.messages.innerHTML = "";
   messageNodes.clear();
-  // The question cards we mounted under els.messages were wiped; clear the
-  // cache so drainPendingInteractive() can re-render any still-pending ones.
+  // The question cards and queued-prompt nodes we mounted under
+  // els.messages were wiped; clear the caches so drainPendingInteractive
+  // and the boot-time queue renderer can re-mount them.
   questionNodes.clear();
+  queueNodes.clear();
   const list = Array.isArray(messages) ? messages : [];
   list.sort((a, b) => (a.info?.time?.created ?? 0) - (b.info?.time?.created ?? 0));
   for (const m of list) renderMessage(m);
+  // Re-render any prompts still in the queue so they survive a history
+  // refresh (loadHistory is also called on visibilitychange).
+  for (const item of queue) renderQueueItem(item);
   scrollToBottom();
 }
 
@@ -193,6 +209,9 @@ function scrollToBottom() {
 (async function boot() {
   try {
     await loadHistory();
+    // Render any prompts queued before the page was reloaded.
+    for (const item of queue) renderQueueItem(item);
+    if (queue.length > 0) scrollToBottom();
   } catch (err) {
     console.error(err);
     showToast("載入歷史失敗：" + err.message, "error");
@@ -202,6 +221,14 @@ function scrollToBottom() {
   // Drain any pending permission asks / questions that arrived before this
   // tab loaded (e.g. AI started while the user was away).
   drainPendingInteractive().catch((err) => console.warn("drainPendingInteractive:", err));
+  // If there are queued prompts and the AI looks idle, try to drain. Defer
+  // so the SSE connection has a chance to deliver a `busy` status — if it
+  // does, isStreaming flips to true and drainQueueIfIdle bails.
+  if (queue.length > 0) {
+    setTimeout(() => {
+      drainQueueIfIdle().catch((err) => console.warn("drainQueueIfIdle (boot):", err));
+    }, 2000);
+  }
 })();
 
 function showToast(text, kind) {
@@ -241,10 +268,14 @@ let isStreaming = false;
 
 function setStreaming(state) {
   isStreaming = state;
-  els.actionBtn.classList.toggle("send-btn", !state);
-  els.actionBtn.classList.toggle("stop-btn", state);
-  els.actionBtn.textContent = state ? "■" : "▶";
-  els.actionBtn.setAttribute("aria-label", state ? "停止" : "送出");
+  // Send button stays as "send/queue" regardless of streaming state —
+  // submitting while streaming enqueues. Stop is now a separate button
+  // shown only while AI is actively responding.
+  els.actionBtn.classList.add("send-btn");
+  els.actionBtn.classList.remove("stop-btn");
+  els.actionBtn.textContent = "▶";
+  els.actionBtn.setAttribute("aria-label", "送出");
+  if (els.stopBtn) els.stopBtn.hidden = !state;
 }
 
 function fetchMessage(messageID) {
@@ -353,15 +384,20 @@ function dispatchSSEEvent(type, props) {
     case "session.status": {
       const statusType = props?.status?.type;
       if (statusType === "busy") setStreaming(true);
-      else if (statusType === "idle") setStreaming(false);
+      else if (statusType === "idle") {
+        setStreaming(false);
+        drainQueueIfIdle().catch((err) => console.warn("drainQueueIfIdle:", err));
+      }
       break;
     }
 
     case "session.idle":
       // Definitive "all streaming done" signal. Do a final refresh of any
-      // message we have buffered but haven't flushed yet.
+      // message we have buffered but haven't flushed yet, then drain any
+      // queued user prompts.
       setStreaming(false);
       _deltaBuffers.clear();
+      drainQueueIfIdle().catch((err) => console.warn("drainQueueIfIdle:", err));
       break;
 
     case "session.updated":
@@ -590,6 +626,105 @@ function markQuestionFinished(type, props) {
       const flat = answersArr.flat().filter(Boolean);
       status.textContent = flat.length ? `已回答：${flat.join("、")}` : "已回答";
     }
+  }
+}
+
+// ─── Prompt queue (persists across reloads) ────────────────
+// Stored under localStorage["compact-queue:<sessionID>"]:
+//   [{ id, text, attachments, model, queuedAt }, ...]
+// While the AI is responding (isStreaming === true) any submitted prompt
+// is appended here instead of POSTed immediately. The next session.idle
+// SSE event drains the head of the queue via sendNow().
+// (QUEUE_KEY, queue, and queueNodes are hoisted to the top of the file.)
+
+function persistQueue() {
+  if (queue.length === 0) localStorage.removeItem(QUEUE_KEY);
+  else localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+}
+
+function enqueueMessage(text, attachments) {
+  const item = {
+    id: `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    text: text || "",
+    attachments: attachments ?? [],
+    model: currentModel ? { ...currentModel } : null,
+    queuedAt: Date.now(),
+  };
+  queue.push(item);
+  persistQueue();
+  renderQueueItem(item);
+  showToast(`已排入佇列 (${queue.length})`);
+}
+
+function renderQueueItem(item) {
+  if (queueNodes.has(item.id)) return;
+  const node = document.createElement("div");
+  node.className = "msg queued";
+  node.dataset.queueId = item.id;
+
+  const head = document.createElement("div");
+  head.className = "msg-head";
+  head.innerHTML =
+    `<span class="msg-role user">Kevin</span>` +
+    `<span class="msg-time">⏳ 已排入佇列</span>` +
+    `<button class="queue-remove" type="button" aria-label="移除">×</button>`;
+  const body = document.createElement("div");
+  body.className = "msg-body";
+  if (item.text) {
+    const md = document.createElement("div");
+    md.innerHTML = renderMarkdown(item.text);
+    body.appendChild(md);
+  }
+  for (const a of item.attachments ?? []) {
+    const img = document.createElement("img");
+    img.src = a.dataUrl;
+    img.alt = a.name ?? "";
+    img.style.maxWidth = "240px";
+    img.style.maxHeight = "240px";
+    img.style.borderRadius = "8px";
+    img.style.margin = "6px 0";
+    img.style.display = "block";
+    body.appendChild(img);
+  }
+  node.append(head, body);
+  els.messages.appendChild(node);
+  queueNodes.set(item.id, node);
+  scrollToBottom();
+
+  node.querySelector(".queue-remove").addEventListener("click", () => removeQueueItem(item.id));
+}
+
+function removeQueueItem(id) {
+  queue = queue.filter((q) => q.id !== id);
+  persistQueue();
+  const node = queueNodes.get(id);
+  if (node) { node.remove(); queueNodes.delete(id); }
+}
+
+let _draining = false;
+async function drainQueueIfIdle() {
+  if (_draining) return;
+  if (isStreaming) return;
+  if (queue.length === 0) return;
+  _draining = true;
+  try {
+    const item = queue[0];
+    // Optimistically remove from queue + DOM. sendNow() inserts its own
+    // optimistic placeholder; the canonical message.updated SSE event
+    // replaces it once OpenCode persists the new user message.
+    queue = queue.slice(1);
+    persistQueue();
+    const node = queueNodes.get(item.id);
+    if (node) { node.remove(); queueNodes.delete(item.id); }
+    const ok = await sendNow(item.text, item.attachments, item.model);
+    if (!ok) {
+      // Send failed — put it back at the head so the next idle event tries again.
+      queue.unshift(item);
+      persistQueue();
+      renderQueueItem(item);
+    }
+  } finally {
+    _draining = false;
   }
 }
 
@@ -830,23 +965,34 @@ let currentModel = null;     // { providerID, modelID, variant }
 //   POST /message with noReply:true skips the reply, so /prompt_async
 //   is the only correct path here.
 async function sendMessage() {
-  if (isStreaming) {
-    // Treat the click as Stop in streaming state (handled in Task 10).
-    return abortMessage();
-  }
   const text = els.compose.value.trim();
   const attachments = pendingAttachments.slice();
   if (!text && attachments.length === 0) return;
 
+  // While AI is responding, enqueue instead of sending immediately. The
+  // queued message will be drained on the next session.idle SSE event
+  // (see drainQueueIfIdle).
+  if (isStreaming) {
+    enqueueMessage(text, attachments);
+    els.compose.value = "";
+    resizeCompose();
+    clearAttachments();
+    return;
+  }
+
+  await sendNow(text, attachments, currentModel);
+}
+
+async function sendNow(text, attachments, model) {
   const parts = [];
   if (text) parts.push({ type: "text", text });
   for (const a of attachments) {
     parts.push({ type: "file", mime: a.mime, url: a.dataUrl, filename: a.name });
   }
   const payload = { parts };
-  if (currentModel) {
-    payload.model = { providerID: currentModel.providerID, modelID: currentModel.modelID };
-    if (currentModel.variant) payload.variant = currentModel.variant;
+  if (model) {
+    payload.model = { providerID: model.providerID, modelID: model.modelID };
+    if (model.variant) payload.variant = model.variant;
   }
 
   // Optimistic UI: render the user's message immediately, clear input,
@@ -868,21 +1014,24 @@ async function sendMessage() {
     });
     const elapsed = performance.now() - t0;
     console.info(`[compact] POST /prompt_async returned in ${Math.round(elapsed)}ms`);
+    return true;
   } catch (err) {
     setStreaming(false);
     // Drop the optimistic placeholder so the user does not see a "sent"
-    // message that never actually went through, and restore their input.
+    // message that never actually went through.
     removeOptimisticUserMessages();
-    els.compose.value = text;
-    pendingAttachments = attachments;
-    renderAttachments();
     showToast("送出失敗：" + err.message, "error");
+    return false;
   }
 }
 
 els.actionBtn.addEventListener("click", () => {
   sendMessage();
 });
+
+if (els.stopBtn) {
+  els.stopBtn.addEventListener("click", () => abortMessage());
+}
 
 // ─── Attachments ───────────────────────────────────────────
 let pendingAttachments = [];

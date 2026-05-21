@@ -44,6 +44,7 @@ export function renderCompactShell(sessionID: string): string {
       <button class="icon-btn" id="attachBtn" type="button" aria-label="附圖">📎</button>
       <input type="file" id="fileInput" accept="image/*" multiple hidden />
       <textarea class="compose" id="compose" placeholder="輸入訊息..." rows="1"></textarea>
+      <button class="icon-btn stop-btn" id="stopBtn" type="button" aria-label="停止" hidden>■</button>
       <button class="icon-btn send-btn" id="actionBtn" type="button" aria-label="送出">▶</button>
     </div>
 
