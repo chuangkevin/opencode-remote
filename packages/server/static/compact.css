@@ -530,6 +530,32 @@ header.app-header {
 .header-fs-btn:active { background: var(--surface); }
 .header-fs-btn.active { color: var(--accent-ai); }
 
+/* AI typing indicator — shown when an assistant message has no parts yet */
+.thinking-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+.thinking-indicator span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-ai);
+  opacity: 0.4;
+  animation: thinking-pulse 1.2s ease-in-out infinite;
+}
+.thinking-indicator span:nth-child(2) { animation-delay: 0.18s; }
+.thinking-indicator span:nth-child(3) { animation-delay: 0.36s; }
+@keyframes thinking-pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* Optimistic user message — visually identical to a real one. Marked via
+   the data attribute so SSE delivery can clean it up. */
+.msg[data-optimistic="true"] { /* placeholder hook, no extra styling */ }
+
 /* Question cards (rendered inline in the messages list when AI asks a question) */
 .qcard {
   margin: 12px 0;

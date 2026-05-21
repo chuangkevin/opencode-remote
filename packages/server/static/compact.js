@@ -86,9 +86,16 @@ function ensureMessageNode(message) {
 }
 
 function renderMessage(message) {
+  const info = message.info ?? {};
+  const isUser = info.role === "user";
+  // When the first real user message renders, drop any optimistic placeholders.
+  if (isUser) removeOptimisticUserMessages();
+
   const node = ensureMessageNode(message);
   const body = node.querySelector(".msg-body");
   body.innerHTML = "";
+
+  let hasContent = false;
 
   // Aggregate all text parts into one markdown block (preserves paragraph order).
   let aggregateText = "";
@@ -101,6 +108,7 @@ function renderMessage(message) {
     const md = document.createElement("div");
     md.innerHTML = renderMarkdown(aggregateText);
     body.appendChild(md);
+    hasContent = true;
   }
 
   for (const part of message.parts ?? []) {
@@ -112,6 +120,7 @@ function renderMessage(message) {
       const detail = summarizeTool(part);
       row.innerHTML = `<span class="tool-icon">🔧</span><span class="tool-name">${escapeHTML(name)}</span><span class="tool-detail">${detail ? "· " + escapeHTML(detail) : ""}</span>`;
       body.appendChild(row);
+      hasContent = true;
     } else if (part.type === "file" && (part.mime ?? "").startsWith("image/")) {
       const img = document.createElement("img");
       img.src = part.url;
@@ -122,9 +131,20 @@ function renderMessage(message) {
       img.style.margin = "6px 0";
       img.style.display = "block";
       body.appendChild(img);
+      hasContent = true;
     }
     // step-start / step-finish: pure metadata boundaries, no visible output.
     // reasoning: internal chain-of-thought, not shown to user.
+  }
+
+  // While the assistant is still thinking (no visible parts yet) show a typing
+  // indicator so the user knows the agent is alive. Removed once a delta or
+  // any visible part arrives — applyDelta clears it explicitly too.
+  if (!isUser && !hasContent && isStreaming) {
+    const ind = document.createElement("div");
+    ind.className = "thinking-indicator";
+    ind.innerHTML = '<span></span><span></span><span></span>';
+    body.appendChild(ind);
   }
 }
 
@@ -276,6 +296,8 @@ function applyDelta(props) {
   }
   // Find or create the streaming text element.
   const body = msgNode.querySelector(".msg-body");
+  // First text delta — drop the thinking indicator if it was shown.
+  body.querySelector(".thinking-indicator")?.remove();
   let streamEl = body.querySelector(`[data-stream-part="${partID}"]`);
   if (!streamEl) {
     streamEl = document.createElement("div");
@@ -571,6 +593,44 @@ function markQuestionFinished(type, props) {
   }
 }
 
+// ─── Optimistic user message ───────────────────────────────
+// prompt_async returns 204 in ~300ms but the user message info event still
+// has to round-trip through SSE. Render an optimistic placeholder so the
+// user sees their text in the chat the instant they hit send.
+function renderOptimisticUserMessage(text, attachments) {
+  const node = document.createElement("div");
+  node.className = "msg";
+  node.dataset.optimistic = "true";
+  const head = document.createElement("div");
+  head.className = "msg-head";
+  head.innerHTML = `<span class="msg-role user">Kevin</span><span class="msg-time">· ${fmtTime(Date.now())}</span>`;
+  const body = document.createElement("div");
+  body.className = "msg-body";
+  if (text) {
+    const md = document.createElement("div");
+    md.innerHTML = renderMarkdown(text);
+    body.appendChild(md);
+  }
+  for (const a of attachments ?? []) {
+    const img = document.createElement("img");
+    img.src = a.dataUrl;
+    img.alt = a.name ?? "";
+    img.style.maxWidth = "240px";
+    img.style.maxHeight = "240px";
+    img.style.borderRadius = "8px";
+    img.style.margin = "6px 0";
+    img.style.display = "block";
+    body.appendChild(img);
+  }
+  node.append(head, body);
+  els.messages.appendChild(node);
+  scrollToBottom();
+}
+
+function removeOptimisticUserMessages() {
+  els.messages.querySelectorAll('[data-optimistic="true"]').forEach((n) => n.remove());
+}
+
 async function drainPendingInteractive() {
   // Fire both in parallel; either failing should not block the other.
   const [perms, questions] = await Promise.all([
@@ -789,7 +849,11 @@ async function sendMessage() {
     if (currentModel.variant) payload.variant = currentModel.variant;
   }
 
-  // Optimistic UI: clear input + attachments, show streaming state.
+  // Optimistic UI: render the user's message immediately, clear input,
+  // show streaming state. SSE will deliver the canonical message.updated
+  // shortly; renderMessage() removes the placeholder when the real one
+  // for role=user arrives.
+  renderOptimisticUserMessage(text, attachments);
   els.compose.value = "";
   resizeCompose();
   clearAttachments();
@@ -806,7 +870,9 @@ async function sendMessage() {
     console.info(`[compact] POST /prompt_async returned in ${Math.round(elapsed)}ms`);
   } catch (err) {
     setStreaming(false);
-    // Restore the user's input so they can retry.
+    // Drop the optimistic placeholder so the user does not see a "sent"
+    // message that never actually went through, and restore their input.
+    removeOptimisticUserMessages();
     els.compose.value = text;
     pendingAttachments = attachments;
     renderAttachments();
