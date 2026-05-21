@@ -68,10 +68,15 @@ export function handleCompactSession(sessionID: string, res: http.ServerResponse
 
 export async function handleCompactNewSession(res: http.ServerResponse): Promise<void> {
   try {
+    // Do NOT set `title` here — OpenCode's auto-titling (LLM-generated
+    // session title) only kicks in when the existing title matches the
+    // default pattern "New session - <timestamp>" (see session.ts
+    // isDefaultTitle). Setting any custom value disables auto-titling
+    // for the lifetime of the session.
     const r = await fetch(`${appConfig.opencodeUrl}/session`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "compact" }),
+      body: JSON.stringify({}),
     });
     if (!r.ok) {
       const body = await r.text().catch(() => "");
