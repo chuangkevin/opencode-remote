@@ -53,6 +53,12 @@ function fmtTime(ms) {
 // Bag of currently rendered message DOM nodes, keyed by message id.
 const messageNodes = new Map();
 
+// Permission auto-accept dedup (so a re-broadcast event does not retry POST).
+const _autoAcceptedPermissions = new Set();
+
+// Inline question cards mounted under els.messages, keyed by question id.
+const questionNodes = new Map();
+
 // The OpenCode message API wraps metadata inside an `info` sub-object:
 // { info: { id, role, time: { created }, ... }, parts: [...] }
 // All helpers below extract from `message.info` rather than message root.
@@ -148,6 +154,9 @@ async function loadHistory() {
   const messages = await api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`);
   els.messages.innerHTML = "";
   messageNodes.clear();
+  // The question cards we mounted under els.messages were wiped; clear the
+  // cache so drainPendingInteractive() can re-render any still-pending ones.
+  questionNodes.clear();
   const list = Array.isArray(messages) ? messages : [];
   list.sort((a, b) => (a.info?.time?.created ?? 0) - (b.info?.time?.created ?? 0));
   for (const m of list) renderMessage(m);
@@ -170,6 +179,9 @@ function scrollToBottom() {
   }
   // Load session meta + model in parallel — does not block rendering history.
   refreshHeader().catch((err) => console.warn("refreshHeader boot:", err));
+  // Drain any pending permission asks / questions that arrived before this
+  // tab loaded (e.g. AI started while the user was away).
+  drainPendingInteractive().catch((err) => console.warn("drainPendingInteractive:", err));
 })();
 
 function showToast(text, kind) {
@@ -334,6 +346,29 @@ function dispatchSSEEvent(type, props) {
       refreshHeader();
       break;
 
+    case "permission.asked":
+      // Auto-accept every permission ask. Trust mode covers most patterns via
+      // session.permission PATCH, but anything that slips through (new MCP
+      // tools, unmapped patterns) would otherwise block the agent forever.
+      // The user has opted into "always allow" for the compact UI; if they
+      // ever want manual control, they can use the native SPA.
+      autoAcceptPermission(props);
+      break;
+
+    case "permission.replied":
+      // Server confirmation our auto-reply was received. No UI update needed.
+      break;
+
+    case "question.asked":
+      renderQuestionRequest(props);
+      maybeScrollOrShowChip();
+      break;
+
+    case "question.replied":
+    case "question.rejected":
+      markQuestionFinished(type, props);
+      break;
+
     default:
       // Unknown event — log once per type for diagnostics.
       if (!dispatchSSEEvent._seen) dispatchSSEEvent._seen = new Set();
@@ -342,6 +377,213 @@ function dispatchSSEEvent(type, props) {
         console.debug("[compact] unknown SSE event:", type, props);
       }
       break;
+  }
+}
+
+// ─── Permission auto-accept (always-on) ────────────────────
+// Schema (from opencode/src/permission/index.ts):
+//   request:  { id, sessionID, permission, patterns[], metadata, always[], tool? }
+//   reply:    POST /permission/:id/reply  body { reply: "once"|"always"|"reject" }
+// We reply "always" so the same pattern stops asking for the rest of the
+// session (server appends to session.permission, last-wins).
+
+function autoAcceptPermission(req) {
+  const id = req?.id;
+  if (!id || _autoAcceptedPermissions.has(id)) return;
+  _autoAcceptedPermissions.add(id);
+  api(`/permission/${encodeURIComponent(id)}/reply`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reply: "always" }),
+  }).catch((err) => {
+    // Remove from cache so a future retry can attempt again.
+    _autoAcceptedPermissions.delete(id);
+    console.warn("[compact] auto-accept permission failed", id, err);
+  });
+}
+
+// ─── Question UI ───────────────────────────────────────────
+// Schema (from opencode/src/question/index.ts):
+//   request:  { id, sessionID, questions: [{ question, header, options:[{label,description}], multiple?, custom? }], tool? }
+//   reply:    POST /question/:id/reply   body { answers: string[][] }  (per-question array of selected labels)
+//   reject:   POST /question/:id/reject  body {}
+// questionNodes and _autoAcceptedPermissions are declared near messageNodes (top of file)
+// so loadHistory()'s .clear() call is unambiguous regardless of evaluation order.
+
+function renderQuestionRequest(req) {
+  const id = req?.id;
+  const questions = Array.isArray(req?.questions) ? req.questions : [];
+  if (!id || questions.length === 0) return;
+
+  // If a card already exists (re-broadcast / reconnect), refresh it in place.
+  let card = questionNodes.get(id);
+  if (card) {
+    card.querySelector(".qcard-status")?.replaceChildren();
+    card.classList.remove("answered", "rejected");
+  } else {
+    card = document.createElement("div");
+    card.className = "qcard";
+    card.dataset.questionId = id;
+    els.messages.appendChild(card);
+    questionNodes.set(id, card);
+  }
+
+  // Per-question selection state. For single-select we submit on first click;
+  // for multi-select we accumulate then submit via the footer button.
+  const selections = questions.map(() => new Set());
+
+  card.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "qcard-head";
+  head.textContent = "AI 正在問你問題";
+  card.appendChild(head);
+
+  questions.forEach((q, qi) => {
+    const block = document.createElement("div");
+    block.className = "qblock";
+    if (q.header) {
+      const hdr = document.createElement("div");
+      hdr.className = "qblock-header";
+      hdr.textContent = q.header;
+      block.appendChild(hdr);
+    }
+    if (q.question) {
+      const txt = document.createElement("div");
+      txt.className = "qblock-text";
+      txt.innerHTML = renderMarkdown(q.question);
+      block.appendChild(txt);
+    }
+    const opts = document.createElement("div");
+    opts.className = "qopts" + (q.multiple ? " multi" : "");
+    for (const opt of q.options ?? []) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "qopt";
+      const labelText = String(opt.label ?? "");
+      btn.dataset.label = labelText;
+      btn.innerHTML = `<span class="qopt-label">${escapeHTML(labelText)}</span>` +
+        (opt.description ? `<span class="qopt-desc">${escapeHTML(String(opt.description))}</span>` : "");
+      btn.addEventListener("click", () => {
+        if (q.multiple) {
+          if (selections[qi].has(labelText)) {
+            selections[qi].delete(labelText);
+            btn.classList.remove("selected");
+          } else {
+            selections[qi].add(labelText);
+            btn.classList.add("selected");
+          }
+        } else {
+          // Single-select: clear siblings, mark this, submit if all sub-questions done.
+          opts.querySelectorAll(".qopt.selected").forEach((el) => el.classList.remove("selected"));
+          btn.classList.add("selected");
+          selections[qi] = new Set([labelText]);
+          maybeSubmitQuestion(id, questions, selections, card);
+        }
+      });
+      opts.appendChild(btn);
+    }
+    block.appendChild(opts);
+    card.appendChild(block);
+  });
+
+  // Footer: submit (multi) + skip
+  const hasMulti = questions.some((q) => q.multiple);
+  const footer = document.createElement("div");
+  footer.className = "qcard-foot";
+  if (hasMulti) {
+    const submitBtn = document.createElement("button");
+    submitBtn.type = "button";
+    submitBtn.className = "qcard-submit";
+    submitBtn.textContent = "送出";
+    submitBtn.addEventListener("click", () => submitQuestion(id, selections, card));
+    footer.appendChild(submitBtn);
+  }
+  const skipBtn = document.createElement("button");
+  skipBtn.type = "button";
+  skipBtn.className = "qcard-skip";
+  skipBtn.textContent = "略過";
+  skipBtn.addEventListener("click", () => rejectQuestion(id, card));
+  footer.appendChild(skipBtn);
+
+  const status = document.createElement("div");
+  status.className = "qcard-status";
+  footer.appendChild(status);
+  card.appendChild(footer);
+}
+
+function maybeSubmitQuestion(id, questions, selections, card) {
+  // For single-select we submit only when every sub-question has an answer.
+  // For multi-select we let the user hit "送出".
+  const ready = questions.every((q, i) => q.multiple || selections[i].size > 0);
+  if (ready && !questions.some((q) => q.multiple)) {
+    submitQuestion(id, selections, card);
+  }
+}
+
+async function submitQuestion(id, selections, card) {
+  const answers = selections.map((s) => Array.from(s));
+  card.classList.add("submitting");
+  try {
+    await api(`/question/${encodeURIComponent(id)}/reply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answers }),
+    });
+    // The server will emit question.replied via SSE — that handler marks the card.
+  } catch (err) {
+    card.classList.remove("submitting");
+    showToast("送出回答失敗：" + err.message, "error");
+  }
+}
+
+async function rejectQuestion(id, card) {
+  card.classList.add("submitting");
+  try {
+    await api(`/question/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+  } catch (err) {
+    card.classList.remove("submitting");
+    showToast("略過失敗：" + err.message, "error");
+  }
+}
+
+function markQuestionFinished(type, props) {
+  const id = props?.requestID ?? props?.id;
+  if (!id) return;
+  const card = questionNodes.get(id);
+  if (!card) return;
+  card.classList.remove("submitting");
+  card.classList.add(type === "question.rejected" ? "rejected" : "answered");
+  // Disable further clicks.
+  card.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  const status = card.querySelector(".qcard-status");
+  if (status) {
+    if (type === "question.rejected") {
+      status.textContent = "(已略過)";
+    } else {
+      const answersArr = Array.isArray(props?.answers) ? props.answers : [];
+      const flat = answersArr.flat().filter(Boolean);
+      status.textContent = flat.length ? `已回答：${flat.join("、")}` : "已回答";
+    }
+  }
+}
+
+async function drainPendingInteractive() {
+  // Fire both in parallel; either failing should not block the other.
+  const [perms, questions] = await Promise.all([
+    api("/permission").catch(() => []),
+    api("/question").catch(() => []),
+  ]);
+  for (const p of Array.isArray(perms) ? perms : []) {
+    if (p?.sessionID && p.sessionID !== sessionID) continue;
+    autoAcceptPermission(p);
+  }
+  for (const q of Array.isArray(questions) ? questions : []) {
+    if (q?.sessionID && q.sessionID !== sessionID) continue;
+    renderQuestionRequest(q);
   }
 }
 
@@ -926,4 +1168,5 @@ document.addEventListener("visibilitychange", () => {
   try { sse.close(); } catch { /* noop */ }
   sse = connectSSE();
   refreshHeader();
+  drainPendingInteractive().catch((err) => console.warn("drainPendingInteractive (visibility):", err));
 });
