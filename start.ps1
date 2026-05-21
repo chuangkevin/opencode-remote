@@ -10,9 +10,17 @@ Set-Location $PSScriptRoot
 function Stop-PortProcess {
     param([int]$Port)
 
-    $processIds = netstat -ano | Select-String ":$Port.*LISTENING" | ForEach-Object {
-        ($_ -split "\s+")[-1]
-    } | Select-Object -Unique
+    # Use Get-NetTCPConnection so the port match is NUMERIC, not substring.
+    # The old `netstat -ano | Select-String ":$Port.*LISTENING"` was a
+    # substring match that accidentally killed processes on ports like
+    # 40961, 14096, 92230, 49612 — Docker Desktop's vpnkit / backend pick
+    # high ephemeral ports that often contain "4096" or "9223" as a
+    # substring, and the watchdog's 5-minute restart was nuking them,
+    # crashing Docker (verified — every Docker crash timestamp lined up
+    # with a watchdog "Service unhealthy; restarting" log entry).
+    $processIds = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.OwningProcess } |
+        Select-Object -Unique
 
     foreach ($processId in $processIds) {
         if ($processId) {

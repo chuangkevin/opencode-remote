@@ -15,31 +15,35 @@ if (-not $KeepWatchdog) {
     }
 }
 
-# Find and kill process on port 9223
-$proxy = netstat -ano | Select-String ":9223.*LISTENING" | ForEach-Object {
-    ($_ -split "\s+")[-1]
-} | Select-Object -First 1
+# Use Get-NetTCPConnection (NUMERIC port match) rather than
+# `netstat | Select-String ":<port>.*LISTENING"`. The substring match in
+# the old code was killing Docker Desktop processes whose ephemeral ports
+# happened to contain "4096" or "9223" as a substring (e.g. 40961, 14096,
+# 92230). See start.ps1 for the same fix in Stop-PortProcess.
+function Stop-PortProcessExact {
+    param(
+        [int]$Port,
+        [string]$Label
+    )
 
-if ($proxy) {
-    Write-Host "  Stopping proxy (PID $proxy)..." -ForegroundColor Yellow
-    Stop-Process -Id $proxy -Force -ErrorAction SilentlyContinue
-    Write-Host "✓ Proxy stopped" -ForegroundColor Green
-} else {
-    Write-Host "  No proxy running on port 9223" -ForegroundColor Gray
+    $processIds = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.OwningProcess } |
+        Select-Object -Unique
+
+    if (-not $processIds) {
+        Write-Host "  No $Label running on port $Port" -ForegroundColor Gray
+        return
+    }
+
+    foreach ($processId in $processIds) {
+        Write-Host "  Stopping $Label (PID $processId)..." -ForegroundColor Yellow
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "✓ $Label stopped" -ForegroundColor Green
 }
 
-# Find and kill OpenCode on port 4096
-$opencode = netstat -ano | Select-String ":4096.*LISTENING" | ForEach-Object {
-    ($_ -split "\s+")[-1]
-} | Select-Object -First 1
-
-if ($opencode) {
-    Write-Host "  Stopping OpenCode (PID $opencode)..." -ForegroundColor Yellow
-    Stop-Process -Id $opencode -Force -ErrorAction SilentlyContinue
-    Write-Host "✓ OpenCode stopped" -ForegroundColor Green
-} else {
-    Write-Host "  No OpenCode running on port 4096" -ForegroundColor Gray
-}
+Stop-PortProcessExact -Port 9223 -Label "proxy"
+Stop-PortProcessExact -Port 4096 -Label "OpenCode"
 
 Write-Host ""
 Write-Host "✓ All services stopped" -ForegroundColor Green
