@@ -53,7 +53,6 @@ function fmtTime(ms) {
 // ─── Rendering ─────────────────────────────────────────────
 // Bag of currently rendered message DOM nodes, keyed by message id.
 const messageNodes = new Map();
-const messageInfos = new Map();
 
 // Permission auto-accept dedup (so a re-broadcast event does not retry POST).
 const _autoAcceptedPermissions = new Set();
@@ -79,58 +78,22 @@ function ensureMessageNode(message) {
   const info = message.info ?? {};
   const id = info.id;
   let node = messageNodes.get(id);
-  if (!node) {
-    node = document.createElement("div");
-    node.className = "msg";
-    node.dataset.messageId = id;
-    const head = document.createElement("div");
-    head.className = "msg-head";
-    const body = document.createElement("div");
-    body.className = "msg-body";
-    node.append(head, body);
-    els.messages.appendChild(node);
-    messageNodes.set(id, node);
-  }
-
-  messageInfos.set(id, info);
-  node.dataset.sortKind = "message";
-  node.dataset.sortTime = String(info.time?.created ?? Date.now());
-  node.dataset.sortRole = info.role === "user" ? "0" : "1";
-  node.dataset.sortId = id ?? "";
-
-  const head = node.querySelector(".msg-head");
+  if (node) return node;
+  node = document.createElement("div");
+  node.className = "msg";
+  node.dataset.messageId = id;
+  const head = document.createElement("div");
+  head.className = "msg-head";
   const role = info.role === "user" ? "user" : "ai";
   const roleLabel = info.role === "user" ? "Kevin" : "AI";
   const created = info.time?.created ?? Date.now();
   head.innerHTML = `<span class="msg-role ${role}">${roleLabel}</span><span class="msg-time">· ${fmtTime(created)}</span>`;
+  const body = document.createElement("div");
+  body.className = "msg-body";
+  node.append(head, body);
+  els.messages.appendChild(node);
+  messageNodes.set(id, node);
   return node;
-}
-
-function compareConversationNodes(a, b) {
-  const aID = a.dataset.messageId;
-  const bID = b.dataset.messageId;
-  const aInfo = aID ? messageInfos.get(aID) : undefined;
-  const bInfo = bID ? messageInfos.get(bID) : undefined;
-
-  // Assistant messages are children of their user prompt. If both sides are
-  // present, keep the parent user immediately before its assistant even when
-  // SSE events arrive out of order or timestamps tie.
-  if (aInfo?.role === "assistant" && aInfo.parentID && aInfo.parentID === bID) return 1;
-  if (bInfo?.role === "assistant" && bInfo.parentID && bInfo.parentID === aID) return -1;
-
-  const time = Number(a.dataset.sortTime || 0) - Number(b.dataset.sortTime || 0);
-  if (time !== 0) return time;
-
-  const role = Number(a.dataset.sortRole || 0) - Number(b.dataset.sortRole || 0);
-  if (role !== 0) return role;
-
-  return String(a.dataset.sortId || "").localeCompare(String(b.dataset.sortId || ""));
-}
-
-function sortConversationNodes() {
-  const nodes = Array.from(els.messages.children).filter((node) => node.dataset.sortKind);
-  nodes.sort(compareConversationNodes);
-  for (const node of nodes) els.messages.appendChild(node);
 }
 
 function renderMessage(message) {
@@ -194,7 +157,6 @@ function renderMessage(message) {
     ind.innerHTML = '<span></span><span></span><span></span>';
     body.appendChild(ind);
   }
-  sortConversationNodes();
 }
 
 function summarizeTool(part) {
@@ -520,10 +482,6 @@ function renderQuestionRequest(req) {
     card = document.createElement("div");
     card.className = "qcard";
     card.dataset.questionId = id;
-    card.dataset.sortKind = "question";
-    card.dataset.sortTime = String(Date.now());
-    card.dataset.sortRole = "2";
-    card.dataset.sortId = id;
     els.messages.appendChild(card);
     questionNodes.set(id, card);
   }
@@ -609,7 +567,6 @@ function renderQuestionRequest(req) {
   status.className = "qcard-status";
   footer.appendChild(status);
   card.appendChild(footer);
-  sortConversationNodes();
 }
 
 function maybeSubmitQuestion(id, questions, selections, card) {
@@ -730,13 +687,8 @@ function renderQueueItem(item) {
     body.appendChild(img);
   }
   node.append(head, body);
-  node.dataset.sortKind = "queue";
-  node.dataset.sortTime = String(item.queuedAt ?? Date.now());
-  node.dataset.sortRole = "0";
-  node.dataset.sortId = item.id;
   els.messages.appendChild(node);
   queueNodes.set(item.id, node);
-  sortConversationNodes();
   scrollToBottom();
 
   node.querySelector(".queue-remove").addEventListener("click", () => removeQueueItem(item.id));
@@ -806,12 +758,7 @@ function renderOptimisticUserMessage(text, attachments) {
     body.appendChild(img);
   }
   node.append(head, body);
-  node.dataset.sortKind = "optimistic";
-  node.dataset.sortTime = String(Date.now());
-  node.dataset.sortRole = "0";
-  node.dataset.sortId = `optimistic-${Date.now()}`;
   els.messages.appendChild(node);
-  sortConversationNodes();
   scrollToBottom();
 }
 
