@@ -57,7 +57,7 @@ export function handleCompactSession(sessionID: string, res: http.ServerResponse
     "Cache-Control": "no-store",
     "X-OpenCode-Remote": "compact",
   });
-  res.end(renderCompactShell(sessionID));
+  res.end(renderCompactShell(sessionID, appConfig.opencodeDirectory));
   // Fire-and-forget: PATCH trust ruleset in the background so the user
   // doesn't have to wait. If it fails the user will just see "ask" prompts
   // (the existing behavior before trust mode existed).

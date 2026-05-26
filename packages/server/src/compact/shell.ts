@@ -2,8 +2,9 @@ function escapeAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function renderCompactShell(sessionID: string): string {
+export function renderCompactShell(sessionID: string, directory: string): string {
   const id = escapeAttr(sessionID);
+  const dir = escapeAttr(directory);
   return `<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -16,7 +17,7 @@ export function renderCompactShell(sessionID: string): string {
   <link rel="stylesheet" href="/c/static/compact.css" />
   <script src="/c/static/marked.min.js"></script>
 </head>
-<body data-session-id="${id}">
+<body data-session-id="${id}" data-directory="${dir}">
   <div class="app">
     <header class="app-header">
       <a class="header-back" href="/remote-sessions">← Sessions</a>

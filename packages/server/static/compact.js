@@ -1,5 +1,6 @@
 // ─── State ─────────────────────────────────────────────────
 const sessionID = document.body.dataset.sessionId;
+const defaultDirectory = document.body.dataset.directory || "";
 const els = {
   messages: document.getElementById("messages"),
   compose: document.getElementById("compose"),
@@ -20,6 +21,8 @@ const els = {
 marked.setOptions({ gfm: true, breaks: true });
 
 const HISTORY_LIMIT = 30;
+let isStreaming = false;
+let currentDirectory = defaultDirectory;
 
 // ─── Markdown + safety ─────────────────────────────────────
 function renderMarkdown(text) {
@@ -208,6 +211,7 @@ function scrollToBottom() {
 // ─── Boot ──────────────────────────────────────────────────
 (async function boot() {
   try {
+    await refreshBusyStatus();
     await loadHistory();
     // Render any prompts queued before the page was reloaded.
     for (const item of queue) renderQueueItem(item);
@@ -226,7 +230,9 @@ function scrollToBottom() {
   // does, isStreaming flips to true and drainQueueIfIdle bails.
   if (queue.length > 0) {
     setTimeout(() => {
-      drainQueueIfIdle().catch((err) => console.warn("drainQueueIfIdle (boot):", err));
+      refreshBusyStatus()
+        .then(() => drainQueueIfIdle())
+        .catch((err) => console.warn("drainQueueIfIdle (boot):", err));
     }, 2000);
   }
 })();
@@ -264,8 +270,6 @@ function showToast(text, kind) {
 //   "server.connected"      → initial handshake (no sessionID)
 //   "server.heartbeat"      → keepalive (no sessionID)
 
-let isStreaming = false;
-
 function setStreaming(state) {
   isStreaming = state;
   // Send button stays as "send/queue" regardless of streaming state —
@@ -276,6 +280,22 @@ function setStreaming(state) {
   els.actionBtn.textContent = "▶";
   els.actionBtn.setAttribute("aria-label", "送出");
   if (els.stopBtn) els.stopBtn.hidden = !state;
+}
+
+async function refreshBusyStatus() {
+  try {
+    if (!currentDirectory) {
+      const session = await api(`/session/${sessionID}`);
+      currentDirectory = session?.directory ?? "";
+    }
+    if (!currentDirectory) return;
+    const directory = currentDirectory.replace(/\\/g, "/");
+    const statuses = await api(`/session/status?directory=${encodeURIComponent(directory)}`);
+    const busy = statuses?.[sessionID]?.type === "busy";
+    setStreaming(busy);
+  } catch (err) {
+    console.warn("refreshBusyStatus failed", err);
+  }
 }
 
 function fetchMessage(messageID) {
@@ -799,7 +819,12 @@ function connectSSE() {
   es.addEventListener("error", () => {
     // EventSource will auto-reconnect. On reconnect we do a full history pull
     // to catch any events we missed while disconnected.
-    setTimeout(() => loadHistory().catch(() => {}), 1500);
+    setTimeout(() => {
+      refreshBusyStatus()
+        .then(() => loadHistory())
+        .then(() => drainQueueIfIdle())
+        .catch(() => {});
+    }, 1500);
   });
   return es;
 }
@@ -847,6 +872,7 @@ let currentTitle = "";
 async function loadSessionMeta() {
   try {
     const s = await api(`/session/${sessionID}`);
+    currentDirectory = s?.directory ?? currentDirectory;
     setTitle(s.title ?? "");
   } catch (err) {
     console.warn("loadSessionMeta failed", err);
@@ -1521,7 +1547,10 @@ async function doDeleteSession() {
 // whatever happened while they were away.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
-  loadHistory().catch((err) => console.warn("focus reload failed", err));
+  refreshBusyStatus()
+    .then(() => loadHistory())
+    .then(() => drainQueueIfIdle())
+    .catch((err) => console.warn("focus reload failed", err));
   try { sse.close(); } catch { /* noop */ }
   sse = connectSSE();
   refreshHeader();
