@@ -11,7 +11,7 @@ import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
 const remoteResetScript = `(() => {
-  const version = "2026-05-18-session-cache-v3";
+  const version = "2026-05-27-native-loader-v1";
   const marker = "opencode-remote.reset-version";
 
   const report = (payload) => {
@@ -78,7 +78,7 @@ const remoteResetScript = `(() => {
     localStorage.setItem(marker, version);
     report({ event: "reset-applied", removed });
 
-    if (removed.length > 0 && sessionStorage.getItem(marker + ".reload") !== version) {
+    if (sessionStorage.getItem(marker + ".reload") !== version) {
       sessionStorage.setItem(marker + ".reload", version);
       location.reload();
     }
@@ -113,6 +113,28 @@ type SessionListEntry = {
   };
 };
 
+type SessionStatusMap = Record<string, { type?: string }>;
+
+type OpenCodeMessage = {
+  info?: {
+    id?: string;
+    role?: string;
+    modelID?: string;
+    providerID?: string;
+    time?: {
+      created?: number;
+      completed?: number;
+    };
+    tokens?: {
+      input?: number;
+      output?: number;
+      reasoning?: number;
+    };
+    error?: { name?: string };
+  };
+  parts?: unknown[];
+};
+
 const remoteDebugEntries: RemoteDebugEntry[] = [];
 let nextRemoteDebugID = 1;
 
@@ -120,6 +142,10 @@ function trimDebugValue(value: unknown, maxLength = 800): string | undefined {
   if (value === undefined || value === null) return undefined;
   const text = String(value);
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function normalizeDirectory(value: string): string {
+  return value.replace(/\\/g, "/");
 }
 
 function addRemoteDebugEntry(entry: Omit<RemoteDebugEntry, "id" | "time">): void {
@@ -286,6 +312,9 @@ async function preserveCurrentSessionInList(
 function injectRemoteReset(html: string): string {
   const script = `<script src="/remote-reset.js"></script>`;
   if (html.includes(script)) return html;
+  if (html.includes('<script type="module"')) {
+    return html.replace('<script type="module"', `${script}<script type="module"`);
+  }
   return html.includes("</head>")
     ? html.replace("</head>", `${script}</head>`)
     : `${script}${html}`;
@@ -1057,6 +1086,120 @@ const server = http.createServer((req, res) => {
   proxy(req, res);
 });
 
+// ─── Dead stream watchdog ────────────────────────────────────────────────────
+
+const deadStreamAbortAttempts = new Map<string, number>();
+
+async function fetchBusySessionIDs(directory: string): Promise<string[]> {
+  const url = new URL("/session/status", config.opencodeUrl);
+  url.searchParams.set("directory", normalizeDirectory(directory));
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`GET /session/status returned ${res.status}`);
+  const statuses = await res.json() as SessionStatusMap;
+  return Object.entries(statuses)
+    .filter(([, status]) => status?.type === "busy")
+    .map(([sessionID]) => sessionID);
+}
+
+async function fetchRecentMessages(sessionID: string): Promise<OpenCodeMessage[]> {
+  const url = new URL(`/session/${sessionID}/message`, config.opencodeUrl);
+  url.searchParams.set("limit", "8");
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`GET /session/${sessionID}/message returned ${res.status}`);
+  const messages = await res.json() as unknown;
+  return Array.isArray(messages) ? messages as OpenCodeMessage[] : [];
+}
+
+function lastMessage(messages: OpenCodeMessage[]): OpenCodeMessage | undefined {
+  return [...messages]
+    .sort((a, b) => (a.info?.time?.created ?? 0) - (b.info?.time?.created ?? 0))
+    .at(-1);
+}
+
+function isZeroOutputDeadStream(message: OpenCodeMessage | undefined, now: number): boolean {
+  const info = message?.info;
+  if (!info) return false;
+  if (info.role !== "assistant") return false;
+  if (info.time?.completed) return false;
+  if (info.error?.name) return false;
+  const created = info.time?.created ?? 0;
+  if (!created || now - created < config.deadStreamWatchdogMinAgeMs) return false;
+  if ((message.parts?.length ?? 0) !== 0) return false;
+  const tokens = info.tokens;
+  const tokenCount = (tokens?.input ?? 0) + (tokens?.output ?? 0) + (tokens?.reasoning ?? 0);
+  return tokenCount === 0;
+}
+
+async function abortDeadStream(sessionID: string, message: OpenCodeMessage, now: number): Promise<void> {
+  const messageID = message.info?.id ?? "unknown";
+  const lastAttempt = deadStreamAbortAttempts.get(messageID) ?? 0;
+  if (now - lastAttempt < 300_000) return;
+  deadStreamAbortAttempts.set(messageID, now);
+
+  const res = await fetch(`${config.opencodeUrl}/session/${sessionID}/abort`, { method: "POST" });
+  if (!res.ok) throw new Error(`POST /session/${sessionID}/abort returned ${res.status}`);
+
+  const ageSeconds = Math.round((now - (message.info?.time?.created ?? now)) / 1_000);
+  addRemoteDebugEntry({
+    event: "dead-stream-abort",
+    path: `/session/${sessionID}`,
+    status: res.status,
+    note: `${messageID} age=${ageSeconds}s model=${message.info?.providerID}/${message.info?.modelID}`,
+  });
+  console.warn(`[opencode-remote] aborted dead stream ${sessionID}/${messageID} after ${ageSeconds}s`);
+}
+
+async function checkDeadStreams(): Promise<void> {
+  const now = Date.now();
+  const busySessionIDs = await fetchBusySessionIDs(config.opencodeDirectory);
+  for (const sessionID of busySessionIDs) {
+    try {
+      const message = lastMessage(await fetchRecentMessages(sessionID));
+      if (!message) continue;
+      if (!isZeroOutputDeadStream(message, now)) continue;
+      await abortDeadStream(sessionID, message, now);
+    } catch (err) {
+      addRemoteDebugEntry({
+        event: "dead-stream-watchdog-error",
+        path: `/session/${sessionID}`,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      console.warn(`[opencode-remote] dead stream watchdog failed for ${sessionID}:`, err);
+    }
+  }
+
+  if (deadStreamAbortAttempts.size > 200) {
+    const cutoff = now - 3_600_000;
+    for (const [messageID, timestamp] of deadStreamAbortAttempts) {
+      if (timestamp < cutoff) deadStreamAbortAttempts.delete(messageID);
+    }
+  }
+}
+
+function startDeadStreamWatchdog(): void {
+  if (!config.deadStreamWatchdogEnabled) {
+    console.log("[opencode-remote] dead stream watchdog disabled");
+    return;
+  }
+  let running = false;
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      await checkDeadStreams();
+    } catch (err) {
+      console.warn("[opencode-remote] dead stream watchdog failed:", err);
+    } finally {
+      running = false;
+    }
+  };
+  setTimeout(() => { void tick(); }, 15_000);
+  setInterval(() => { void tick(); }, config.deadStreamWatchdogIntervalMs);
+  console.log(
+    `[opencode-remote] dead stream watchdog enabled: interval=${config.deadStreamWatchdogIntervalMs}ms minAge=${config.deadStreamWatchdogMinAgeMs}ms`,
+  );
+}
+
 // ─── Keep-alive SSE client ───────────────────────────────────────────────────
 
 function startKeepAlive(): void {
@@ -1180,7 +1323,10 @@ async function main(): Promise<void> {
   // 5. Keep-alive SSE connection to OpenCode
   startKeepAlive();
 
-  // 6. Start HTTP proxy server
+  // 6. Auto-clear OpenCode streams that produced no output and never completed.
+  startDeadStreamWatchdog();
+
+  // 7. Start HTTP proxy server
   server.listen(config.port, "0.0.0.0", () => {
     console.log(`[opencode-remote] proxy listening on http://0.0.0.0:${config.port}`);
     console.log("[opencode-remote] → redirecting / to /remote-sessions");

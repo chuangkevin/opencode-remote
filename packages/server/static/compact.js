@@ -24,6 +24,28 @@ const HISTORY_LIMIT = 30;
 let isStreaming = false;
 let currentDirectory = defaultDirectory;
 
+// gpt-5.5 streams can hang with zero tokens; compact defaults to the last
+// model we verified completing a real prompt.
+const SAFE_COMPACT_MODEL = { providerID: "openai", modelID: "gpt-5.4-fast", variant: null };
+
+function normalizePromptModel(model) {
+  const providerID = typeof model?.providerID === "string" ? model.providerID : "";
+  const rawModelID = model?.modelID ?? model?.id;
+  const modelID = typeof rawModelID === "string" ? rawModelID : "";
+  if (!providerID || !modelID) return null;
+  return { providerID, modelID, variant: model.variant ?? null };
+}
+
+function isUnsafeCompactModel(model) {
+  return model?.providerID === "openai" && model?.modelID?.startsWith("gpt-5.5");
+}
+
+function compactPromptModel(model) {
+  const normalized = normalizePromptModel(model);
+  if (!normalized) return null;
+  return isUnsafeCompactModel(normalized) ? { ...SAFE_COMPACT_MODEL } : normalized;
+}
+
 // ─── Markdown + safety ─────────────────────────────────────
 function renderMarkdown(text) {
   return marked.parse(text || "");
@@ -663,11 +685,12 @@ function persistQueue() {
 }
 
 function enqueueMessage(text, attachments) {
+  const model = compactPromptModel(currentModel);
   const item = {
     id: `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     text: text || "",
     attachments: attachments ?? [],
-    model: currentModel ? { ...currentModel } : null,
+    model: model ? { ...model } : null,
     queuedAt: Date.now(),
   };
   queue.push(item);
@@ -1016,9 +1039,10 @@ async function sendNow(text, attachments, model) {
     parts.push({ type: "file", mime: a.mime, url: a.dataUrl, filename: a.name });
   }
   const payload = { parts };
-  if (model) {
-    payload.model = { providerID: model.providerID, modelID: model.modelID };
-    if (model.variant) payload.variant = model.variant;
+  const promptModel = compactPromptModel(model);
+  if (promptModel) {
+    payload.model = { providerID: promptModel.providerID, modelID: promptModel.modelID };
+    if (promptModel.variant) payload.variant = promptModel.variant;
   }
 
   // Optimistic UI: render the user's message immediately, clear input,
@@ -1155,7 +1179,9 @@ async function loadProviders() {
     .map((p) => ({
       id: p.id,
       name: p.name ?? p.id,
-      models: Object.values(p.models ?? {}).filter((m) => m.status === "active"),
+      models: Object.values(p.models ?? {})
+        .filter((m) => m.status === "active")
+        .filter((m) => !isUnsafeCompactModel({ providerID: p.id, modelID: m.id })),
     }))
     .filter((p) => p.models.length > 0);
   return providersCache;
@@ -1167,10 +1193,10 @@ async function loadDefaultModelFromConfig() {
     const config = await api("/config");
     if (typeof config?.model === "string" && config.model.includes("/")) {
       const sep = config.model.indexOf("/");
-      defaultModelFromConfig = {
+      defaultModelFromConfig = compactPromptModel({
         providerID: config.model.slice(0, sep),
         modelID: config.model.slice(sep + 1),
-      };
+      });
     } else {
       defaultModelFromConfig = false;
     }
@@ -1185,7 +1211,7 @@ async function loadModelForHeader() {
     const session = await api(`/session/${sessionID}`);
     const m = session.model;
     if (m && m.providerID && m.id) {
-      currentModel = { providerID: m.providerID, modelID: m.id, variant: m.variant ?? null };
+      currentModel = compactPromptModel(m);
     } else {
       const fallback = await loadDefaultModelFromConfig();
       if (fallback) currentModel = { ...fallback, variant: null };
@@ -1280,11 +1306,11 @@ function renderProviders(providers) {
   list.addEventListener("click", (e) => {
     const pill = e.target.closest(".variant-pill");
     if (!pill) return;
-    currentModel = {
+    currentModel = compactPromptModel({
       providerID: pill.dataset.provider,
       modelID: pill.dataset.model,
       variant: pill.dataset.variant || null,
-    };
+    });
     els.modelName.textContent = currentModel.modelID;
     els.modelVariant.textContent = currentModel.variant && currentModel.variant !== "none"
       ? `· ${currentModel.variant}`
