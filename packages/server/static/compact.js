@@ -23,10 +23,9 @@ marked.setOptions({ gfm: true, breaks: true });
 const HISTORY_LIMIT = 30;
 let isStreaming = false;
 let currentDirectory = defaultDirectory;
-
-// gpt-5.5 streams can hang with zero tokens; compact defaults to the last
-// model we verified completing a real prompt.
-const SAFE_COMPACT_MODEL = { providerID: "openai", modelID: "gpt-5.4-fast", variant: null };
+const STREAMING_POLL_INTERVAL_MS = 5_000;
+let streamingPollTimer = null;
+let streamingPollInFlight = false;
 
 function normalizePromptModel(model) {
   const providerID = typeof model?.providerID === "string" ? model.providerID : "";
@@ -36,14 +35,8 @@ function normalizePromptModel(model) {
   return { providerID, modelID, variant: model.variant ?? null };
 }
 
-function isUnsafeCompactModel(model) {
-  return model?.providerID === "openai" && model?.modelID?.startsWith("gpt-5.5");
-}
-
 function compactPromptModel(model) {
-  const normalized = normalizePromptModel(model);
-  if (!normalized) return null;
-  return isUnsafeCompactModel(normalized) ? { ...SAFE_COMPACT_MODEL } : normalized;
+  return normalizePromptModel(model);
 }
 
 // ─── Markdown + safety ─────────────────────────────────────
@@ -302,6 +295,35 @@ function setStreaming(state) {
   els.actionBtn.textContent = "▶";
   els.actionBtn.setAttribute("aria-label", "送出");
   if (els.stopBtn) els.stopBtn.hidden = !state;
+  if (state) startStreamingPoll();
+  else stopStreamingPoll();
+}
+
+function startStreamingPoll() {
+  if (streamingPollTimer) return;
+  streamingPollTimer = setInterval(() => {
+    pollStreamingState().catch((err) => console.warn("pollStreamingState failed", err));
+  }, STREAMING_POLL_INTERVAL_MS);
+}
+
+function stopStreamingPoll() {
+  if (!streamingPollTimer) return;
+  clearInterval(streamingPollTimer);
+  streamingPollTimer = null;
+}
+
+async function pollStreamingState() {
+  if (streamingPollInFlight) return;
+  streamingPollInFlight = true;
+  try {
+    // SSE is best-effort in mobile/PWA browsers. Poll while busy so completed
+    // gpt-5.5 replies still appear even if EventSource drops an update.
+    await loadHistory();
+    await refreshBusyStatus();
+    if (!isStreaming) await drainQueueIfIdle();
+  } finally {
+    streamingPollInFlight = false;
+  }
 }
 
 async function refreshBusyStatus() {
@@ -1180,8 +1202,7 @@ async function loadProviders() {
       id: p.id,
       name: p.name ?? p.id,
       models: Object.values(p.models ?? {})
-        .filter((m) => m.status === "active")
-        .filter((m) => !isUnsafeCompactModel({ providerID: p.id, modelID: m.id })),
+        .filter((m) => m.status === "active"),
     }))
     .filter((p) => p.models.length > 0);
   return providersCache;
