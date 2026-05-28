@@ -237,6 +237,19 @@ function isSessionMessageRequest(req: http.IncomingMessage, upstreamPath: string
   }
 }
 
+function nativePromptAsyncPath(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  try {
+    const upstream = new URL(sanitizeProxyPath(path), config.opencodeUrl);
+    const match = /^\/session\/(ses_[^/]+)\/message$/.exec(upstream.pathname);
+    if (!match) return undefined;
+    upstream.pathname = `/session/${match[1]}/prompt_async`;
+    return `${upstream.pathname}${upstream.search}`;
+  } catch {
+    return undefined;
+  }
+}
+
 async function fetchSessionForList(sessionID: string, upstreamPath: string): Promise<SessionListEntry | undefined> {
   const listUrl = new URL(upstreamPath, config.opencodeUrl);
   const sessionUrl = new URL(`/session/${sessionID}`, config.opencodeUrl);
@@ -582,6 +595,67 @@ function proxy(
   });
 
   startProxyRequest(true);
+}
+
+function proxyNativePromptAsync(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  upstreamPath: string,
+): void {
+  const startedAt = Date.now();
+  let logged = false;
+  const log = (entry: Pick<RemoteDebugEntry, "status" | "error" | "note">): void => {
+    if (logged) return;
+    logged = true;
+    addRemoteDebugEntry({
+      event: "native-prompt-async",
+      method: req.method,
+      path: trimDebugValue(req.url),
+      upstreamPath: trimDebugValue(upstreamPath),
+      durationMs: Date.now() - startedAt,
+      ...entry,
+    });
+  };
+
+  const upstreamReq = http.request({
+    hostname: "127.0.0.1",
+    port: config.opencodePort,
+    path: upstreamPath,
+    method: "POST",
+    headers: {
+      ...sanitizeProxyHeaders(req.headers),
+      host: `127.0.0.1:${config.opencodePort}`,
+    },
+  }, (upstreamRes) => {
+    log({ status: upstreamRes.statusCode, note: "rewrote native prompt to prompt_async" });
+    const headers = sanitizeResponseHeaders(upstreamRes.headers);
+
+    if ((upstreamRes.statusCode ?? 500) >= 200 && (upstreamRes.statusCode ?? 500) < 300) {
+      upstreamRes.resume();
+      if (!res.headersSent && !res.destroyed) {
+        res.writeHead(upstreamRes.statusCode ?? 204, headers);
+        res.end();
+      }
+      return;
+    }
+
+    if (!res.headersSent && !res.destroyed) {
+      res.writeHead(upstreamRes.statusCode ?? 502, headers);
+      upstreamRes.pipe(res, { end: true });
+    } else {
+      upstreamRes.resume();
+    }
+  });
+
+  upstreamReq.on("error", (err) => {
+    log({ status: 502, error: err.message });
+    if (!res.headersSent && !res.destroyed) {
+      res.writeHead(502, { "Cache-Control": "no-store", "X-OpenCode-Remote": "true" });
+      res.end("Bad Gateway");
+    }
+  });
+
+  req.pipe(upstreamReq, { end: true });
 }
 
 // ─── HTTP Server ─────────────────────────────────────────────────────────────
@@ -1083,6 +1157,15 @@ const server = http.createServer((req, res) => {
     void handleLatestRedirect(res);
     return;
   }
+
+  if (req.method === "POST") {
+    const asyncPromptPath = nativePromptAsyncPath(req.url);
+    if (asyncPromptPath) {
+      proxyNativePromptAsync(req, res, asyncPromptPath);
+      return;
+    }
+  }
+
   proxy(req, res);
 });
 
