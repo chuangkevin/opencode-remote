@@ -693,6 +693,11 @@ function markQuestionFinished(type, props) {
   }
 }
 
+function normalizePendingList(value) {
+  if (Array.isArray(value)) return value;
+  return value ? [value] : [];
+}
+
 // ─── Prompt queue (persists across reloads) ────────────────
 // Stored under localStorage["compact-queue:<sessionID>"]:
 //   [{ id, text, attachments, model, queuedAt }, ...]
@@ -837,14 +842,17 @@ async function drainPendingInteractive() {
     api("/permission").catch(() => []),
     api("/question").catch(() => []),
   ]);
-  for (const p of Array.isArray(perms) ? perms : []) {
+  for (const p of normalizePendingList(perms)) {
     if (p?.sessionID && p.sessionID !== sessionID) continue;
     autoAcceptPermission(p);
   }
-  for (const q of Array.isArray(questions) ? questions : []) {
+  let renderedQuestion = false;
+  for (const q of normalizePendingList(questions)) {
     if (q?.sessionID && q.sessionID !== sessionID) continue;
     renderQuestionRequest(q);
+    renderedQuestion = true;
   }
+  if (renderedQuestion) maybeScrollOrShowChip();
 }
 
 function connectSSE() {
