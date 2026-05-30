@@ -1116,8 +1116,11 @@ if (els.stopBtn) {
 // ─── Attachments ───────────────────────────────────────────
 let pendingAttachments = [];
 let attachmentGeneration = 0;
-const MAX_BYTES_PER_FILE = 5 * 1024 * 1024;   // 5 MB
-const MAX_TOTAL_BYTES = 20 * 1024 * 1024;     // 20 MB
+const MAX_SOURCE_IMAGE_BYTES = 50 * 1024 * 1024;     // reject only truly huge originals
+const MAX_ATTACHMENT_BYTES = 2.5 * 1024 * 1024;      // compressed payload target
+const MAX_TOTAL_BYTES = 20 * 1024 * 1024;            // queued data URL budget
+const MAX_IMAGE_EDGE = 1800;
+const IMAGE_QUALITIES = [0.82, 0.72, 0.62, 0.52];
 
 els.attachBtn.addEventListener("click", () => els.fileInput.click());
 els.fileInput.addEventListener("change", (e) => {
@@ -1126,34 +1129,118 @@ els.fileInput.addEventListener("change", (e) => {
   for (const f of files) addAttachment(f);
 });
 
-function addAttachment(file) {
+async function addAttachment(file) {
   if (!file.type.startsWith("image/")) {
     showToast("僅支援圖片：" + file.name, "error");
     return;
   }
-  if (file.size > MAX_BYTES_PER_FILE) {
-    showToast(`圖片太大（>5MB）：${file.name}`, "error");
-    return;
-  }
-  const totalAfter = pendingAttachments.reduce((s, a) => s + a.size, 0) + file.size;
-  if (totalAfter > MAX_TOTAL_BYTES) {
-    showToast("附件總量超過 20MB", "error");
+  if (file.size > MAX_SOURCE_IMAGE_BYTES) {
+    showToast(`圖片太大（>50MB）：${file.name}`, "error");
     return;
   }
   const generation = attachmentGeneration;
-  const reader = new FileReader();
-  reader.onload = () => {
+  try {
+    const attachment = await prepareImageAttachment(file);
     if (generation !== attachmentGeneration) return;
-    pendingAttachments.push({
-      name: file.name,
-      mime: file.type,
-      size: file.size,
-      dataUrl: reader.result,
-    });
+    const totalAfter = pendingAttachments.reduce((s, a) => s + a.size, 0) + attachment.size;
+    if (totalAfter > MAX_TOTAL_BYTES) {
+      showToast("附件總量超過 20MB", "error");
+      return;
+    }
+    pendingAttachments.push(attachment);
     renderAttachments();
+  } catch (err) {
+    if (generation !== attachmentGeneration) return;
+    showToast("圖片壓縮失敗：" + (err instanceof Error ? err.message : file.name), "error");
+  }
+}
+
+async function prepareImageAttachment(file) {
+  let best = null;
+
+  const bitmap = await loadImageBitmap(file);
+  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error(file.name);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close?.();
+
+  for (const quality of IMAGE_QUALITIES) {
+    const blob = await canvasToBlob(canvas, "image/jpeg", quality);
+    const dataUrl = await readBlobAsDataURL(blob);
+    best = {
+      blob,
+      dataUrl,
+      mime: "image/jpeg",
+      name: file.name.replace(/\.[^.]+$/, "") + ".jpg",
+    };
+    if (blob.size <= MAX_ATTACHMENT_BYTES) break;
+  }
+
+  if (!best) throw new Error(file.name);
+
+  if (file.size <= MAX_ATTACHMENT_BYTES && file.size <= best.blob.size) {
+    const original = await readBlobAsDataURL(file);
+    best = { blob: file, dataUrl: original, mime: file.type, name: file.name };
+  }
+
+  if (best.blob.size > MAX_ATTACHMENT_BYTES) {
+    throw new Error(`壓縮後仍超過 ${formatBytes(MAX_ATTACHMENT_BYTES)}：${file.name}`);
+  }
+
+  return {
+    name: best.name,
+    mime: best.mime,
+    size: best.blob.size,
+    originalSize: file.size,
+    dataUrl: best.dataUrl,
   };
-  reader.onerror = () => showToast("讀取失敗：" + file.name, "error");
-  reader.readAsDataURL(file);
+}
+
+function loadImageBitmap(file) {
+  if ("createImageBitmap" in window) return createImageBitmap(file);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(file.name));
+    };
+    img.src = url;
+  });
+}
+
+function canvasToBlob(canvas, mime, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("canvas.toBlob failed"));
+    }, mime, quality);
+  });
+}
+
+function readBlobAsDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error ?? new Error("FileReader failed"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function formatBytes(bytes) {
+  return `${Math.round(bytes / 1024 / 102.4) / 10}MB`;
 }
 
 function renderAttachments() {
