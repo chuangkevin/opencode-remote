@@ -17,3 +17,8 @@ type: user
   `opencode-remote` runtime config.
 - GitHub MCP should be disabled when `GITHUB_TOKEN` is blank; local MCP startup
   should allow enough timeout for first-run `npx` package resolution.
+- For HomeProject services, a requested domain does not imply public Internet
+  exposure. Unless Kevin explicitly says to make a service public, treat the
+  domain as private/Tailscale/testing-only. Public exposure requires an explicit
+  request and sheet-to-car-level hardening before adding Cloudflare Tunnel or
+  other Internet-facing routing.
