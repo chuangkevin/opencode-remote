@@ -1115,6 +1115,7 @@ if (els.stopBtn) {
 
 // ─── Attachments ───────────────────────────────────────────
 let pendingAttachments = [];
+let attachmentGeneration = 0;
 const MAX_BYTES_PER_FILE = 5 * 1024 * 1024;   // 5 MB
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024;     // 20 MB
 
@@ -1139,8 +1140,10 @@ function addAttachment(file) {
     showToast("附件總量超過 20MB", "error");
     return;
   }
+  const generation = attachmentGeneration;
   const reader = new FileReader();
   reader.onload = () => {
+    if (generation !== attachmentGeneration) return;
     pendingAttachments.push({
       name: file.name,
       mime: file.type,
@@ -1176,7 +1179,9 @@ els.attachRow.addEventListener("click", (e) => {
 });
 
 function clearAttachments() {
+  attachmentGeneration += 1;
   pendingAttachments = [];
+  els.fileInput.value = "";
   renderAttachments();
 }
 
