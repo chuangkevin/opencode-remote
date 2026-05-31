@@ -240,9 +240,8 @@ function scrollToBottom() {
   // Drain any pending permission asks / questions that arrived before this
   // tab loaded (e.g. AI started while the user was away).
   drainPendingInteractive().catch((err) => console.warn("drainPendingInteractive:", err));
-  // If there are queued prompts and the AI looks idle, try to drain. Defer
-  // so the SSE connection has a chance to deliver a `busy` status — if it
-  // does, isStreaming flips to true and drainQueueIfIdle bails.
+  // Flush any local prompts left by an older build or failed request. The
+  // server owns busy-session queueing, so this no longer waits for idle.
   if (queue.length > 0) {
     setTimeout(() => {
       refreshBusyStatus()
@@ -287,9 +286,8 @@ function showToast(text, kind) {
 
 function setStreaming(state) {
   isStreaming = state;
-  // Send button stays as "send/queue" regardless of streaming state —
-  // submitting while streaming enqueues. Stop is now a separate button
-  // shown only while AI is actively responding.
+  // Send button stays available regardless of streaming state. Stop is a
+  // separate button shown only while AI is actively responding.
   els.actionBtn.classList.add("send-btn");
   els.actionBtn.classList.remove("stop-btn");
   els.actionBtn.textContent = "▶";
@@ -320,7 +318,7 @@ async function pollStreamingState() {
     // gpt-5.5 replies still appear even if EventSource drops an update.
     await loadHistory();
     await refreshBusyStatus();
-    if (!isStreaming) await drainQueueIfIdle();
+    await drainQueueIfIdle();
   } finally {
     streamingPollInFlight = false;
   }
@@ -701,9 +699,9 @@ function normalizePendingList(value) {
 // ─── Prompt queue (persists across reloads) ────────────────
 // Stored under localStorage["compact-queue:<sessionID>"]:
 //   [{ id, text, attachments, model, queuedAt }, ...]
-// While the AI is responding (isStreaming === true) any submitted prompt
-// is appended here instead of POSTed immediately. session.idle, polling,
-// visibility return, and enqueue-time status checks all try to drain it.
+// Only prompts that were not handed to OpenCode yet live here. Compact now
+// matches the native web UI: submit immediately to /prompt_async and let the
+// OpenCode server queue prompts when the session is busy.
 // (QUEUE_KEY, queue, and queueNodes are hoisted to the top of the file.)
 const QUEUE_DRAIN_CHECK_DELAYS_MS = [1_500, 6_000, 15_000];
 const queueDrainCheckTimers = new Set();
@@ -790,7 +788,6 @@ function removeQueueItem(id) {
 let _draining = false;
 async function drainQueueIfIdle() {
   if (_draining) return;
-  if (isStreaming) return;
   if (queue.length === 0) return;
   _draining = true;
   try {
@@ -808,6 +805,8 @@ async function drainQueueIfIdle() {
       queue.unshift(item);
       persistQueue();
       renderQueueItem(item);
+    } else if (queue.length > 0) {
+      setTimeout(() => drainQueueIfIdle().catch((err) => console.warn("drainQueueIfIdle:", err)), 0);
     }
   } finally {
     _draining = false;
@@ -1063,17 +1062,6 @@ async function sendMessage() {
   const text = els.compose.value.trim();
   const attachments = pendingAttachments.slice();
   if (!text && attachments.length === 0) return;
-
-  // While AI is responding, enqueue instead of sending immediately. The
-  // queued message will be drained on the next session.idle SSE event
-  // (see drainQueueIfIdle).
-  if (isStreaming) {
-    enqueueMessage(text, attachments);
-    els.compose.value = "";
-    resizeCompose();
-    clearAttachments();
-    return;
-  }
 
   await sendNow(text, attachments, currentModel);
 }
