@@ -702,9 +702,11 @@ function normalizePendingList(value) {
 // Stored under localStorage["compact-queue:<sessionID>"]:
 //   [{ id, text, attachments, model, queuedAt }, ...]
 // While the AI is responding (isStreaming === true) any submitted prompt
-// is appended here instead of POSTed immediately. The next session.idle
-// SSE event drains the head of the queue via sendNow().
+// is appended here instead of POSTed immediately. session.idle, polling,
+// visibility return, and enqueue-time status checks all try to drain it.
 // (QUEUE_KEY, queue, and queueNodes are hoisted to the top of the file.)
+const QUEUE_DRAIN_CHECK_DELAYS_MS = [1_500, 6_000, 15_000];
+const queueDrainCheckTimers = new Set();
 
 function persistQueue() {
   if (queue.length === 0) localStorage.removeItem(QUEUE_KEY);
@@ -724,6 +726,20 @@ function enqueueMessage(text, attachments) {
   persistQueue();
   renderQueueItem(item);
   showToast(`已排入佇列 (${queue.length})`);
+  startStreamingPoll();
+  scheduleQueueDrainChecks();
+}
+
+function scheduleQueueDrainChecks() {
+  for (const delay of QUEUE_DRAIN_CHECK_DELAYS_MS) {
+    const timer = setTimeout(() => {
+      queueDrainCheckTimers.delete(timer);
+      refreshBusyStatus()
+        .then(() => drainQueueIfIdle())
+        .catch((err) => console.warn("queue drain check failed", err));
+    }, delay);
+    queueDrainCheckTimers.add(timer);
+  }
 }
 
 function renderQueueItem(item) {
