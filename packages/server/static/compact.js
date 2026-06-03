@@ -77,6 +77,7 @@ const _autoAcceptedPermissions = new Set();
 
 // Inline question cards mounted under els.messages, keyed by question id.
 const questionNodes = new Map();
+let pendingQuestionDrainTimer = null;
 
 // Persisted prompt queue (see the "Prompt queue" section below). Hoisted
 // here so loadHistory() can clear queueNodes / re-render queue without
@@ -150,6 +151,7 @@ function renderMessage(message) {
       row.innerHTML = `<span class="tool-icon">🔧</span><span class="tool-name">${escapeHTML(name)}</span><span class="tool-detail">${detail ? "· " + escapeHTML(detail) : ""}</span>`;
       body.appendChild(row);
       hasContent = true;
+      if (name === "question") schedulePendingQuestionDrain();
     } else if (part.type === "file" && (part.mime ?? "").startsWith("image/")) {
       const img = document.createElement("img");
       img.src = part.url;
@@ -693,7 +695,17 @@ function markQuestionFinished(type, props) {
 
 function normalizePendingList(value) {
   if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.value)) return value.value;
+  if (Array.isArray(value?.data)) return value.data;
   return value ? [value] : [];
+}
+
+function schedulePendingQuestionDrain() {
+  if (pendingQuestionDrainTimer) return;
+  pendingQuestionDrainTimer = setTimeout(() => {
+    pendingQuestionDrainTimer = null;
+    drainPendingInteractive().catch((err) => console.warn("drainPendingInteractive (question tool):", err));
+  }, 250);
 }
 
 // ─── Prompt queue (persists across reloads) ────────────────

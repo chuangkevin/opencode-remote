@@ -7,6 +7,7 @@ import { config } from "./config.js";
 import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, matchCompactSessionPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
+import { ensureSessionTrust } from "./compact/trust.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,17 @@ const remoteResetScript = `(() => {
       }).catch(() => {});
     } catch {}
   };
+
+  const ensureNativeTrust = () => {
+    const match = location.pathname.match(/\/session\/(ses_[^/?#]+)/);
+    if (!match) return;
+    fetch("/remote-native-trust?id=" + encodeURIComponent(match[1]), {
+      method: "POST",
+      keepalive: true,
+    }).catch(() => {});
+  };
+
+  ensureNativeTrust();
 
   const shouldRemove = (key) =>
     key === "layout.page.v1" ||
@@ -597,6 +609,41 @@ function proxy(
   startProxyRequest(true);
 }
 
+async function handleRemoteNativeTrust(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  try {
+    const url = new URL(req.url ?? "/", "http://opencode-remote.local");
+    const sessionID = url.searchParams.get("id");
+    if (!sessionID?.startsWith("ses_")) {
+      res.writeHead(400, { "Cache-Control": "no-store" });
+      res.end("Missing session id");
+      return;
+    }
+
+    await ensureSessionTrust(config.opencodeUrl, sessionID);
+    addRemoteDebugEntry({
+      event: "native-trust",
+      method: req.method,
+      path: trimDebugValue(req.url),
+      upstreamPath: `/session/${sessionID}`,
+      status: 204,
+      note: "applied trust ruleset",
+    });
+    res.writeHead(204, { "Cache-Control": "no-store" });
+    res.end();
+  } catch (err) {
+    addRemoteDebugEntry({
+      event: "native-trust-error",
+      method: req.method,
+      path: trimDebugValue(req.url),
+      upstreamPath: "",
+      status: 502,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.writeHead(502, { "Cache-Control": "no-store" });
+    res.end("Failed to apply trust ruleset");
+  }
+}
+
 function proxyNativePromptAsync(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -1101,6 +1148,11 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "POST" && req.url === "/remote-client-debug") {
     handleRemoteClientDebug(req, res);
+    return;
+  }
+
+  if (req.method === "POST" && req.url?.startsWith("/remote-native-trust")) {
+    void handleRemoteNativeTrust(req, res);
     return;
   }
 
