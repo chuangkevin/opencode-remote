@@ -7,86 +7,11 @@ import { config } from "./config.js";
 import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, matchCompactSessionPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
+import { ensureSessionTrust } from "./compact/trust.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
-const remoteResetScript = `(() => {
-  const version = "2026-05-27-native-loader-v1";
-  const marker = "opencode-remote.reset-version";
-
-  const report = (payload) => {
-    try {
-      const body = JSON.stringify(Object.assign({
-        version,
-        path: location.pathname + location.search,
-      }, payload));
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon("/remote-client-debug", new Blob([body], { type: "application/json" }));
-        return;
-      }
-      fetch("/remote-client-debug", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-        keepalive: true,
-      }).catch(() => {});
-    } catch {}
-  };
-
-  const shouldRemove = (key) =>
-    key === "layout.page.v1" ||
-    key === "opencode.global.dat" ||
-    key === "opencode.global.dat:layout.page" ||
-    key.startsWith("opencode.global.dat:layout.") ||
-    key.startsWith("opencode.workspace.");
-
-  const removeMatching = (storage, name) => {
-    const removed = [];
-    try {
-      for (const key of Object.keys(storage)) {
-        if (shouldRemove(key)) {
-          storage.removeItem(key);
-          removed.push(name + ":" + key);
-        }
-      }
-    } catch (err) {
-      report({ event: "reset-error", storage: name, error: err instanceof Error ? err.message : String(err) });
-    }
-    return removed;
-  };
-
-  try {
-    if (localStorage.getItem(marker) === version) {
-      report({ event: "reset-skip" });
-      return;
-    }
-
-    const removed = removeMatching(localStorage, "localStorage").concat(removeMatching(sessionStorage, "sessionStorage"));
-
-    if ("caches" in window) {
-      caches.keys()
-        .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
-        .catch(() => {});
-    }
-
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.getRegistrations()
-        .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
-        .catch(() => {});
-    }
-
-    localStorage.setItem(marker, version);
-    report({ event: "reset-applied", removed });
-
-    if (sessionStorage.getItem(marker + ".reload") !== version) {
-      sessionStorage.setItem(marker + ".reload", version);
-      location.reload();
-    }
-  } catch (err) {
-    report({ event: "reset-error", error: err instanceof Error ? err.message : String(err) });
-  }
-})();
-`;
+const remoteResetScript = `(() => {})();\n`;
 
 type RemoteDebugEntry = {
   id: number;
@@ -323,14 +248,7 @@ async function preserveCurrentSessionInList(
 }
 
 function injectRemoteReset(html: string): string {
-  const script = `<script src="/remote-reset.js"></script>`;
-  if (html.includes(script)) return html;
-  if (html.includes('<script type="module"')) {
-    return html.replace('<script type="module"', `${script}<script type="module"`);
-  }
-  return html.includes("</head>")
-    ? html.replace("</head>", `${script}</head>`)
-    : `${script}${html}`;
+  return html;
 }
 
 function isValidWorkspaceID(value: string): boolean {
@@ -510,6 +428,16 @@ function proxy(
         delete headers["content-encoding"];
         const pageSessionID = sessionIDFromPath(upstreamPath);
         if (pageSessionID) {
+          ensureSessionTrust(config.opencodeUrl, pageSessionID).catch((err) => {
+            addRemoteDebugEntry({
+              event: "native-trust-error",
+              method: req.method,
+              path: trimDebugValue(req.url),
+              upstreamPath: `/session/${pageSessionID}`,
+              status: 502,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
           appendSetCookie(
             headers,
             `opencode_remote_session=${encodeURIComponent(pageSessionID)}; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly`,
