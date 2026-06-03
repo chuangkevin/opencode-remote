@@ -426,6 +426,8 @@ function proxy(
       if (isHtml) {
         delete headers["content-length"];
         delete headers["content-encoding"];
+        headers["cache-control"] = "no-store, no-cache, must-revalidate";
+        headers["pragma"] = "no-cache";
         const pageSessionID = sessionIDFromPath(upstreamPath);
         if (pageSessionID) {
           ensureSessionTrust(config.opencodeUrl, pageSessionID).catch((err) => {
