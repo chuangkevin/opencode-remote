@@ -1,4 +1,5 @@
 import http from "node:http";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -12,6 +13,21 @@ import { ensureSessionTrust } from "./compact/trust.js";
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
 const remoteResetScript = `(() => {})();\n`;
+const nativePreferencesScript = `<script>(() => {
+  const key = "settings.v3";
+  const fallback = { general: { newLayoutDesigns: false }, permissions: { autoApprove: true } };
+  try {
+    const current = JSON.parse(localStorage.getItem(key) || "{}");
+    const next = {
+      ...current,
+      general: { ...(current.general || {}), newLayoutDesigns: false },
+      permissions: { ...(current.permissions || {}), autoApprove: true },
+    };
+    localStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    localStorage.setItem(key, JSON.stringify(fallback));
+  }
+})();</script>`;
 
 type RemoteDebugEntry = {
   id: number;
@@ -59,6 +75,8 @@ type OpenCodeMessage = {
   };
   parts?: unknown[];
 };
+
+const maxSessionMessageStringLength = 120_000;
 
 const remoteDebugEntries: RemoteDebugEntry[] = [];
 let nextRemoteDebugID = 1;
@@ -162,6 +180,47 @@ function isSessionMessageRequest(req: http.IncomingMessage, upstreamPath: string
   }
 }
 
+function truncateLargeSessionValue(value: unknown, stats: { truncated: number }): unknown {
+  if (typeof value === "string") {
+    if (value.length <= maxSessionMessageStringLength) return value;
+    stats.truncated += 1;
+    return `${value.slice(0, maxSessionMessageStringLength)}\n\n[opencode-remote: truncated ${value.length - maxSessionMessageStringLength} characters from an oversized session message field]`;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => truncateLargeSessionValue(item, stats));
+  }
+  if (value && typeof value === "object") {
+    const next: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      next[key] = truncateLargeSessionValue(item, stats);
+    }
+    return next;
+  }
+  return value;
+}
+
+function sanitizeSessionMessageBody(body: Buffer, req: http.IncomingMessage, upstreamPath: string): Buffer {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body.toString("utf8"));
+  } catch {
+    return body;
+  }
+
+  const stats = { truncated: 0 };
+  const sanitized = truncateLargeSessionValue(payload, stats);
+  if (stats.truncated === 0) return body;
+
+  addRemoteDebugEntry({
+    event: "session-message-truncate",
+    method: req.method,
+    path: trimDebugValue(req.url),
+    upstreamPath: trimDebugValue(upstreamPath),
+    note: `truncated ${stats.truncated} oversized field(s)`,
+  });
+  return Buffer.from(JSON.stringify(sanitized), "utf8");
+}
+
 function nativePromptAsyncPath(path: string | undefined): string | undefined {
   if (!path) return undefined;
   try {
@@ -248,7 +307,28 @@ async function preserveCurrentSessionInList(
 }
 
 function injectRemoteReset(html: string): string {
-  return html;
+  if (html.includes(nativePreferencesScript)) return html;
+  if (html.includes('<script type="module"')) {
+    return html.replace('<script type="module"', `${nativePreferencesScript}<script type="module"`);
+  }
+  return html.includes("</head>")
+    ? html.replace("</head>", `${nativePreferencesScript}</head>`)
+    : `${nativePreferencesScript}${html}`;
+}
+
+function allowInlineScripts(headers: http.OutgoingHttpHeaders, html: string): void {
+  const csp = headers["content-security-policy"];
+  if (typeof csp !== "string") return;
+
+  const hashes = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)]
+    .map((match) => `'sha256-${createHash("sha256").update(match[1] ?? "").digest("base64")}'`)
+    .filter((hash) => !csp.includes(hash));
+  if (hashes.length === 0) return;
+
+  headers["content-security-policy"] = csp.replace(
+    /script-src([^;]*)/,
+    (match) => `${match} ${hashes.join(" ")}`,
+  );
 }
 
 function isValidWorkspaceID(value: string): boolean {
@@ -451,7 +531,9 @@ function proxy(
         });
         upstreamRes.on("end", () => {
           if (res.destroyed || cleanedUp) return;
-          const body = Buffer.from(injectRemoteReset(Buffer.concat(chunks).toString("utf8")), "utf8");
+          const html = injectRemoteReset(Buffer.concat(chunks).toString("utf8"));
+          allowInlineScripts(headers, html);
+          const body = Buffer.from(html, "utf8");
           headers["content-length"] = String(body.byteLength);
           res.writeHead(upstreamRes.statusCode ?? 200, headers);
           res.end(body);
@@ -488,7 +570,7 @@ function proxy(
         });
         upstreamRes.on("end", () => {
           if (attemptID !== proxyAttempt || res.destroyed || cleanedUp) return;
-          const body = Buffer.concat(chunks);
+          const body = sanitizeSessionMessageBody(Buffer.concat(chunks), req, upstreamPath);
           headers["content-length"] = String(body.byteLength);
           res.writeHead(upstreamRes.statusCode ?? 200, headers);
           res.end(body);
