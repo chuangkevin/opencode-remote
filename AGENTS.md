@@ -73,6 +73,14 @@ Use worktree isolation for cross-repo changes, changes touching three or more
 files, high-risk behavior changes, or parallel implementation tasks. Completion
 requires merging back to the intended branch and cleaning up temporary worktrees.
 
+## Completion Flow
+
+- After making code, config, or spec changes, verify with the repo's concrete
+  checks, then commit and push without waiting for a separate user prompt.
+- Stop before commit/push only when the user explicitly says not to commit,
+  not to push, to pause, or to leave changes uncommitted.
+- Stage only intended files and preserve unrelated user/untracked work.
+
 ## Safety
 
 - Never manually edit `.env*`, service-account files, credential JSON, or secret
