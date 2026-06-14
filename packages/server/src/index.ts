@@ -180,8 +180,17 @@ function isSessionMessageRequest(req: http.IncomingMessage, upstreamPath: string
   }
 }
 
-function truncateLargeSessionValue(value: unknown, stats: { truncated: number }): unknown {
+function isImageFileUrl(key: string | undefined, value: string, parent: unknown): boolean {
+  if (key !== "url") return false;
+  if (!value.startsWith("data:image/")) return false;
+  if (!parent || typeof parent !== "object") return false;
+  const part = parent as Record<string, unknown>;
+  return part.type === "file" && typeof part.mime === "string" && part.mime.startsWith("image/");
+}
+
+function truncateLargeSessionValue(value: unknown, stats: { truncated: number }, key?: string, parent?: unknown): unknown {
   if (typeof value === "string") {
+    if (isImageFileUrl(key, value, parent)) return value;
     if (value.length <= maxSessionMessageStringLength) return value;
     stats.truncated += 1;
     return `${value.slice(0, maxSessionMessageStringLength)}\n\n[opencode-remote: truncated ${value.length - maxSessionMessageStringLength} characters from an oversized session message field]`;
@@ -192,7 +201,7 @@ function truncateLargeSessionValue(value: unknown, stats: { truncated: number })
   if (value && typeof value === "object") {
     const next: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      next[key] = truncateLargeSessionValue(item, stats);
+      next[key] = truncateLargeSessionValue(item, stats, key, value);
     }
     return next;
   }
