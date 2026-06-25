@@ -26,6 +26,7 @@ let currentDirectory = defaultDirectory;
 const STREAMING_POLL_INTERVAL_MS = 5_000;
 let streamingPollTimer = null;
 let streamingPollInFlight = false;
+const COMPACT_DEFAULT_MODEL = { providerID: "openai", modelID: "gpt-5.5", variant: "xhigh" };
 
 function normalizePromptModel(model) {
   const providerID = typeof model?.providerID === "string" ? model.providerID : "";
@@ -37,6 +38,14 @@ function normalizePromptModel(model) {
 
 function compactPromptModel(model) {
   return normalizePromptModel(model);
+}
+
+function setCurrentModel(model) {
+  currentModel = compactPromptModel(model) ?? { ...COMPACT_DEFAULT_MODEL };
+  els.modelName.textContent = currentModel.modelID;
+  els.modelVariant.textContent = currentModel.variant && currentModel.variant !== "none"
+    ? `· ${currentModel.variant}`
+    : "";
 }
 
 // ─── Markdown + safety ─────────────────────────────────────
@@ -1052,17 +1061,55 @@ function resizeCompose() {
   els.compose.style.height = "auto";
   els.compose.style.height = Math.min(els.compose.scrollHeight, 140) + "px";
 }
+let isComposingInput = false;
+let lastCompositionEndAt = 0;
+let suppressNextEnterSubmit = false;
+let suppressNextEnterTimer = null;
+
+function markCompositionEnterSuppressed() {
+  suppressNextEnterSubmit = true;
+  clearTimeout(suppressNextEnterTimer);
+  suppressNextEnterTimer = setTimeout(() => {
+    suppressNextEnterSubmit = false;
+  }, 1_000);
+}
+
 els.compose.addEventListener("input", resizeCompose);
-els.compose.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    els.actionBtn.click();
+els.compose.addEventListener("compositionstart", () => {
+  isComposingInput = true;
+  markCompositionEnterSuppressed();
+});
+els.compose.addEventListener("compositionend", () => {
+  isComposingInput = false;
+  lastCompositionEndAt = performance.now();
+  markCompositionEnterSuppressed();
+});
+els.compose.addEventListener("beforeinput", (e) => {
+  if (typeof e.inputType === "string" && e.inputType.toLowerCase().includes("composition")) {
+    markCompositionEnterSuppressed();
   }
+});
+els.compose.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey) return;
+
+  // macOS/iOS CJK IMEs use Enter to confirm candidates. During that flow some
+  // browsers report `isComposing`, others only expose the legacy keyCode 229,
+  // and Safari can dispatch Enter after compositionend. Suppress the next Enter
+  // submit so the IME owns candidate confirmation; a second Enter sends.
+  if (isComposingInput || e.isComposing || e.keyCode === 229 || suppressNextEnterSubmit || performance.now() - lastCompositionEndAt < 500) return;
+
+  e.preventDefault();
+  els.actionBtn.click();
+});
+els.compose.addEventListener("keyup", (e) => {
+  if (e.key !== "Enter") return;
+  suppressNextEnterSubmit = false;
+  lastCompositionEndAt = 0;
+  clearTimeout(suppressNextEnterTimer);
 });
 
 // ─── Send ──────────────────────────────────────────────────
-let currentModel = null;     // { providerID, modelID, variant }
-// Filled in Task 11. For now, leave null — the server falls back to session.model.
+let currentModel = { ...COMPACT_DEFAULT_MODEL };     // { providerID, modelID, variant }
 
 // Fire-and-forget endpoint:
 //   POST /session/:id/prompt_async returns 204 in ~300ms.
@@ -1345,23 +1392,7 @@ async function loadDefaultModelFromConfig() {
 
 async function loadModelForHeader() {
   try {
-    const session = await api(`/session/${sessionID}`);
-    const m = session.model;
-    if (m && m.providerID && m.id) {
-      currentModel = compactPromptModel(m);
-    } else {
-      const fallback = await loadDefaultModelFromConfig();
-      if (fallback) currentModel = { ...fallback, variant: null };
-    }
-    if (currentModel) {
-      els.modelName.textContent = currentModel.modelID;
-      els.modelVariant.textContent = currentModel.variant && currentModel.variant !== "none"
-        ? `· ${currentModel.variant}`
-        : "";
-    } else {
-      els.modelName.textContent = "(no model)";
-      els.modelVariant.textContent = "";
-    }
+    setCurrentModel(currentModel ?? COMPACT_DEFAULT_MODEL);
   } catch (err) {
     console.error("loadModelForHeader failed", err);
   }
@@ -1443,15 +1474,11 @@ function renderProviders(providers) {
   list.addEventListener("click", (e) => {
     const pill = e.target.closest(".variant-pill");
     if (!pill) return;
-    currentModel = compactPromptModel({
+    setCurrentModel({
       providerID: pill.dataset.provider,
       modelID: pill.dataset.model,
       variant: pill.dataset.variant || null,
     });
-    els.modelName.textContent = currentModel.modelID;
-    els.modelVariant.textContent = currentModel.variant && currentModel.variant !== "none"
-      ? `· ${currentModel.variant}`
-      : "";
     closePicker();
   });
 }
