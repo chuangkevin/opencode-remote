@@ -6,5 +6,5 @@ type: feedback
 
 - Never run `git push --force` to `main` or `master`.
 - Never use `git reset --hard` or broad cleanup commands unless the user explicitly requests them.
-- Commit only when the user has asked for commit or when the active workflow explicitly requires it.
+- For HomeProject/opencode development, completed and verified modifications explicitly require commit and push unless Kevin says not to; outside that workflow, commit only when the user has asked or the active workflow requires it.
 - For large or risky work, prefer worktree isolation and merge back only after verification.

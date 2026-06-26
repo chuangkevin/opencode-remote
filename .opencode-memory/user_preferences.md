@@ -22,6 +22,7 @@ type: user
   domain as private/Tailscale/testing-only. Public exposure requires an explicit
   request and sheet-to-car-level hardening before adding Cloudflare Tunnel or
   other Internet-facing routing.
-- After opencode makes code, config, or spec changes, it should verify, commit,
-  and push automatically unless Kevin explicitly says not to commit/push or to
-  leave changes uncommitted.
+- For HomeProject/opencode development, once modifications are complete and the
+  relevant tests/build/smoke checks pass, commit and push immediately. Do not ask
+  for separate push permission unless Kevin explicitly says not to commit/push or
+  a safety blocker applies.
