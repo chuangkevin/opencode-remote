@@ -26,7 +26,7 @@ let currentDirectory = defaultDirectory;
 const STREAMING_POLL_INTERVAL_MS = 5_000;
 let streamingPollTimer = null;
 let streamingPollInFlight = false;
-const COMPACT_DEFAULT_MODEL = { providerID: "opencode", modelID: "mimo-v2.5-free", variant: null };
+const COMPACT_DEFAULT_MODEL = { providerID: "opencode", modelID: "deepseek-v4-pro", variant: "max" };
 
 function normalizePromptModel(model) {
   const providerID = typeof model?.providerID === "string" ? model.providerID : "";
