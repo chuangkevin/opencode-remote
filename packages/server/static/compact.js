@@ -26,7 +26,7 @@ let currentDirectory = defaultDirectory;
 const STREAMING_POLL_INTERVAL_MS = 5_000;
 let streamingPollTimer = null;
 let streamingPollInFlight = false;
-const COMPACT_DEFAULT_MODEL = { providerID: "openai", modelID: "gpt-5.5", variant: "xhigh" };
+const COMPACT_DEFAULT_MODEL = { providerID: "opencode", modelID: "mimo-v2.5-free", variant: null };
 
 function normalizePromptModel(model) {
   const providerID = typeof model?.providerID === "string" ? model.providerID : "";
