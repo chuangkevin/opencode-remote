@@ -1,7 +1,7 @@
 ---
 description: No-edit verification agent. Use for tests, builds, type checks, smoke checks, and reporting evidence.
 mode: subagent
-model: openai/gpt-5.5
+model: opencode-go/minimax-m3
 temperature: 0.1
 steps: 20
 permission:

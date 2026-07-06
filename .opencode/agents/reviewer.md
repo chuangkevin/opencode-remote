@@ -1,7 +1,7 @@
 ---
 description: Read-only code review agent. Use for reviewing diffs, risks, missing tests, and spec alignment.
 mode: subagent
-model: openai/gpt-5.5
+model: opencode-go/minimax-m3
 temperature: 0.2
 steps: 25
 permission:

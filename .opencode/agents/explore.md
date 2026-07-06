@@ -1,7 +1,7 @@
 ---
 description: Read-only codebase and git research. Use for finding files, tracing patterns, and reporting grounded findings without edits.
 mode: subagent
-model: openai/gpt-5.5
+model: opencode-go/minimax-m3
 temperature: 0.2
 steps: 20
 permission:

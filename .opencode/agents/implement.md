@@ -1,7 +1,7 @@
 ---
 description: Strict implementation agent. Use only for bounded implementation tasks after an approved plan exists.
 mode: subagent
-model: openai/gpt-5.5
+model: opencode-go/minimax-m3
 temperature: 0.3
 steps: 60
 permission:

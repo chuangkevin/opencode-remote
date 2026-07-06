@@ -1,7 +1,7 @@
 ---
 description: Read-only planning agent. Use for OpenSpec/design/implementation-plan synthesis before code changes.
 mode: subagent
-model: openai/gpt-5.5
+model: opencode-go/minimax-m3
 temperature: 0.3
 steps: 30
 permission:
