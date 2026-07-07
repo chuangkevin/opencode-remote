@@ -1,0 +1,57 @@
+name: opencode-remote-desktop-caddy
+
+services:
+  caddy:
+    build: .
+    container_name: opencode-remote-desktop-caddy
+    restart: unless-stopped
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-kevin950805@gmail.com}
+      CF_API_TOKEN: ${CF_API_TOKEN:?Set CF_API_TOKEN before starting desktop Caddy}
+    ports:
+      - "100.83.112.20:80:80"
+      - "100.83.112.20:443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - default
+      - docker-app-portal
+      - frame-processor
+      - greed-island
+      - kevin-autopilot
+      - media-processor
+      - portainer
+      - provider-home
+      - skynet
+
+volumes:
+  caddy-data:
+  caddy-config:
+
+networks:
+  docker-app-portal:
+    external: true
+    name: docker-app-portal_default
+  frame-processor:
+    external: true
+    name: frame-processor_default
+  greed-island:
+    external: true
+    name: greed-island_greed-island
+  kevin-autopilot:
+    external: true
+    name: kevin-autopilot_default
+  media-processor:
+    external: true
+    name: media-processor_default
+  portainer:
+    external: true
+    name: portainer_default
+  provider-home:
+    external: true
+    name: provider-home_default
+  skynet:
+    external: true
+    name: skynet_default

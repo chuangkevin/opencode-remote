@@ -1,0 +1,286 @@
+{
+    email {$ACME_EMAIL}
+}
+
+(proxy_common) {
+    header_up -Accept-Encoding
+    flush_interval -1
+    transport http {
+        compression off
+    }
+}
+
+*.sisihome.org {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+
+    @portainer host portainer.sisihome.org
+    handle @portainer {
+        reverse_proxy portainer:9000 {
+            import proxy_common
+        }
+    }
+
+    @onshape host onshape.sisihome.org
+    handle @onshape {
+        reverse_proxy 100.79.242.43:6123 {
+            import proxy_common
+        }
+    }
+
+    @mita host mita.sisihome.org
+    handle @mita {
+        reverse_proxy 100.73.52.37:5325 {
+            import proxy_common
+        }
+    }
+
+    @files host files.sisihome.org
+    handle @files {
+        reverse_proxy 100.73.52.37:8088 {
+            import proxy_common
+        }
+    }
+
+    @opencode host opencode.sisihome.org
+    handle @opencode {
+        reverse_proxy 100.83.112.20:9223 {
+            import proxy_common
+        }
+    }
+
+    @provider_amd host provider-amd.sisihome.org
+    handle @provider_amd {
+        reverse_proxy 100.73.52.37:4096 {
+            import proxy_common
+        }
+    }
+
+    @provider_home host provider-home.sisihome.org
+    handle @provider_home {
+        reverse_proxy provider-home:4096 {
+            import proxy_common
+        }
+    }
+
+    @social host social.sisihome.org
+    handle @social {
+        reverse_proxy 100.73.52.37:4323 {
+            import proxy_common
+        }
+    }
+
+    @ching host ching.sisihome.org
+    handle @ching {
+        reverse_proxy 100.73.52.37:80 {
+            import proxy_common
+        }
+    }
+
+    @hunter host hunter.sisihome.org
+    handle @hunter {
+        reverse_proxy greed-island-web:80 {
+            import proxy_common
+        }
+    }
+
+    @frame host frame.sisihome.org
+    handle @frame {
+        reverse_proxy frame-processor-web-1:80 {
+            import proxy_common
+        }
+    }
+
+    @media host media.sisihome.org
+    handle @media {
+        reverse_proxy media-processor-web-1:80 {
+            import proxy_common
+        }
+    }
+
+    @video host video.sisihome.org
+    handle @video {
+        reverse_proxy 100.83.112.20:8501 {
+            import proxy_common
+        }
+    }
+
+    @kevin host kevin.sisihome.org
+    handle @kevin {
+        reverse_proxy kevin-autopilot:3023 {
+            import proxy_common
+        }
+    }
+
+    @moonlight host moonlight.sisihome.org
+    handle @moonlight {
+        reverse_proxy 100.83.112.20:60000 {
+            import proxy_common
+        }
+    }
+
+    @skynet host skynet.sisihome.org
+    handle @skynet {
+        reverse_proxy skynet-client-kevinhome:5173 {
+            import proxy_common
+        }
+    }
+
+    # These routes still depend on services hosted on rpi-matrix. They recover
+    # automatically when rpi-matrix comes back online.
+    @lunch host lunch.sisihome.org
+    handle @lunch {
+        reverse_proxy 100.126.226.79:9113 {
+            import proxy_common
+        }
+    }
+
+    @radio host radio.sisihome.org
+    handle @radio {
+        reverse_proxy 100.126.226.79:3123 {
+            import proxy_common
+        }
+    }
+
+    @code host code.sisihome.org
+    handle @code {
+        reverse_proxy 100.126.226.79:2123 {
+            import proxy_common
+        }
+    }
+
+    @readflix host readflix.sisihome.org
+    handle @readflix {
+        reverse_proxy 100.126.226.79:7123 {
+            import proxy_common
+        }
+    }
+
+    @portal host portal.sisihome.org
+    handle @portal {
+        reverse_proxy docker-app-portal-frontend:80 {
+            import proxy_common
+        }
+    }
+
+    @wishlist host wishlist.sisihome.org
+    handle @wishlist {
+        reverse_proxy 100.126.226.79:1124 {
+            import proxy_common
+        }
+    }
+
+    @designbridge host designbridge.sisihome.org
+    handle @designbridge {
+        reverse_proxy 100.126.226.79:5123 {
+            import proxy_common
+        }
+    }
+
+    @photo host photo.sisihome.org
+    handle @photo {
+        reverse_proxy 100.126.226.79:4123 {
+            import proxy_common
+        }
+    }
+
+    @bus host bus.sisihome.org
+    handle @bus {
+        reverse_proxy 100.126.226.79:55422 {
+            import proxy_common
+        }
+    }
+
+    @blog host blog.sisihome.org
+    handle @blog {
+        reverse_proxy 100.126.226.79:5566 {
+            import proxy_common
+        }
+    }
+
+    @pihole host pihole.sisihome.org
+    handle @pihole {
+        reverse_proxy 100.126.226.79:8053 {
+            import proxy_common
+        }
+    }
+
+    @drive host drive.sisihome.org
+    handle @drive {
+        reverse_proxy 100.126.226.79:9321 {
+            import proxy_common
+        }
+    }
+
+    @agents host agents.sisihome.org
+    handle @agents {
+        reverse_proxy 100.126.226.79:55144 {
+            import proxy_common
+        }
+    }
+
+    @autospec host autospec.sisihome.org
+    handle @autospec {
+        reverse_proxy 100.126.226.79:8223 {
+            import proxy_common
+        }
+    }
+
+    @github host github.sisihome.org
+    handle @github {
+        reverse_proxy 100.126.226.79:8323 {
+            import proxy_common
+        }
+    }
+
+    @stock host stock.sisihome.org
+    handle @stock {
+        reverse_proxy 100.126.226.79:9323 {
+            import proxy_common
+        }
+    }
+
+    @car host car.sisihome.org
+    handle @car {
+        reverse_proxy 100.126.226.79:5223 {
+            import proxy_common
+        }
+    }
+
+    @diary host diary.sisihome.org
+    handle @diary {
+        reverse_proxy 100.126.226.79:8823 {
+            import proxy_common
+        }
+    }
+
+    @key host key.sisihome.org
+    handle @key {
+        reverse_proxy 100.126.226.79:7823 {
+            import proxy_common
+        }
+    }
+
+    handle_errors {
+        @portainer_fallback host portainer.sisihome.org
+        handle @portainer_fallback {
+            reverse_proxy 100.126.226.79:9000 {
+                import proxy_common
+            }
+        }
+
+        @portal_fallback host portal.sisihome.org
+        handle @portal_fallback {
+            reverse_proxy 100.126.226.79:1123 {
+                import proxy_common
+            }
+        }
+
+        respond "Desktop Caddy route failed for {host}" 502
+    }
+
+    handle {
+        respond "No desktop Caddy route for {host}" 404
+    }
+}

@@ -1,4 +1,4 @@
-// ─── State ─────────────────────────────────────────────────
+﻿// ─── State ─────────────────────────────────────────────────
 const sessionID = document.body.dataset.sessionId;
 const defaultDirectory = document.body.dataset.directory || "";
 const els = {
@@ -26,7 +26,7 @@ let currentDirectory = defaultDirectory;
 const STREAMING_POLL_INTERVAL_MS = 5_000;
 let streamingPollTimer = null;
 let streamingPollInFlight = false;
-const COMPACT_DEFAULT_MODEL = { providerID: "opencode", modelID: "deepseek-v4-pro", variant: "max" };
+const COMPACT_DEFAULT_MODEL = { providerID: "opencode-go", modelID: "minimax-m3" };
 
 function normalizePromptModel(model) {
   const providerID = typeof model?.providerID === "string" ? model.providerID : "";

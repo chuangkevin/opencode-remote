@@ -3,6 +3,20 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-IsAdministrator)) {
+    Start-Process -FilePath "powershell.exe" `
+        -Verb RunAs `
+        -WorkingDirectory $PSScriptRoot `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
+    exit 0
+}
+
 $taskName = "opencode-remote-watchdog"
 $scriptPath = Join-Path $PSScriptRoot "ensure-service.ps1"
 $runnerPath = Join-Path $PSScriptRoot "run-watchdog-hidden.vbs"
@@ -17,8 +31,9 @@ if (-not (Test-Path -LiteralPath $runnerPath)) {
 }
 
 $taskCommand = "`"$wscriptPath`" `"$runnerPath`""
-& schtasks.exe /Create /TN $taskName /SC MINUTE /MO 5 /TR $taskCommand /F | Out-Null
+& schtasks.exe /Create /TN $taskName /SC MINUTE /MO 5 /TR $taskCommand /RL HIGHEST /F | Out-Null
 & schtasks.exe /Run /TN $taskName | Out-Null
 
 Write-Host "Installed watchdog scheduled task: $taskName" -ForegroundColor Green
+Write-Host "It is configured to run with highest privileges." -ForegroundColor Cyan
 Write-Host "It checks http://127.0.0.1:9223/remote-health every 5 minutes." -ForegroundColor Cyan

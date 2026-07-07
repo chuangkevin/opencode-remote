@@ -49,7 +49,8 @@ export function isUserSession(session: OpenCodeSession): boolean {
  *   /<base64url(directory)>/session/<sessionId>
  */
 export function encodeDirSlug(dir: string): string {
-  return Buffer.from(dir, "utf8")
+  const slugDirectory = dir.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
+  return Buffer.from(slugDirectory, "utf8")
     .toString("base64")
     .replace(/\+/g, "-")
     .replace(/\//g, "_")

@@ -22,7 +22,14 @@ type: user
   domain as private/Tailscale/testing-only. Public exposure requires an explicit
   request and sheet-to-car-level hardening before adding Cloudflare Tunnel or
   other Internet-facing routing.
+- For AI/video services that Kevin should access over Tailscale, bind the server
+  to `0.0.0.0` rather than only `127.0.0.1`, and share the Tailscale IP URL.
 - For HomeProject/opencode development, once modifications are complete and the
   relevant tests/build/smoke checks pass, commit and push immediately. Do not ask
   for separate push permission unless Kevin explicitly says not to commit/push or
   a safety blocker applies.
+- When Kevin has clearly asked for a service change intended for the live site,
+  opencode should continue through push, deployment, and runtime verification
+  without waiting for a separate "push/deploy" instruction.
+- For Hermes Agent on the MacBook Air controller, Kevin wants standard Hermes
+  behavior enabled and Telegram as the messaging interface.
