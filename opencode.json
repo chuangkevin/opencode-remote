@@ -2,6 +2,11 @@
     "$schema":  "https://opencode.ai/config.json",
     "model":  "local-llm/qwen2.5-vl-32b",
     "small_model":  "local-llm/qwen2.5-vl-32b",
+    "agent":  {
+                  "build":  {
+                                "model":  "local-llm/qwen2.5-vl-32b"
+                            }
+              },
     "autoupdate":  "notify",
     "instructions":  [
                          "{env:OPENCODE_DIRECTORY}/opencode-remote/.opencode-memory/MEMORY.md"
