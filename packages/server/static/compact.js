@@ -26,7 +26,10 @@ let currentDirectory = defaultDirectory;
 const STREAMING_POLL_INTERVAL_MS = 5_000;
 let streamingPollTimer = null;
 let streamingPollInFlight = false;
-const COMPACT_DEFAULT_MODEL = { providerID: "opencode-go", modelID: "minimax-m3" };
+// Fallback only — the real default is fetched live from the server's
+// /config (see loadModelForHeader). Kept in sync with the config default
+// so a fetch failure still lands on a model that actually exists.
+const COMPACT_DEFAULT_MODEL = { providerID: "local-llm", modelID: "qwen2.5-vl-32b" };
 
 function normalizePromptModel(model) {
   const providerID = typeof model?.providerID === "string" ? model.providerID : "";
@@ -1392,9 +1395,24 @@ async function loadDefaultModelFromConfig() {
 
 async function loadModelForHeader() {
   try {
+    // Prefer the server's configured default model so the compact view
+    // always matches the current config (e.g. build agent / top-level
+    // model), instead of a hard-coded value that goes stale when the
+    // provider set changes. opencode /config `model` is "providerID/modelID".
+    const res = await fetch("/config", { headers: { accept: "application/json" } });
+    if (res.ok) {
+      const cfg = await res.json().catch(() => null);
+      const raw = cfg?.agent?.build?.model ?? cfg?.model;
+      if (typeof raw === "string" && raw.includes("/")) {
+        const slash = raw.indexOf("/");
+        setCurrentModel({ providerID: raw.slice(0, slash), modelID: raw.slice(slash + 1) });
+        return;
+      }
+    }
     setCurrentModel(currentModel ?? COMPACT_DEFAULT_MODEL);
   } catch (err) {
     console.error("loadModelForHeader failed", err);
+    setCurrentModel(currentModel ?? COMPACT_DEFAULT_MODEL);
   }
 }
 
