@@ -68,5 +68,20 @@ $opencodePort = [int](Get-EnvValue "OPENCODE_PORT" "4096")
 Stop-PortProcessExact -Port 9223 -Label "proxy"
 Stop-PortProcessExact -Port $opencodePort -Label "OpenCode"
 
+# Orphan sweep: a prior crashed/restarted instance can leave "OpenCode.exe"
+# child/worker processes alive that never bound the listening port themselves
+# (only the port-holder is caught by Stop-PortProcessExact above). These
+# orphans compete for memory and file locks with the next instance and were
+# observed causing repeated post-restart crash loops (watchdog restarting
+# every 2-5 min). "OpenCode" is this service's own unique binary name — safe
+# to sweep unconditionally, unlike generic "node" which many other local
+# services also run under.
+$orphans = Get-Process -Name "OpenCode" -ErrorAction SilentlyContinue
+if ($orphans) {
+    Write-Host "  Sweeping $($orphans.Count) orphaned OpenCode process(es)..." -ForegroundColor Yellow
+    $orphans | Stop-Process -Force -ErrorAction SilentlyContinue
+    Write-Host "✓ Orphans cleared" -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "✓ All services stopped" -ForegroundColor Green
