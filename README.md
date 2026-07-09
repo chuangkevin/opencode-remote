@@ -70,6 +70,7 @@ OPENCODE_CLI_PATH=                              # 可選：非標準 opencode-cl
 
 - [OPERATIONS.md](./OPERATIONS.md) — 完整操作手冊、故障排除
 - [CLAUDE.md](./CLAUDE.md) — 技術細節、架構決策（給 AI assistant 看）
+- [docs/local-llm-provider-setup.md](./docs/local-llm-provider-setup.md) — 在 OpenCode 加入自架 local LLM provider（含 `baseURL` 少 `/v1` 的常見坑）
 
 ## OpenCode Capability Setup
 
