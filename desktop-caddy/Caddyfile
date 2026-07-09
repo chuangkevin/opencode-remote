@@ -1,3 +1,10 @@
+# DECOMMISSIONED 2026-07-08 — NOT the deployed Caddy config.
+# Source of truth is now homelab-docs/infra/caddy/ (Caddyfile.primary +
+# routes.caddyfile), sole instance running on amd64 (100.73.52.37). This
+# file is kept only as reserve/emergency material per this folder's README
+# ("Emergency private/Tailscale replacement for the RPi Caddy route"); if
+# you're debugging opencode.sisihome.org, edit homelab-docs instead.
+
 {
     email {$ACME_EMAIL}
 }
