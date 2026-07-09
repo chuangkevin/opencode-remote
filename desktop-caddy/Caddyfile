@@ -45,6 +45,17 @@
 
     @opencode host opencode.sisihome.org
     handle @opencode {
+        # Static JS/CSS bundles (the "standard" OpenCode session UI, ~3MB
+        # uncompressed: index-*.js is ~2.5MB) are served with compression
+        # disabled globally by proxy_common (transport http { compression
+        # off } + header_up -Accept-Encoding), which exists to keep SSE/
+        # live-update streaming unbuffered. That blanket setting also starves
+        # static assets of compression, which was the dominant cause of slow
+        # mobile loads (2.5MB JS over cellular). Scope gzip/zstd to /assets/*
+        # only so streaming/API responses are untouched.
+        @opencode_assets path /assets/*
+        encode @opencode_assets zstd gzip
+
         reverse_proxy 100.83.112.20:9223 {
             import proxy_common
         }
