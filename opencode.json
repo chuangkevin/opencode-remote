@@ -109,7 +109,11 @@
                                                    },
                                        "models":  {
                                                       "qwen2.5-vl-32b":  {
-                                                                             "name":  "qwen2.5-vl-32b"
+                                                                             "name":  "qwen2.5-vl-32b",
+                                                                             "limit":  {
+                                                                                           "context":  65536,
+                                                                                           "output":  8192
+                                                                                       }
                                                                          }
                                                   }
                                    }
