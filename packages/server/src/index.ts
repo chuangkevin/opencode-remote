@@ -549,12 +549,39 @@ function proxy(
         });
         upstreamRes.on("end", () => {
           if (res.destroyed || cleanedUp) return;
-          const html = injectRemoteReset(Buffer.concat(chunks).toString("utf8"));
-          allowInlineScripts(headers, html);
-          const body = Buffer.from(html, "utf8");
-          headers["content-length"] = String(body.byteLength);
-          res.writeHead(upstreamRes.statusCode ?? 200, headers);
-          res.end(body);
+          const sendPage = (): void => {
+            if (res.destroyed || cleanedUp) return;
+            const html = injectRemoteReset(Buffer.concat(chunks).toString("utf8"));
+            allowInlineScripts(headers, html);
+            const body = Buffer.from(html, "utf8");
+            headers["content-length"] = String(body.byteLength);
+            res.writeHead(upstreamRes.statusCode ?? 200, headers);
+            res.end(body);
+          };
+          // opencode returns the SPA shell (200) for any /session/<id> URL
+          // even when the session no longer exists (e.g. a deleted session);
+          // the client then dead-ends on a "Session not found" 404 error
+          // screen with no way back. Verify existence server-side and, if the
+          // session is gone, redirect to root so the app recovers to the
+          // session list / most-recent session instead of the dead screen.
+          if (pageSessionID) {
+            fetch(`${config.opencodeUrl}/session/${pageSessionID}`, { method: "GET" })
+              .then((r) => {
+                if (res.destroyed || cleanedUp) return;
+                if (r.status === 404) {
+                  res.writeHead(302, {
+                    location: "/",
+                    "cache-control": "no-store, no-cache, must-revalidate",
+                  });
+                  res.end();
+                  return;
+                }
+                sendPage();
+              })
+              .catch(() => sendPage());
+            return;
+          }
+          sendPage();
         });
         return;
       }
