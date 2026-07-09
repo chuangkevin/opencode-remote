@@ -1,7 +1,7 @@
 ---
 description: Read-only planning agent. Use for OpenSpec/design/implementation-plan synthesis before code changes.
 mode: subagent
-model: opencode-go/minimax-m3
+model: local-llm/qwen2.5-vl-32b
 temperature: 0.3
 steps: 30
 permission:
@@ -23,3 +23,4 @@ You are the Plan subagent.
 - Honor `homelab-docs/skills/plan-before-build/SKILL.md` when the task is a new feature or non-trivial behavior change.
 - Call out scope boundaries, risks, exact files to touch, and verification commands.
 - Do not edit files or run mutating commands.
+

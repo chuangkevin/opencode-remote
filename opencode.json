@@ -1,103 +1,118 @@
 {
-  "$schema": "https://opencode.ai/config.json",
-  "model": "opencode-go/minimax-m3",
-  "small_model": "opencode-go/minimax-m3",
-  "autoupdate": "notify",
-  "instructions": [
-    "{env:OPENCODE_DIRECTORY}/opencode-remote/.opencode-memory/MEMORY.md"
-  ],
-  "permission": {
-    "edit": {
-      "*": "ask",
-      ".env": "deny",
-      ".env.*": "deny",
-      "*service-account*.json": "deny",
-      "*credential*.json": "deny",
-      "secrets/**": "deny",
-      ".claude-memory/**": "deny",
-      "**/.env": "deny",
-      "**/.env.*": "deny",
-      "**/*service-account*.json": "deny",
-      "**/*credential*.json": "deny",
-      "**/secrets/**": "deny",
-      "**/.claude-memory/**": "deny"
-    },
-    "bash": {
-      "*": "ask",
-      "git status*": "allow",
-      "git log*": "allow",
-      "git diff*": "allow",
-      "git show*": "allow",
-      "npm run typecheck": "allow",
-      "npm run build": "allow",
-      "node --version": "allow",
-      "npm --version": "allow",
-      "git reset --hard*": "deny",
-      "git push --force*": "deny",
-      "git clean*": "deny",
-      "Remove-Item *": "deny",
-      "del *": "deny",
-      "rmdir *": "deny",
-      "* > .env*": "deny"
-    },
-    "git_git_reset": "deny",
-    "git_git_clean": "deny",
-    "git_git_clear_working_dir": "deny",
-    "git_git_push": "ask",
-    "git_git_commit": "ask",
-    "github_*": "ask",
-    "filesystem_*": "ask",
-    "fetch_*": "allow"
-  },
-  "mcp": {
-    "filesystem": {
-      "type": "local",
-      "command": [
-        "mcp-server-filesystem",
-        "{env:OPENCODE_DIRECTORY}"
-      ],
-      "enabled": true,
-      "timeout": 60000
-    },
-    "git": {
-      "type": "local",
-      "command": [
-        "git-mcp-server"
-      ],
-      "enabled": true,
-      "timeout": 60000
-    },
-    "github": {
-      "type": "remote",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer {env:GITHUB_TOKEN}"
-      },
-      "enabled": true,
-      "timeout": 60000
-    },
-    "fetch": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "mcp-fetch-server"
-      ],
-      "environment": {
-        "DEFAULT_LIMIT": "10000"
-      },
-      "enabled": false,
-      "timeout": 60000
-    },
-    "playwright": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@playwright/mcp"
-      ],
-      "enabled": false,
-      "timeout": 30000
-    }
-  }
+    "$schema":  "https://opencode.ai/config.json",
+    "model":  "local-llm/qwen2.5-vl-32b",
+    "small_model":  "local-llm/qwen2.5-vl-32b",
+    "autoupdate":  "notify",
+    "instructions":  [
+                         "{env:OPENCODE_DIRECTORY}/opencode-remote/.opencode-memory/MEMORY.md"
+                     ],
+    "permission":  {
+                       "edit":  {
+                                    "*":  "ask",
+                                    ".env":  "deny",
+                                    ".env.*":  "deny",
+                                    "*service-account*.json":  "deny",
+                                    "*credential*.json":  "deny",
+                                    "secrets/**":  "deny",
+                                    ".claude-memory/**":  "deny",
+                                    "**/.env":  "deny",
+                                    "**/.env.*":  "deny",
+                                    "**/*service-account*.json":  "deny",
+                                    "**/*credential*.json":  "deny",
+                                    "**/secrets/**":  "deny",
+                                    "**/.claude-memory/**":  "deny"
+                                },
+                       "bash":  {
+                                    "*":  "ask",
+                                    "git status*":  "allow",
+                                    "git log*":  "allow",
+                                    "git diff*":  "allow",
+                                    "git show*":  "allow",
+                                    "npm run typecheck":  "allow",
+                                    "npm run build":  "allow",
+                                    "node --version":  "allow",
+                                    "npm --version":  "allow",
+                                    "git reset --hard*":  "deny",
+                                    "git push --force*":  "deny",
+                                    "git clean*":  "deny",
+                                    "Remove-Item *":  "deny",
+                                    "del *":  "deny",
+                                    "rmdir *":  "deny",
+                                    "* \u003e .env*":  "deny"
+                                },
+                       "git_git_reset":  "deny",
+                       "git_git_clean":  "deny",
+                       "git_git_clear_working_dir":  "deny",
+                       "git_git_push":  "ask",
+                       "git_git_commit":  "ask",
+                       "github_*":  "ask",
+                       "filesystem_*":  "ask",
+                       "fetch_*":  "allow"
+                   },
+    "mcp":  {
+                "filesystem":  {
+                                   "type":  "local",
+                                   "command":  [
+                                                   "mcp-server-filesystem",
+                                                   "{env:OPENCODE_DIRECTORY}"
+                                               ],
+                                   "enabled":  true,
+                                   "timeout":  60000
+                               },
+                "git":  {
+                            "type":  "local",
+                            "command":  [
+                                            "git-mcp-server"
+                                        ],
+                            "enabled":  true,
+                            "timeout":  60000
+                        },
+                "github":  {
+                               "type":  "remote",
+                               "url":  "https://api.githubcopilot.com/mcp/",
+                               "headers":  {
+                                               "Authorization":  "Bearer {env:GITHUB_TOKEN}"
+                                           },
+                               "enabled":  true,
+                               "timeout":  60000
+                           },
+                "fetch":  {
+                              "type":  "local",
+                              "command":  [
+                                              "npx",
+                                              "-y",
+                                              "mcp-fetch-server"
+                                          ],
+                              "environment":  {
+                                                  "DEFAULT_LIMIT":  "10000"
+                                              },
+                              "enabled":  false,
+                              "timeout":  60000
+                          },
+                "playwright":  {
+                                   "type":  "local",
+                                   "command":  [
+                                                   "npx",
+                                                   "-y",
+                                                   "@playwright/mcp"
+                                               ],
+                                   "enabled":  false,
+                                   "timeout":  30000
+                               }
+            },
+    "provider":  {
+                     "local-llm":  {
+                                       "name":  "Local LLM (llm.sisihome.org)",
+                                       "npm":  "@ai-sdk/openai-compatible",
+                                       "options":  {
+                                                       "baseURL":  "https://llm.sisihome.org/v1"
+                                                   },
+                                       "models":  {
+                                                      "qwen2.5-vl-32b":  {
+                                                                             "name":  "qwen2.5-vl-32b"
+                                                                         }
+                                                  }
+                                   }
+                 }
 }
+

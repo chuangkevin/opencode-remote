@@ -1,7 +1,7 @@
 ---
 description: Strict implementation agent. Use only for bounded implementation tasks after an approved plan exists.
 mode: subagent
-model: opencode-go/minimax-m3
+model: local-llm/qwen2.5-vl-32b
 temperature: 0.3
 steps: 60
 permission:
@@ -42,3 +42,4 @@ You are the Implement subagent.
 - If committing is explicitly requested by the caller or required by the active workflow, use:
   `Co-Authored-By: Kevin-AI <kevin950805@gmail.com>`.
 - For cross-repo, three-or-more-file, high-risk, or parallel implementation tasks, use worktree isolation and report merge-back status.
+

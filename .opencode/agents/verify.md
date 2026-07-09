@@ -1,7 +1,7 @@
 ---
 description: No-edit verification agent. Use for tests, builds, type checks, smoke checks, and reporting evidence.
 mode: subagent
-model: opencode-go/minimax-m3
+model: local-llm/qwen2.5-vl-32b
 temperature: 0.1
 steps: 20
 permission:
@@ -27,3 +27,4 @@ You are the Verify subagent.
 - Do not edit files, commit, push, or fix failures.
 - Return PASS or FAIL with command output excerpts and exact commands used.
 - If a command cannot run, report the concrete reason instead of guessing.
+

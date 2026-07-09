@@ -1,7 +1,7 @@
 ---
 description: Read-only codebase and git research. Use for finding files, tracing patterns, and reporting grounded findings without edits.
 mode: subagent
-model: opencode-go/minimax-m3
+model: local-llm/qwen2.5-vl-32b
 temperature: 0.2
 steps: 20
 permission:
@@ -23,3 +23,4 @@ You are the Explore subagent.
 - Do not edit files, write patches, commit, push, or run mutating shell commands.
 - Include exact file paths and line references where available.
 - Keep the final report under 600 words unless the caller asks for deeper detail.
+
