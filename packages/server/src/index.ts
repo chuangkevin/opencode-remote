@@ -502,6 +502,15 @@ function proxy(
         delete headers["content-length"];
       }
 
+      // Static bundles under /assets/ use content-hashed filenames
+      // (e.g. index-B-ada5Lh.js) but upstream sends no Cache-Control, so
+      // browsers re-download the ~2.5MB JS bundle on every visit. Hashed
+      // names change when content changes, so immutable caching is safe
+      // and makes repeat loads of the standard session UI near-instant.
+      if (upstreamPath.startsWith("/assets/") && (upstreamRes.statusCode ?? 200) === 200) {
+        headers["cache-control"] = "public, max-age=31536000, immutable";
+      }
+
       const contentType = upstreamRes.headers["content-type"];
       const isHtml = !isHead && typeof contentType === "string" && contentType.includes("text/html");
       const isJsonSessionList = !isHead &&
