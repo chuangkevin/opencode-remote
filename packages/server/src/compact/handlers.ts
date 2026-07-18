@@ -66,6 +66,53 @@ export function handleCompactSession(sessionID: string, res: http.ServerResponse
   });
 }
 
+// Server-side provider filter for the compact model picker.
+//
+// opencode's raw /provider is ~4.2 MB (168 providers / 5,600+ models). Shipping
+// that to a phone stalls the picker on download + parse. We fetch it once
+// server-side, drop the dead/paid providers, keep only free (cost 0) active
+// models, and return a tiny list matching what the desktop actually offers.
+//
+// Filter standard (mirrors the rest of HomeProject — see homelab-docs
+// "OpenCode model-picker filter standard"): exclude providerID opencode-go and
+// openai, keep only models with cost.input === 0 && cost.output === 0. Missing
+// cost is treated as free so local/custom providers (e.g. local-llm) survive.
+const PICKER_EXCLUDE_PROVIDERS = new Set(["opencode-go", "openai"]);
+
+function isFreeModel(m: { cost?: { input?: number; output?: number } }): boolean {
+  return (m?.cost?.input ?? 0) === 0 && (m?.cost?.output ?? 0) === 0;
+}
+
+export async function handleCompactProviders(res: http.ServerResponse): Promise<void> {
+  try {
+    const r = await fetch(`${appConfig.opencodeUrl}/provider`);
+    if (!r.ok) throw new Error(`upstream /provider ${r.status}`);
+    const data = (await r.json()) as { all?: unknown };
+    const all: any[] = Array.isArray(data?.all) ? (data.all as any[]) : Array.isArray(data) ? (data as any) : [];
+    const providers = all
+      .filter((p: any) => p && !PICKER_EXCLUDE_PROVIDERS.has(p.id))
+      .map((p: any) => ({
+        id: p.id,
+        name: p.name ?? p.id,
+        models: Object.entries(p.models ?? {})
+          .map(([key, m]: [string, any]) => ({ ...(m ?? {}), id: m?.id ?? key }))
+          .filter((m: any) => (m.status ? m.status === "active" : true) && isFreeModel(m))
+          .map((m: any) => ({ id: m.id, variants: m.variants ?? null })),
+      }))
+      .filter((p: any) => p.models.length > 0);
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-OpenCode-Remote": "compact",
+    });
+    res.end(JSON.stringify(providers));
+  } catch (err) {
+    console.error("[opencode-remote] /c/providers failed:", err);
+    res.writeHead(502, { "Cache-Control": "no-store" });
+    res.end("[]");
+  }
+}
+
 export async function handleCompactNewSession(res: http.ServerResponse): Promise<void> {
   try {
     // Do NOT set `title` here — OpenCode's auto-titling (LLM-generated

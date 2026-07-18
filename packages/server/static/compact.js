@@ -1403,25 +1403,13 @@ let authedProviderIds = null;
 let defaultModelFromConfig = null;
 
 async function loadProviders() {
-  if (providersCache) return providersCache;
-  const [provResp, authResp] = await Promise.all([
-    api("/provider"),
-    api("/provider/auth").catch(() => ({})),
-  ]);
-  authedProviderIds = new Set(Object.keys(authResp ?? {}));
-  // OpenCode /provider returns { all: [...] }
-  const all = Array.isArray(provResp?.all) ? provResp.all : (Array.isArray(provResp) ? provResp : []);
-  // Keep only providers the user has authed AND that have at least one active model.
-  providersCache = all
-    .filter((p) => authedProviderIds.has(p.id))
-    .map((p) => ({
-      id: p.id,
-      name: p.name ?? p.id,
-      models: Object.values(p.models ?? {})
-        .filter((m) => m.status === "active"),
-    }))
-    .filter((p) => p.models.length > 0);
-  return providersCache;
+  // /c/providers is a small, server-filtered list — dead providers
+  // (opencode-go / openai) dropped, only free + active models kept — so we
+  // never ship the raw ~4.2 MB /provider payload (5,600+ models) to the phone,
+  // which was stalling the picker. Fetched fresh on each open (no cache) so a
+  // newly added provider appears without a reload. See handleCompactProviders.
+  const providers = await api("/c/providers");
+  return Array.isArray(providers) ? providers : [];
 }
 
 async function loadDefaultModelFromConfig() {
