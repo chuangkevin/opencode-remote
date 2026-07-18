@@ -89,6 +89,11 @@ const _autoAcceptedPermissions = new Set();
 
 // Inline question cards mounted under els.messages, keyed by question id.
 const questionNodes = new Map();
+// Per-question selection state, keyed by question id → array of Sets (one Set
+// per sub-question). Held here (not in a render closure) so it survives the
+// 5s streaming poll's loadHistory() wipe and SSE re-broadcasts. Without this,
+// a re-render would reset what the user already picked. Cleared on finish.
+const questionSelections = new Map();
 let pendingQuestionDrainTimer = null;
 
 // Persisted prompt queue (see the "Prompt queue" section below). Hoisted
@@ -215,11 +220,24 @@ function escapeHTML(s) {
 // ─── History ───────────────────────────────────────────────
 async function loadHistory() {
   const messages = await api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`);
+  // Preserve in-progress (unanswered) question cards across the re-render. The
+  // 5s streaming poll calls loadHistory() while the AI is busy; wiping the card
+  // would flicker it and (together with its closures) reset the user's picks.
+  // We detach the live nodes, rebuild everything else, then re-attach them —
+  // keeping their DOM, event listeners, and .selected highlight intact.
+  const preservedQuestions = [];
+  questionNodes.forEach((card, id) => {
+    const done = card.classList.contains("answered") || card.classList.contains("rejected");
+    if (!done && card.isConnected) {
+      card.remove();
+      preservedQuestions.push([id, card]);
+    }
+  });
   els.messages.innerHTML = "";
   messageNodes.clear();
-  // The question cards and queued-prompt nodes we mounted under
-  // els.messages were wiped; clear the caches so drainPendingInteractive
-  // and the boot-time queue renderer can re-mount them.
+  // Answered/rejected question cards and queued-prompt nodes were wiped; clear
+  // those caches so drainPendingInteractive and the queue renderer re-mount
+  // them. Preserved (in-progress) question cards are re-registered below.
   questionNodes.clear();
   queueNodes.clear();
   const list = Array.isArray(messages) ? messages : [];
@@ -228,6 +246,11 @@ async function loadHistory() {
   // Re-render any prompts still in the queue so they survive a history
   // refresh (loadHistory is also called on visibilitychange).
   for (const item of queue) renderQueueItem(item);
+  // Re-attach the preserved question cards at the bottom, keeping selections.
+  for (const [id, card] of preservedQuestions) {
+    els.messages.appendChild(card);
+    questionNodes.set(id, card);
+  }
   scrollToBottom();
 }
 
@@ -563,8 +586,14 @@ function renderQuestionRequest(req) {
   }
 
   // Per-question selection state. For single-select we submit on first click;
-  // for multi-select we accumulate then submit via the footer button.
-  const selections = questions.map(() => new Set());
+  // for multi-select we accumulate then submit via the footer button. Restore
+  // any prior selection (kept in questionSelections) so a re-render triggered by
+  // the 5s streaming poll or an SSE re-broadcast does not wipe the user's picks.
+  let selections = questionSelections.get(id);
+  if (!selections || selections.length !== questions.length) {
+    selections = questions.map(() => new Set());
+    questionSelections.set(id, selections);
+  }
 
   card.innerHTML = "";
   const head = document.createElement("div");
@@ -595,6 +624,8 @@ function renderQuestionRequest(req) {
       btn.className = "qopt";
       const labelText = String(opt.label ?? "");
       btn.dataset.label = labelText;
+      // Reflect any restored selection so re-renders keep the highlight.
+      if (selections[qi].has(labelText)) btn.classList.add("selected");
       btn.innerHTML = `<span class="qopt-label">${escapeHTML(labelText)}</span>` +
         (opt.description ? `<span class="qopt-desc">${escapeHTML(String(opt.description))}</span>` : "");
       btn.addEventListener("click", () => {
@@ -687,6 +718,8 @@ async function rejectQuestion(id, card) {
 function markQuestionFinished(type, props) {
   const id = props?.requestID ?? props?.id;
   if (!id) return;
+  // The question is resolved — drop its retained selection state.
+  questionSelections.delete(id);
   const card = questionNodes.get(id);
   if (!card) return;
   card.classList.remove("submitting");
