@@ -51,6 +51,23 @@ function setCurrentModel(model) {
     : "";
 }
 
+// Persist the user's explicit model choice so it survives a reload. OpenCode
+// v1.14.30 does not write the picked model back to session.model, so without
+// this the header falls back to the /config default on every reload. Keyed per
+// session; only the user's picker selection writes here (never the config default).
+const SAVED_MODEL_KEY = `compact-model:${sessionID}`;
+function persistModel(model) {
+  const m = normalizePromptModel(model);
+  if (!m) return;
+  try { localStorage.setItem(SAVED_MODEL_KEY, JSON.stringify(m)); } catch {}
+}
+function readSavedModel() {
+  try {
+    const raw = localStorage.getItem(SAVED_MODEL_KEY);
+    return raw ? normalizePromptModel(JSON.parse(raw)) : null;
+  } catch { return null; }
+}
+
 // ─── Markdown + safety ─────────────────────────────────────
 function renderMarkdown(text) {
   return marked.parse(text || "");
@@ -1427,6 +1444,9 @@ async function loadDefaultModelFromConfig() {
 }
 
 async function loadModelForHeader() {
+  // A saved user pick wins over the config default so the model survives reload.
+  const saved = readSavedModel();
+  if (saved) { setCurrentModel(saved); return; }
   try {
     // Prefer the server's configured default model so the compact view
     // always matches the current config (e.g. build agent / top-level
@@ -1525,11 +1545,13 @@ function renderProviders(providers) {
   list.addEventListener("click", (e) => {
     const pill = e.target.closest(".variant-pill");
     if (!pill) return;
-    setCurrentModel({
+    const chosen = {
       providerID: pill.dataset.provider,
       modelID: pill.dataset.model,
       variant: pill.dataset.variant || null,
-    });
+    };
+    setCurrentModel(chosen);
+    persistModel(chosen);
     closePicker();
   });
 }
