@@ -85,12 +85,25 @@ function isFreeModel(m: { cost?: { input?: number; output?: number } }): boolean
 
 export async function handleCompactProviders(res: http.ServerResponse): Promise<void> {
   try {
-    const r = await fetch(`${appConfig.opencodeUrl}/provider`);
-    if (!r.ok) throw new Error(`upstream /provider ${r.status}`);
-    const data = (await r.json()) as { all?: unknown };
+    const [provResp, cfgResp] = await Promise.all([
+      fetch(`${appConfig.opencodeUrl}/provider`),
+      fetch(`${appConfig.opencodeUrl}/config`).catch(() => null),
+    ]);
+    if (!provResp.ok) throw new Error(`upstream /provider ${provResp.status}`);
+    const data = (await provResp.json()) as { all?: unknown };
     const all: any[] = Array.isArray(data?.all) ? (data.all as any[]) : Array.isArray(data) ? (data as any) : [];
+    // Allowlist = only the providers the desktop config actually defines, plus
+    // the built-in free "opencode" (Zen) provider. This keeps the picker to the
+    // same short list the desktop shows (e.g. local-llm + opencode) instead of
+    // every provider that merely happens to offer a free tier. A provider the
+    // user adds to the config later appears automatically (no cache).
+    const allow = new Set<string>(["opencode"]);
+    if (cfgResp && cfgResp.ok) {
+      const cfg = (await cfgResp.json().catch(() => ({}))) as { provider?: Record<string, unknown> };
+      for (const id of Object.keys(cfg?.provider ?? {})) allow.add(id);
+    }
     const providers = all
-      .filter((p: any) => p && !PICKER_EXCLUDE_PROVIDERS.has(p.id))
+      .filter((p: any) => p && allow.has(p.id) && !PICKER_EXCLUDE_PROVIDERS.has(p.id))
       .map((p: any) => ({
         id: p.id,
         name: p.name ?? p.id,
