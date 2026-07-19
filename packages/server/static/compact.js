@@ -271,6 +271,20 @@ async function loadHistory() {
   scrollToBottom();
 }
 
+// Incremental refresh used by the 5s streaming poll. Unlike loadHistory() this
+// never touches els.messages.innerHTML — renderMessage() upserts through
+// ensureMessageNode(), so existing nodes are updated in place. That removes the
+// flicker, the scroll jump, and the question/queue node churn a full rebuild
+// caused every 5 seconds while the AI was streaming.
+async function refreshHistoryIncremental() {
+  const messages = await api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`);
+  const list = Array.isArray(messages) ? messages : [];
+  list.sort((a, b) => (a.info?.time?.created ?? 0) - (b.info?.time?.created ?? 0));
+  for (const m of list) renderMessage(m);
+  // Respect where the user is reading instead of yanking to the bottom.
+  maybeScrollOrShowChip();
+}
+
 function scrollToBottom() {
   requestAnimationFrame(() => {
     els.messages.scrollTop = els.messages.scrollHeight;
@@ -369,8 +383,10 @@ async function pollStreamingState() {
   streamingPollInFlight = true;
   try {
     // SSE is best-effort in mobile/PWA browsers. Poll while busy so completed
-    // gpt-5.5 replies still appear even if EventSource drops an update.
-    await loadHistory();
+    // replies still appear even if EventSource drops an update. Incremental —
+    // a full loadHistory() here rebuilt the whole thread every 5s (flicker,
+    // scroll jump, question-card churn).
+    await refreshHistoryIncremental();
     await refreshBusyStatus();
     await drainQueueIfIdle();
   } finally {
