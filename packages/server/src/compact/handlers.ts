@@ -1,5 +1,6 @@
 import http from "node:http";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as appConfig } from "../config.js";
@@ -123,6 +124,86 @@ export async function handleCompactProviders(res: http.ServerResponse): Promise<
     console.error("[opencode-remote] /c/providers failed:", err);
     res.writeHead(502, { "Cache-Control": "no-store" });
     res.end("[]");
+  }
+}
+
+// ── Add provider (compact picker) ───────────────────────────────────────────
+// Writes into the GLOBAL opencode config, not the project one. The project
+// config (_HomeProject/opencode.json) is regenerated from opencode-remote's
+// template by setup-capabilities.ps1, so anything written there is wiped on the
+// next setup/restart. The global file is user-owned, survives, is read by the
+// desktop in every folder, and is merged in for the remote too — so a provider
+// added here shows up on both surfaces.
+const GLOBAL_CONFIG_PATH = join(homedir(), ".config", "opencode", "opencode.jsonc");
+const PROVIDER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+function readJsonBody(req: http.IncomingMessage, limit = 64 * 1024): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > limit) {
+        reject(new Error("request body too large"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        reject(new Error("invalid JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+export async function handleCompactAddProvider(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  const fail = (status: number, error: string): void => {
+    res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ ok: false, error }));
+  };
+  try {
+    const body = await readJsonBody(req);
+    const id = String(body?.id ?? "").trim();
+    const name = String(body?.name ?? "").trim() || id;
+    const baseURL = String(body?.baseURL ?? "").trim();
+    const modelID = String(body?.modelID ?? "").trim();
+
+    if (!PROVIDER_ID_RE.test(id)) return fail(400, "provider id 只能用英數字 . _ -，且不可為空");
+    if (!/^https?:\/\//i.test(baseURL)) return fail(400, "baseURL 必須以 http:// 或 https:// 開頭");
+    if (!modelID) return fail(400, "model id 不可為空");
+    if (!existsSync(GLOBAL_CONFIG_PATH)) return fail(500, `找不到全域設定：${GLOBAL_CONFIG_PATH}`);
+
+    const rawCfg = readFileSync(GLOBAL_CONFIG_PATH, "utf8");
+    let cfg: any;
+    try {
+      cfg = JSON.parse(rawCfg);
+    } catch {
+      return fail(500, "全域設定不是純 JSON（可能含註解），請手動編輯");
+    }
+    if (!cfg || typeof cfg !== "object") return fail(500, "全域設定格式不正確");
+
+    cfg.provider = cfg.provider ?? {};
+    cfg.provider[id] = {
+      name,
+      npm: "@ai-sdk/openai-compatible",
+      options: { baseURL },
+      models: { [modelID]: { name: modelID } },
+    };
+    writeFileSync(GLOBAL_CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    // opencode-cli reads providers at startup, so a brand new provider only
+    // appears in /provider after the service reloads. Tell the client so it can
+    // say so instead of silently showing nothing.
+    res.end(JSON.stringify({ ok: true, id, needsRestart: true }));
+  } catch (err) {
+    console.error("[opencode-remote] /c/providers add failed:", err);
+    fail(500, err instanceof Error ? err.message : "新增失敗");
   }
 }
 

@@ -695,3 +695,57 @@ header.app-header {
   color: var(--muted);
   text-align: right;
 }
+
+/* ── Add provider (picker footer) ─────────────────────────── */
+.add-provider {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.add-provider-toggle {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+.add-provider-toggle:active { background: var(--surface-hi); color: var(--text); }
+.add-provider-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.add-provider-form input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  /* 16px keeps iOS Safari from zooming the viewport on focus. */
+  font-size: 16px;
+}
+.add-provider-form input:focus {
+  outline: none;
+  border-color: var(--border-hi);
+}
+.add-provider-save {
+  padding: 10px 12px;
+  background: var(--send);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+.add-provider-save:active { filter: brightness(1.1); }
+.add-provider-save:disabled { background: var(--border-hi); cursor: default; }
+.add-provider-hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}

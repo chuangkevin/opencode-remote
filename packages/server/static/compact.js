@@ -1489,9 +1489,24 @@ async function openPicker() {
         <div class="toggle off" id="trustToggle"></div>
       </div>
       <div id="providersList">載入中…</div>
+      <div class="add-provider">
+        <button class="add-provider-toggle" id="addProviderToggle" type="button">＋ 新增 provider</button>
+        <div class="add-provider-form" id="addProviderForm" hidden>
+          <input id="apId" type="text" placeholder="provider id（例：llm-amd）" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <input id="apBase" type="url" placeholder="baseURL（例：https://llm-amd.sisihome.org/v1）" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <input id="apModel" type="text" placeholder="model id（例：qwen2.5-vl-32b）" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <button class="add-provider-save" id="apSave" type="button">儲存</button>
+          <div class="add-provider-hint" id="apHint"></div>
+        </div>
+      </div>
     </div>`;
   document.getElementById("pickerClose").addEventListener("click", closePicker);
   document.getElementById("trustToggle").addEventListener("click", toggleTrust);
+  document.getElementById("addProviderToggle").addEventListener("click", () => {
+    const form = document.getElementById("addProviderForm");
+    form.hidden = !form.hidden;
+  });
+  document.getElementById("apSave").addEventListener("click", saveNewProvider);
 
   try {
     const providers = await loadProviders();
@@ -1500,6 +1515,44 @@ async function openPicker() {
     document.getElementById("providersList").textContent = "載入失敗：" + err.message;
   }
   await refreshTrustToggle();
+}
+
+// Saves into the GLOBAL opencode config (see handleCompactAddProvider) so the
+// entry survives the project-config regeneration and shows up on the desktop
+// too. opencode-cli only reads providers at startup, so a brand new provider
+// needs a service reload before it appears in the list.
+async function saveNewProvider() {
+  const hint = document.getElementById("apHint");
+  const btn = document.getElementById("apSave");
+  const id = document.getElementById("apId").value.trim();
+  const baseURL = document.getElementById("apBase").value.trim();
+  const modelID = document.getElementById("apModel").value.trim();
+  if (!id || !baseURL || !modelID) {
+    hint.textContent = "三個欄位都要填。";
+    return;
+  }
+  btn.disabled = true;
+  hint.textContent = "儲存中…";
+  try {
+    const r = await fetch("/c/providers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, name: id, baseURL, modelID }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    hint.textContent = data.needsRestart
+      ? "已存進全域設定。opencode 服務重新載入後就會出現在清單（桌面版也看得到）。"
+      : "已新增。";
+    document.getElementById("apId").value = "";
+    document.getElementById("apBase").value = "";
+    document.getElementById("apModel").value = "";
+    try { renderProviders(await loadProviders()); } catch { /* list refresh is best-effort */ }
+  } catch (err) {
+    hint.textContent = "失敗：" + err.message;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function closePicker() { els.picker.hidden = true; }
