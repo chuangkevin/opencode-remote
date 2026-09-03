@@ -8,6 +8,7 @@ const opencodePort = parseNumber(process.env.OPENCODE_PORT, 4096);
 
 export const config = {
   port: parseNumber(process.env.PORT, 9223),
+  bindAddress: process.env.BIND_ADDRESS ?? "0.0.0.0",
   opencodePort,
   opencodeUrl: `http://127.0.0.1:${opencodePort}`,
   opencodeDirectory: process.env.OPENCODE_DIRECTORY ?? process.cwd(),

@@ -1446,7 +1446,51 @@ async function main(): Promise<void> {
       env: { ...process.env, OPENCODE_SERVER_PASSWORD: "" },
     },
   );
+  let shuttingDown = false;
+  const startupTerminationGraceMs = 3_000;
+  const startupKillWaitMs = 2_000;
+  const cleanupOpenCodeAfterStartupFailure = async (): Promise<void> => {
+    if (process.platform === "win32") return;
+
+    shuttingDown = true;
+    if (oc.exitCode !== null || oc.signalCode !== null) return;
+
+    await new Promise<void>((resolve) => {
+      let forceKillTimer: NodeJS.Timeout | undefined;
+      let killWaitTimer: NodeJS.Timeout | undefined;
+      let finished = false;
+      const finish = (): void => {
+        if (finished) return;
+        finished = true;
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        if (killWaitTimer) clearTimeout(killWaitTimer);
+        oc.off("exit", finish);
+        resolve();
+      };
+
+      oc.once("exit", finish);
+      if (oc.exitCode !== null || oc.signalCode !== null) {
+        finish();
+        return;
+      }
+
+      oc.kill("SIGTERM");
+      forceKillTimer = setTimeout(() => {
+        if (oc.exitCode === null && oc.signalCode === null) {
+          console.error("[opencode-remote] OpenCode did not stop after startup failure; sending SIGKILL");
+          oc.kill("SIGKILL");
+        }
+        killWaitTimer = setTimeout(() => {
+          if (oc.exitCode === null && oc.signalCode === null) {
+            console.error("[opencode-remote] OpenCode is still running after startup SIGKILL");
+          }
+          finish();
+        }, startupKillWaitMs);
+      }, startupTerminationGraceMs);
+    });
+  };
   oc.on("exit", async (code) => {
+    if (shuttingDown) return;
     console.error(`[opencode-remote] opencode exited with code ${code}`);
     // If another OpenCode is already healthy on this port, don't crash
     try {
@@ -1460,29 +1504,83 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 
-  // 2. Wait for OpenCode to be healthy
-  console.log("[opencode-remote] waiting for OpenCode to be ready...");
-  await waitForOpenCode();
-  console.log("[opencode-remote] OpenCode is ready");
+  if (process.platform !== "win32") {
+    const shutdown = (signal: NodeJS.Signals): void => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`[opencode-remote] received ${signal}; stopping proxy and OpenCode`);
 
-  // 3. Resolve initial active session path
-  await refreshSessionPath();
+      let childExited = oc.exitCode !== null;
+      let serverClosed = !server.listening;
+      const forceExit = setTimeout(() => {
+        console.error("[opencode-remote] shutdown timed out after 5 seconds");
+        if (oc.exitCode === null) oc.kill("SIGKILL");
+        process.exit(1);
+      }, 5_000);
+      forceExit.unref();
 
-  // 4. Periodically refresh the active session path
-  setInterval(() => { void refreshSessionPath(); }, config.sessionRefreshIntervalMs);
+      const finishIfStopped = (): void => {
+        if (!childExited || !serverClosed) return;
+        clearTimeout(forceExit);
+        process.exit(0);
+      };
 
-  // 5. Keep-alive SSE connection to OpenCode
-  startKeepAlive();
+      if (!childExited) {
+        oc.once("exit", () => {
+          childExited = true;
+          finishIfStopped();
+        });
+        oc.kill(signal);
+      }
 
-  // 6. Auto-clear OpenCode streams that produced no output and never completed.
-  startDeadStreamWatchdog();
+      if (!serverClosed) {
+        server.close(() => {
+          serverClosed = true;
+          finishIfStopped();
+        });
+      }
 
-  // 7. Start HTTP proxy server
-  server.listen(config.port, "0.0.0.0", () => {
-    console.log(`[opencode-remote] proxy listening on http://0.0.0.0:${config.port}`);
-    console.log("[opencode-remote] → redirecting / to /remote-sessions");
-    console.log(`[opencode-remote] → redirecting /latest to ${activeSessionPath}`);
-  });
+      finishIfStopped();
+    };
+
+    process.once("SIGTERM", () => shutdown("SIGTERM"));
+    process.once("SIGINT", () => shutdown("SIGINT"));
+  }
+
+  try {
+    // 2. Wait for OpenCode to be healthy
+    console.log("[opencode-remote] waiting for OpenCode to be ready...");
+    await waitForOpenCode();
+    console.log("[opencode-remote] OpenCode is ready");
+
+    // 3. Resolve initial active session path
+    await refreshSessionPath();
+
+    // 4. Periodically refresh the active session path
+    setInterval(() => { void refreshSessionPath(); }, config.sessionRefreshIntervalMs);
+
+    // 5. Keep-alive SSE connection to OpenCode
+    startKeepAlive();
+
+    // 6. Auto-clear OpenCode streams that produced no output and never completed.
+    startDeadStreamWatchdog();
+
+    // 7. Start HTTP proxy server
+    await new Promise<void>((resolve, reject) => {
+      const onStartupError = (err: Error): void => reject(err);
+      server.once("error", onStartupError);
+      server.listen(config.port, config.bindAddress, () => {
+        server.off("error", onStartupError);
+        console.log(`[opencode-remote] proxy listening on http://${config.bindAddress}:${config.port}`);
+        console.log("[opencode-remote] → redirecting / to /remote-sessions");
+        console.log(`[opencode-remote] → redirecting /latest to ${activeSessionPath}`);
+        resolve();
+      });
+    });
+  } catch (err) {
+    await cleanupOpenCodeAfterStartupFailure();
+    throw err;
+  }
 }
 
 main().catch((err) => {

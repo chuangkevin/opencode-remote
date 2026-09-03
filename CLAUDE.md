@@ -4,7 +4,7 @@
 
 ## 專案目的
 
-在 Windows 電腦上運行 OpenCode headless server，並透過一個透明 HTTP proxy 將 OpenCode 的原生 Web UI 暴露給所有裝置。任何裝置打開 URL 都會自動進入同一個最近活躍的 session，看到完整對話歷史，可以繼續工作。Session 在伺服器端持久化，瀏覽器關閉不影響。
+在 Windows 或核准的 macOS 電腦上運行 OpenCode headless server，並透過透明 HTTP proxy 將 OpenCode 的原生 Web UI 提供給受信任裝置。根路徑進入工作階段列表，`/latest` 進入最近活躍的 session。Session 在伺服器端持久化，瀏覽器關閉不影響。
 
 ## 架構
 
@@ -17,7 +17,8 @@
 > **4196** 避開。詳見「重大修復記錄 / 2026-05-21」。
 
 `packages/server/src/index.ts` — proxy 主程式：
-- `GET /` → 302 redirect 到最近 session 的完整 SPA URL
+- `GET /` → 302 redirect 到 `/remote-sessions`
+- `GET /latest` → 302 redirect 到最近 session 的完整 SPA URL
 - 其他所有請求 → 透明 pipe 到 OpenCode
 - Background SSE keep-alive 防止 OpenCode idle
 - 每 30 秒 refresh active session path
@@ -253,6 +254,7 @@ curl http://localhost:4096/global/health
 ```env
 OPENCODE_DIRECTORY=D:/Projects/_HomeProject   # OpenCode 工作目錄（正斜線）
 PORT=9223                                       # proxy 對外 port
+BIND_ADDRESS=0.0.0.0                            # proxy bind address；既有 Windows default
 OPENCODE_PORT=4196                              # OpenCode 內部 port（4096 已被本機 Docker 容器占用）
 SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 ```
@@ -271,6 +273,27 @@ SESSION_REFRESH_INTERVAL_MS=30000              # session 刷新間隔
 
 > **手動備用（需使用者在終端機操作）：** `npm start`
 > 前景模式，日誌直接顯示。AI agent 無法用此方式啟動（阻塞式 + terminal 只有 click 權限）。
+
+### macOS LaunchAgent（MBA-Kevin.local）
+
+- Host/Tailscale: `MBA-Kevin.local` / `100.113.121.103`
+- Private HTTPS: `https://opencode-sara.sisihome.org` via sole GN100 Caddy
+- Tailnet endpoint: `http://100.113.121.103:9223`
+- Proxy bind: `100.113.121.103:9223`; child OpenCode: `127.0.0.1:4196`
+- Workspace: `/Users/kevin/Documents/Projects`
+- Binaries: `/opt/homebrew/bin/node`, `/opt/homebrew/bin/opencode`
+- Runtime: `/Users/kevin/.local/share/opencode-remote`
+- Plist: `/Users/kevin/Library/LaunchAgents/io.interagent.opencode-sara.plist`
+- Logs: `/Users/kevin/Library/Logs/opencode-remote/`
+- Source artifacts: `deploy/macos/run-opencode-sara.sh`, `deploy/macos/io.interagent.opencode-sara.plist`, `deploy/macos/deploy-local.sh`
+
+The LaunchAgent directly executes the installed `run-opencode-sara.sh`. That wrapper waits for exact Tailscale IPv4 `100.113.121.103`, builds a clean application environment, and execs `/opt/homebrew/bin/node`; Node starts `/opt/homebrew/bin/opencode serve` as its direct child. The plist contains no environment variables or application credentials.
+
+Full Disk Access must be granted to the actual Homebrew binaries `/opt/homebrew/Cellar/node/26.8.1/bin/node` and `/opt/homebrew/Cellar/opencode/1.18.20/libexec/lib/node_modules/opencode-ai/bin/opencode.exe`; the service invokes them through stable paths `/opt/homebrew/bin/node` and `/opt/homebrew/bin/opencode`. Disposable one-shot LaunchAgents proved that direct Node could read the workspace and exit 0 with `NODE_FDA_OK`, and direct OpenCode could use the workspace and return `{"healthy":true,"version":"1.18.20"}` on temporary loopback port `4296`; all probe artifacts were removed. Homebrew upgrades may replace the Cellar binaries, so resolve the stable paths, regrant FDA if they changed, and repeat disposable direct verification before redeploying. The GUI launchd domain may contain unrelated inherited variables, so do not share raw `launchctl print` output. The wrapper does not source `.env`. No Basic auth is acceptable only because the listener is pinned to the trusted Tailnet address. Do not add public exposure or change the macOS bind to `0.0.0.0` without a separate security review.
+
+The installer preserves dependency checks, build, ESM package metadata, exact bootout, and a bounded wait for exact `9223` and `4196` listener absence before bootstrap. It never kills by process or port. Post-bootstrap, launchctl must report a running PID equal to the exact `100.113.121.103:9223` Node listener PID; Node and its direct OpenCode child must have the fixed commands.
+
+The existing `https://opencode.sisihome.org` domain still targets Windows `kevinhome`. The macOS service uses `https://opencode-sara.sisihome.org` through the existing DNS-only wildcard and sole GN100 Caddy. See `OPERATIONS.md` for deployment and live verification.
 
 **Health check 確認啟動成功（AI 可執行）：**
 ```powershell
@@ -385,6 +408,7 @@ HTML + 單一 vanilla ES module，無 build step。
 - `openspec/specs/session-proxy/spec.md` — proxy 已 archive 後的穩定 spec（啟動、health check、redirect 格式、session 解析、keep-alive、配置）
 - `openspec/changes/capability-alignment/` — **進行中的變更**：opencode/GPT-5.5 capability 層（`opencode.json`、`AGENTS.md`、subagents、`.opencode-memory`、guided setup）。檔案已就位、`npm run typecheck` / `npm run build` 通過；剩 6.1–6.5 需要在實際 opencode session 內驗證
 - `openspec/changes/deployment-wiring/` — **進行中的變更**：Caddy 已完成；kevinhome 開機自啟還沒做
+- `openspec/changes/macos-sara-deployment/` — **direct-FDA 已部署並驗證**：MBA-Kevin LaunchAgent、Tailscale-only bind、runtime installer 與 `opencode-sara.sisihome.org`；中間 self-SSH 部署及最終 direct-FDA 證據記錄於 change tasks
 - `openspec/changes/archive/` — 已被取代的舊設計（Dispatch 模型，勿接手）
 
 後續接手時：
@@ -399,7 +423,7 @@ HTML + 單一 vanilla ES module，無 build step。
 
 **Proxy 核心**
 - [x] 透明 HTTP proxy（`node:http` pipe，SSE 支援）
-- [x] `GET /` → 302 → `/<base64url(dir)>/session/<sessionId>`
+- [x] `GET /` → 302 → `/remote-sessions`; `GET /latest` → `/<base64url(dir)>/session/<sessionId>`
 - [x] 每 30 秒刷新 active session path
 - [x] Background SSE keep-alive（指數退避重連）
 - [x] `waitForOpenCode()` 健康檢查（60 秒超時）

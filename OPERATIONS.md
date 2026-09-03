@@ -33,10 +33,10 @@ curl http://localhost:9223/remote-health
 
 # 2. 確認 proxy 正常轉導
 curl http://localhost:9223/
-# 預期：302 redirect 到 session URL
+# 預期：302 redirect 到 /remote-sessions
 ```
 
-兩個都正常就代表服務完全就緒。
+兩個都正常就代表目前檢查的 Windows 服務完全就緒。
 
 > **Port 提醒**：本機 OpenCode CLI 預設用 **4196**（不是 4096），因為 4096 已被
 > 本 repo 的 `docker-compose.yml` 容器占用。`.env` 的 `OPENCODE_PORT` 控制；
@@ -51,7 +51,108 @@ https://opencode.sisihome.org/remote-sessions
 ```
 
 這是 `opencode-remote` 提供的輕量 session picker，點選任一項會進入對應 OpenCode session。
-手機 User-Agent 打開 `/` 時，`opencode-remote` 會導到 `/remote-sessions`，避免 OpenCode 原生 mobile layout 看不到工作階段列表。
+所有 User-Agent 打開 `/` 時，`opencode-remote` 都會導到 `/remote-sessions`，避免 OpenCode 原生 mobile layout 看不到工作階段列表。`/latest` 才會導到最近 active session。
+
+## macOS LaunchAgent（MBA-Kevin.local）
+
+### 固定部署拓樸
+
+```text
+Tailnet client
+  -> http://100.113.121.103:9223
+  -> LaunchAgent io.interagent.opencode-sara
+  -> run-opencode-sara.sh (clean environment)
+  -> Node proxy (BIND_ADDRESS=100.113.121.103)
+  -> OpenCode child (127.0.0.1:4196)
+  -> /Users/kevin/Documents/Projects
+```
+
+- Runtime: `/Users/kevin/.local/share/opencode-remote`
+- Plist: `/Users/kevin/Library/LaunchAgents/io.interagent.opencode-sara.plist`
+- Logs: `/Users/kevin/Library/Logs/opencode-remote/opencode-sara.log` and `opencode-sara.error.log`
+- Node: `/opt/homebrew/bin/node`
+- OpenCode: `/opt/homebrew/bin/opencode`
+- Tailscale CLI: `/Applications/Tailscale.app/Contents/MacOS/Tailscale`
+- Runtime wrapper: `/Users/kevin/.local/share/opencode-remote/run-opencode-sara.sh`
+
+LaunchAgent 直接執行 installed runtime wrapper。wrapper 先確認 exact Tailscale IPv4，再以 `/usr/bin/env -i` 建立固定 application environment 並 `exec /opt/homebrew/bin/node`；Node 直接啟動 `/opt/homebrew/bin/opencode serve` child。plist 不包含環境變數或 application credentials。
+
+這個 direct-FDA design 已部署。production installer 已連續驗證 clean restart、direct Node ownership，以及移除舊 self-SSH runtime launcher。
+
+這個 macOS 服務沒有 Basic auth，只能綁定核准的 Tailscale IP。不要改成 `0.0.0.0`、不要加 Funnel/Cloudflare Tunnel/public reverse proxy，也不要把 `4196` 對外開放。私有網域是 `https://opencode-sara.sisihome.org`，使用既有 DNS-only wildcard 經 GN100 Caddy；`https://opencode.sisihome.org` 仍是 Windows `kevinhome` 的既有私有路由。
+
+### Full Disk Access 前置條件
+
+1. 在 System Settings > Privacy & Security > Full Disk Access 確認 actual Node binary `/opt/homebrew/Cellar/node/26.8.1/bin/node` 已允許。
+2. 同頁確認 actual OpenCode binary `/opt/homebrew/Cellar/opencode/1.18.20/libexec/lib/node_modules/opencode-ai/bin/opencode.exe` 已允許。
+3. 確認 stable launcher paths `/opt/homebrew/bin/node` 與 `/opt/homebrew/bin/opencode` 仍 resolve 到上述 actual binaries。
+4. Homebrew upgrade 可能建立新的 Cellar binary。若 resolved path 改變，先對新 binary 重新授權 FDA，並用 disposable direct LaunchAgent 重驗 workspace access，再進行 service deployment。
+
+一次性 direct LaunchAgent proof 已完成：`/opt/homebrew/bin/node` 直接讀取 `/Users/kevin/Documents/Projects` 並以 `NODE_FDA_OK`、exit 0 結束；`/opt/homebrew/bin/opencode serve` 直接使用該 WorkingDirectory，temporary loopback port `4296` 回 `{"healthy":true,"version":"1.18.20"}`。probe jobs、listener 與 files 均已移除。這份 proof 證明目前 actual binaries 的 FDA 可用，不取代 production direct design 部署後的 restart 與 listener 驗收。
+
+### 安裝或更新
+
+只在另外取得部署授權後執行：
+
+```bash
+cd /Users/kevin/Documents/Projects/private-codebase/opencode-remote
+./deploy/macos/deploy-local.sh
+```
+
+腳本會先驗證固定 dependencies，再執行 `npm ci` / typecheck / build、用明確 allowlist 複製 runtime、保留 `packages/server/package.json` ESM metadata、安裝 direct runtime wrapper/plist，並以目前 GUI UID 執行 exact `launchctl bootout/bootstrap/kickstart`。bootout 後會 bounded-wait，直到 exact `9223` 與 `4196` listeners 都不存在；若殘留就 fail closed，不會依 port 或 PID kill process。
+
+最後的 bounded success gate 會用固定 Node 解析 `http://100.113.121.103:9223/remote-health` JSON，要求精確的 proxy/port/upstream/healthy 值；確認 LaunchAgent state 是 running、launchctl PID 等於 exact `100.113.121.103:9223` Node listener PID、command 精確為 fixed Node + runtime entry；並確認 exact `127.0.0.1:4196` owner command 是 fixed OpenCode command且為 Node 的 direct child。它不讀 `.env`、不複製 `.env`/secret/node_modules/source，也不遞迴刪除 runtime 或服務資料。
+
+### 狀態
+
+```bash
+uid="$(id -u)"
+launchctl print "gui/$uid/io.interagent.opencode-sara" | /usr/bin/awk '/^[[:space:]]*(state|pid|runs|last exit code) = /'
+```
+
+不要直接貼出未過濾的 `launchctl print`；GUI launchd domain 可能列出與本服務無關的 inherited environment。
+
+### 重啟、停止
+
+停止：
+
+```bash
+uid="$(id -u)"
+launchctl bootout "gui/$uid/io.interagent.opencode-sara"
+```
+
+重新載入 plist 時，先 `bootout`，再執行：
+
+```bash
+uid="$(id -u)"
+launchctl bootstrap "gui/$uid" "/Users/kevin/Library/LaunchAgents/io.interagent.opencode-sara.plist"
+launchctl kickstart "gui/$uid/io.interagent.opencode-sara"
+```
+
+### macOS 驗證
+
+```bash
+/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4
+/usr/bin/readlink /opt/homebrew/bin/node
+/usr/bin/readlink /opt/homebrew/bin/opencode
+curl --noproxy '*' http://100.113.121.103:9223/remote-health
+launchctl print "gui/$(id -u)/io.interagent.opencode-sara" | /usr/bin/awk '/^[[:space:]]*(state|pid|runs|last exit code) = /'
+/usr/sbin/lsof -nP -iTCP@100.113.121.103:9223 -sTCP:LISTEN
+/usr/sbin/lsof -nP -iTCP@127.0.0.1:4196 -sTCP:LISTEN
+tail -n 100 /Users/kevin/Library/Logs/opencode-remote/opencode-sara.log
+tail -n 100 /Users/kevin/Library/Logs/opencode-remote/opencode-sara.error.log
+```
+
+驗收時 `/remote-health` 必須精確回報 `proxy="opencode-remote"`、`remotePort=9223`、`upstream="http://127.0.0.1:4196"`、`upstreamHealth.healthy=true`。`launchctl print` 必須為 running，且其 PID 必須等於 `9223` 的 exact Node listener PID；Node command 必須是 `/opt/homebrew/bin/node /Users/kevin/.local/share/opencode-remote/packages/server/dist/index.js`。`4196` 必須只綁 `127.0.0.1`，owner command 必須是 `/opt/homebrew/bin/opencode serve --hostname 127.0.0.1 --port 4196`，且 PID 是 Node 的 direct child。還要從另一台已授權 Tailnet 裝置開啟 root/native/compact UI，並用兩個瀏覽器確認同一 session。本次 direct-FDA deployment 已完成這些檢查；後續更新仍須重新驗證。
+
+### macOS 故障排除
+
+- Node/OpenCode 出現 `Operation not permitted` 或卡在 `getcwd()`：確認 stable Homebrew path 目前指向哪個 Cellar binary，並在 Full Disk Access 對 actual Node 與 OpenCode binaries 重新授權；用 disposable direct LaunchAgent 重驗後才 redeploy。
+- `Expected Tailscale IPv4 ... was unavailable`：確認 Tailscale 已登入，而且 `Tailscale ip -4` 的輸出精確包含 `100.113.121.103`。runtime wrapper 最多等待 60 秒後失敗，launchd 會依 KeepAlive policy 重試，不會退回其他介面。
+- launchctl 顯示很快退出：確認 plist 指向 `run-opencode-sara.sh`、wrapper 有 executable permission，並檢查 service error log。
+- `bootstrap failed: 5` 或 plist 載入失敗：先跑 `plutil -lint`，再用上方過濾後的狀態指令；若已載入，先精確 `bootout` 該 service target。不要分享未過濾的 `launchctl print` 輸出。
+- `/remote-health` 失敗：先看兩個 log，確認 `/opt/homebrew/bin/opencode` 可執行、workspace 存在，且 `4196` 沒有舊程序占用。
+- 重啟後 port 仍被占用：installer 會拒絕 bootstrap。記錄 `lsof` 的 PID/command，不要 broad kill 或依 port kill；只用 exact label 的 `launchctl bootout` 管理此服務，再調查 process ownership。
 
 ### 確認手機走 opencode-remote
 
@@ -136,7 +237,7 @@ curl http://localhost:4196/global/health
 
 # Proxy 根路徑（轉導測試）
 curl http://localhost:9223/
-# 預期: 302 redirect 到 /<base64(dir)>/session/<id> 或 /remote-sessions
+# 預期: 302 redirect 到 /remote-sessions；/latest 才會到 /<base64(dir)>/session/<id>
 
 # Compact UI 三個關鍵端點
 curl -o /dev/null -w "%{http_code}\n" http://localhost:9223/remote-sessions
@@ -338,6 +439,9 @@ OPENCODE_DIRECTORY=D:/Projects/_HomeProject
 
 # Proxy 對外 port（瀏覽器訪問的 port）
 PORT=9223
+
+# Proxy bind address（未設定時維持 Windows 既有 default 0.0.0.0）
+BIND_ADDRESS=0.0.0.0
 
 # OpenCode 內部 port（僅 localhost）
 # 4096 已被本 repo docker-compose.yml 占用 → 改用 4196 避開
