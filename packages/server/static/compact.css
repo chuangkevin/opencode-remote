@@ -327,6 +327,7 @@ header.app-header {
   flex-shrink: 0;
 }
 .icon-btn:active { background: var(--surface-hi); }
+.icon-btn:disabled { opacity: 0.45; cursor: wait; }
 .send-btn {
   background: var(--send);
   border-color: var(--send);
@@ -482,6 +483,12 @@ header.app-header {
   font-size: 11px;
   color: var(--dim);
   padding: 4px 9px;
+}
+.current-model-only { border-bottom: 1px solid var(--border); }
+.current-model-note {
+  color: var(--muted);
+  font-size: 11px;
+  flex-shrink: 0;
 }
 
 /* Toast notifications */

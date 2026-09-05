@@ -94,11 +94,14 @@ If you pick this up later: probe `ffmpeg -f lavfi -i color=red:size=64x64:durati
 - (Easy) Make the next homelab-docs review pass run from an OpenCode session (which naturally has `ses_*` ids), then write the artifact with that id. The substance of this commit was reviewed twice by `code-reviewer` subagent with "pass / no findings" both times — content is fine.
 - (Better long-term) Update `.ai-review/validate-pre-commit.ps1` to also accept UUIDv4 format from Claude Code. Currently the validator was OpenCode-only by design.
 
-### 2. Model selection still doesn't persist across reload
+### 2. Model selection synchronization was superseded
 
-Documented limitation since Phase 1. OpenCode v1.14.30 accepts `model`/`variant` in the prompt POST but doesn't write them back to `session.model`. The compact picker honors the choice within one page lifetime; reload resets to workspace default.
-
-Server-side fix needed in upstream OpenCode. Not actionable here without forking.
+The earlier conclusion depended on unreliable `session.model`. Compact now
+uses the latest user-message `model`/`variant` metadata from shared history,
+which is also written by native prompts. Legacy compact localStorage is only a
+fallback when history has no model metadata, followed by `/config` and the hard
+fallback. This keeps compact and native on the same effective session model
+without an upstream fork.
 
 ### 3. Trust mode permission array is append-only
 

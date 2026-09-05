@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "npm run dev --workspace @opencode-remote/server",
     "build": "npm run build --workspace @opencode-remote/server",
+    "test": "npm run test --workspace @opencode-remote/server",
     "typecheck": "npm run typecheck --workspace @opencode-remote/server",
     "start": "npm run start --workspace @opencode-remote/server"
   },

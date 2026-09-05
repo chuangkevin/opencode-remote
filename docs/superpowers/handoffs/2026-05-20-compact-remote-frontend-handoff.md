@@ -153,12 +153,14 @@ trimmed subset and probe at runtime when shapes matter.
 
 ## Known limitations
 
-1. **Model selection does not persist across page reloads.**
-   OpenCode v1.14.30 accepts `model` and `variant` in the prompt POST
-   payload but does **not** write them back to `session.model`. So the
-   chip resets to the workspace default on each reload. Within a
-   single page-load lifetime the choice is honored. (Spec design
-   assumed server-side persistence; this is a server-behavior gap.)
+1. **Model synchronization uses shared message history, not `session.model`.**
+   OpenCode accepts `model` and `variant` in the prompt payload and records
+   the effective values on user-message metadata even when `session.model`
+   remains stale. Compact reads the latest valid user message first, then
+   uses legacy compact localStorage, `/config`, and the hard fallback only
+   when earlier sources are absent. Native and compact therefore converge on
+   the same session model during history refresh; picker-filtered models stay
+   visible as the current non-selectable model instead of being rewritten.
 
 2. **Trust mode `PATCH /session/:id { permission: [] }` is append-only.**
    Sending an empty array does not reset overrides. The workaround

@@ -1188,10 +1188,18 @@ Before Task 1, the implementer runs these probes to confirm the spec's runtime a
 
   async function refreshHeader() {
     try {
-      const session = await api(`/session/${sessionID}`);
-      const m = session.model;
-      if (m && m.providerID && m.id) {
-        currentModel = { providerID: m.providerID, modelID: m.id, variant: m.variant ?? null };
+      // Historical draft only. The implemented client now reads the latest
+      // user-message model metadata because session.model is unreliable.
+      const messages = await api(`/session/${sessionID}/message?limit=30`);
+      // This helper normalizes modelID/id and top-level/nested variant, selects
+      // by created time with batch last-wins ties, and returns messageID so
+      // equal-timestamp individual events can trigger a latest-only full-history
+      // refresh instead of guessing their order from message IDs.
+      const selection = latestUserMessageSelection(messages);
+      if (selection) {
+        currentModel = selection.model;
+        latestModelMessageCreated = selection.created;
+        latestModelMessageID = selection.messageID;
       } else {
         const fallback = await loadDefaultModelFromConfig();
         if (fallback) currentModel = { ...fallback, variant: null };
@@ -1299,7 +1307,7 @@ Before Task 1, the implementer runs these probes to confirm the spec's runtime a
 
   Reload. The header chip should now show `gpt-5.5 · medium` (or whatever the session's last model was). Tap it — picker opens, shows providers grouped, with the current model/variant highlighted in solid emerald.
 
-  Select a different model/variant. The chip updates. Send a message with the new selection. After the message arrives, refresh — the chip should still show the new model (because `session.model` was updated server-side by the POST).
+  Select a different model/variant. The chip updates. Send a message with the new selection. After the message arrives, refresh — the chip should still show the new model because the latest shared user-message metadata records it.
 
 - [ ] **Step 3: Commit.**
 
@@ -1308,11 +1316,9 @@ Before Task 1, the implementer runs these probes to confirm the spec's runtime a
   git commit -m "$(cat <<'EOF'
   feat(compact): model + variant picker overlay
 
-  Reads providers from /provider, preselects from /session/:id.model,
-  falls back to /config.model when the session has no model yet.
-  Selection persists naturally via the next POST /message — opencode
-  writes session.model on receipt, so reopening the session restores
-  the choice.
+  Reads providers from /provider and preselects from the latest shared
+  user-message metadata. Legacy compact storage and /config.model are
+  fallback sources only when history has no model metadata.
 
   Co-Authored-By: Kevin-AI <kevin950805@gmail.com>
   EOF

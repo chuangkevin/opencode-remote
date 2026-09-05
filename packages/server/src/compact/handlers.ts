@@ -16,6 +16,7 @@ const STATIC_ROOT = join(dirname(__filename), "..", "..", "static");
 // Only serve files we explicitly recognize — prevents path traversal.
 const ALLOWED: Record<string, string> = {
   "compact.js": "application/javascript; charset=utf-8",
+  "compact-model.js": "application/javascript; charset=utf-8",
   "compact.css": "text/css; charset=utf-8",
   "marked.min.js": "application/javascript; charset=utf-8",
 };

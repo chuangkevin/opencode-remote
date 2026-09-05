@@ -1,4 +1,15 @@
-﻿// ─── State ─────────────────────────────────────────────────
+﻿import {
+  awaitPromptModel,
+  chooseInitialModel,
+  createLatestRequestRunner,
+  createModelInitializationGate,
+  latestUserMessageSelection,
+  needsAuthoritativeHistory,
+  normalizePromptModel,
+  reconcileModelAfterInitialization,
+} from "./compact-model.js";
+
+// ─── State ─────────────────────────────────────────────────
 const sessionID = document.body.dataset.sessionId;
 const defaultDirectory = document.body.dataset.directory || "";
 const els = {
@@ -26,35 +37,27 @@ let currentDirectory = defaultDirectory;
 const STREAMING_POLL_INTERVAL_MS = 5_000;
 let streamingPollTimer = null;
 let streamingPollInFlight = false;
-// Fallback only — the real default is fetched live from the server's
-// /config (see loadModelForHeader). Kept in sync with the config default
-// so a fetch failure still lands on a model that actually exists.
+// Last-resort fallback after shared history, legacy compact storage, and
+// /config. It is never used while authoritative initialization is pending.
 const COMPACT_DEFAULT_MODEL = { providerID: "local-llm", modelID: "qwen2.5-vl-32b" };
-
-function normalizePromptModel(model) {
-  const providerID = typeof model?.providerID === "string" ? model.providerID : "";
-  const rawModelID = model?.modelID ?? model?.id;
-  const modelID = typeof rawModelID === "string" ? rawModelID : "";
-  if (!providerID || !modelID) return null;
-  return { providerID, modelID, variant: model.variant ?? null };
-}
 
 function compactPromptModel(model) {
   return normalizePromptModel(model);
 }
 
 function setCurrentModel(model) {
-  currentModel = compactPromptModel(model) ?? { ...COMPACT_DEFAULT_MODEL };
+  const normalized = compactPromptModel(model);
+  if (!normalized) return;
+  currentModel = normalized;
   els.modelName.textContent = currentModel.modelID;
   els.modelVariant.textContent = currentModel.variant && currentModel.variant !== "none"
     ? `· ${currentModel.variant}`
     : "";
 }
 
-// Persist the user's explicit model choice so it survives a reload. OpenCode
-// v1.14.30 does not write the picked model back to session.model, so without
-// this the header falls back to the /config default on every reload. Keyed per
-// session; only the user's picker selection writes here (never the config default).
+// Legacy per-session storage is a fallback when shared history has no model
+// metadata. History reconciliation also updates it so old compact sessions and
+// queued prompts retain a usable snapshot without becoming a second authority.
 const SAVED_MODEL_KEY = `compact-model:${sessionID}`;
 function persistModel(model) {
   const m = normalizePromptModel(model);
@@ -236,7 +239,11 @@ function escapeHTML(s) {
 
 // ─── History ───────────────────────────────────────────────
 async function loadHistory() {
-  const messages = await api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`);
+  const { value: messages, applied } = await runLatestModelHistoryRequest(
+    () => api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`),
+    reconcileAuthoritativeModelHistory,
+  );
+  if (!applied) return;
   // Preserve in-progress (unanswered) question cards across the re-render. The
   // 5s streaming poll calls loadHistory() while the AI is busy; wiping the card
   // would flicker it and (together with its closures) reset the user's picks.
@@ -277,7 +284,11 @@ async function loadHistory() {
 // flicker, the scroll jump, and the question/queue node churn a full rebuild
 // caused every 5 seconds while the AI was streaming.
 async function refreshHistoryIncremental() {
-  const messages = await api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`);
+  const { value: messages, applied } = await runLatestModelHistoryRequest(
+    () => api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`),
+    reconcileAuthoritativeModelHistory,
+  );
+  if (!applied) return;
   const list = Array.isArray(messages) ? messages : [];
   list.sort((a, b) => (a.info?.time?.created ?? 0) - (b.info?.time?.created ?? 0));
   for (const m of list) renderMessage(m);
@@ -302,8 +313,10 @@ function scrollToBottom() {
   } catch (err) {
     console.error(err);
     showToast("載入歷史失敗：" + err.message, "error");
+    await initializeModel([]);
   }
-  // Load session meta + model in parallel — does not block rendering history.
+  // History initializes the model before send is enabled. Header refresh can
+  // still independently recover through storage/config if history failed.
   refreshHeader().catch((err) => console.warn("refreshHeader boot:", err));
   // Drain any pending permission asks / questions that arrived before this
   // tab loaded (e.g. AI started while the user was away).
@@ -419,6 +432,11 @@ async function refreshMessage(messageID) {
     const m = await fetchMessage(messageID);
     // m is shaped { info: { id, sessionID, role, time, ... }, parts: [...] }
     if (m.info?.sessionID && m.info.sessionID !== sessionID) return;
+    if (needsAuthoritativeHistory([m], latestModelMessageCreated, latestModelMessageID)) {
+      await refreshAuthoritativeModelHistory();
+    } else {
+      await reconcileModelFromHistory([m]);
+    }
     renderMessage(m);
     maybeScrollOrShowChip();
   } catch (err) {
@@ -793,41 +811,9 @@ function schedulePendingQuestionDrain() {
 // matches the native web UI: submit immediately to /prompt_async and let the
 // OpenCode server queue prompts when the session is busy.
 // (QUEUE_KEY, queue, and queueNodes are hoisted to the top of the file.)
-const QUEUE_DRAIN_CHECK_DELAYS_MS = [1_500, 6_000, 15_000];
-const queueDrainCheckTimers = new Set();
-
 function persistQueue() {
   if (queue.length === 0) localStorage.removeItem(QUEUE_KEY);
   else localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
-}
-
-function enqueueMessage(text, attachments) {
-  const model = compactPromptModel(currentModel);
-  const item = {
-    id: `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    text: text || "",
-    attachments: attachments ?? [],
-    model: model ? { ...model } : null,
-    queuedAt: Date.now(),
-  };
-  queue.push(item);
-  persistQueue();
-  renderQueueItem(item);
-  showToast(`已排入佇列 (${queue.length})`);
-  startStreamingPoll();
-  scheduleQueueDrainChecks();
-}
-
-function scheduleQueueDrainChecks() {
-  for (const delay of QUEUE_DRAIN_CHECK_DELAYS_MS) {
-    const timer = setTimeout(() => {
-      queueDrainCheckTimers.delete(timer);
-      refreshBusyStatus()
-        .then(() => drainQueueIfIdle())
-        .catch((err) => console.warn("queue drain check failed", err));
-    }, delay);
-    queueDrainCheckTimers.add(timer);
-  }
 }
 
 function renderQueueItem(item) {
@@ -1121,7 +1107,7 @@ if (!fsSupported) {
 async function refreshHeader() {
   await Promise.all([
     loadSessionMeta(),
-    loadModelForHeader(),
+    initializeModel([]),
   ]);
 }
 
@@ -1178,7 +1164,13 @@ els.compose.addEventListener("keyup", (e) => {
 });
 
 // ─── Send ──────────────────────────────────────────────────
-let currentModel = { ...COMPACT_DEFAULT_MODEL };     // { providerID, modelID, variant }
+let currentModel = null;     // { providerID, modelID, variant }
+let latestModelMessageCreated = -Infinity;
+let latestModelMessageID = null;
+let modelInitialized = false;
+let modelInitializationTask = null;
+const modelInitialization = createModelInitializationGate();
+const runLatestModelHistoryRequest = createLatestRequestRunner();
 
 // Fire-and-forget endpoint:
 //   POST /session/:id/prompt_async returns 204 in ~300ms.
@@ -1187,6 +1179,7 @@ let currentModel = { ...COMPACT_DEFAULT_MODEL };     // { providerID, modelID, v
 //   POST /message with noReply:true skips the reply, so /prompt_async
 //   is the only correct path here.
 async function sendMessage() {
+  await modelInitialization.ready;
   const text = els.compose.value.trim();
   const attachments = pendingAttachments.slice();
   if (!text && attachments.length === 0) return;
@@ -1195,14 +1188,17 @@ async function sendMessage() {
 }
 
 async function sendNow(text, attachments, model) {
+  const promptModel = await awaitPromptModel(modelInitialization, model, () => currentModel);
   const parts = [];
   if (text) parts.push({ type: "text", text });
   for (const a of attachments) {
     parts.push({ type: "file", mime: a.mime, url: a.dataUrl, filename: a.name });
   }
   const payload = { parts };
-  const promptModel = compactPromptModel(model);
+  // Valid queued snapshots stay stable; legacy queue entries without a model
+  // use the synchronized current model after initialization.
   if (promptModel) {
+    persistModel(promptModel);
     payload.model = { providerID: promptModel.providerID, modelID: promptModel.modelID };
     if (promptModel.variant) payload.variant = promptModel.variant;
   }
@@ -1414,8 +1410,6 @@ async function abortMessage() {
 }
 
 // ─── Model picker ──────────────────────────────────────────
-let providersCache = null;
-let authedProviderIds = null;
 let defaultModelFromConfig = null;
 
 async function loadProviders() {
@@ -1432,11 +1426,12 @@ async function loadDefaultModelFromConfig() {
   if (defaultModelFromConfig !== null) return defaultModelFromConfig;
   try {
     const config = await api("/config");
-    if (typeof config?.model === "string" && config.model.includes("/")) {
-      const sep = config.model.indexOf("/");
+    const raw = config?.agent?.build?.model ?? config?.model;
+    if (typeof raw === "string" && raw.includes("/")) {
+      const sep = raw.indexOf("/");
       defaultModelFromConfig = compactPromptModel({
-        providerID: config.model.slice(0, sep),
-        modelID: config.model.slice(sep + 1),
+        providerID: raw.slice(0, sep),
+        modelID: raw.slice(sep + 1),
       });
     } else {
       defaultModelFromConfig = false;
@@ -1447,30 +1442,63 @@ async function loadDefaultModelFromConfig() {
   return defaultModelFromConfig;
 }
 
-async function loadModelForHeader() {
-  // A saved user pick wins over the config default so the model survives reload.
-  const saved = readSavedModel();
-  if (saved) { setCurrentModel(saved); return; }
-  try {
-    // Prefer the server's configured default model so the compact view
-    // always matches the current config (e.g. build agent / top-level
-    // model), instead of a hard-coded value that goes stale when the
-    // provider set changes. opencode /config `model` is "providerID/modelID".
-    const res = await fetch("/config", { headers: { accept: "application/json" } });
-    if (res.ok) {
-      const cfg = await res.json().catch(() => null);
-      const raw = cfg?.agent?.build?.model ?? cfg?.model;
-      if (typeof raw === "string" && raw.includes("/")) {
-        const slash = raw.indexOf("/");
-        setCurrentModel({ providerID: raw.slice(0, slash), modelID: raw.slice(slash + 1) });
-        return;
-      }
+async function initializeModel(history) {
+  if (modelInitialized) return;
+  if (modelInitializationTask) return modelInitializationTask;
+  modelInitializationTask = (async () => {
+    const historySelection = latestUserMessageSelection(history);
+    const configured = historySelection ? null : await loadDefaultModelFromConfig();
+    const selection = chooseInitialModel({
+      history,
+      saved: readSavedModel(),
+      configured,
+      fallback: COMPACT_DEFAULT_MODEL,
+    });
+    setCurrentModel(selection.model);
+    if (selection.source === "history") {
+      latestModelMessageCreated = historySelection?.created ?? latestModelMessageCreated;
+      latestModelMessageID = historySelection?.messageID ?? latestModelMessageID;
+      persistModel(selection.model);
     }
-    setCurrentModel(currentModel ?? COMPACT_DEFAULT_MODEL);
-  } catch (err) {
-    console.error("loadModelForHeader failed", err);
-    setCurrentModel(currentModel ?? COMPACT_DEFAULT_MODEL);
-  }
+    modelInitialized = true;
+    modelInitialization.complete();
+    els.actionBtn.disabled = false;
+  })();
+  return modelInitializationTask;
+}
+
+async function reconcileModelFromHistory(history, authoritative = false, isCurrent = () => true) {
+  const reconciled = await reconcileModelAfterInitialization({
+    history,
+    isInitialized: () => modelInitialized,
+    initialize: () => initializeModel(history),
+    getCurrent: () => currentModel,
+    getCursor: () => ({
+      created: latestModelMessageCreated,
+      messageID: latestModelMessageID,
+    }),
+    authoritative,
+  });
+  if (!isCurrent()) return;
+  if (!reconciled) return;
+  if (!reconciled.changed) return;
+  latestModelMessageCreated = reconciled.created;
+  latestModelMessageID = reconciled.messageID;
+  setCurrentModel(reconciled.model);
+  persistModel(reconciled.model);
+}
+
+async function reconcileAuthoritativeModelHistory(messages, isCurrent) {
+  const list = Array.isArray(messages) ? messages : [];
+  list.sort((a, b) => (a.info?.time?.created ?? 0) - (b.info?.time?.created ?? 0));
+  await reconcileModelFromHistory(list, true, isCurrent);
+}
+
+async function refreshAuthoritativeModelHistory() {
+  await runLatestModelHistoryRequest(
+    () => api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`),
+    reconcileAuthoritativeModelHistory,
+  );
 }
 
 async function openPicker() {
@@ -1562,6 +1590,17 @@ els.modelBtn.addEventListener("click", openPicker);
 function renderProviders(providers) {
   const list = document.getElementById("providersList");
   list.innerHTML = "";
+  const currentInInventory = providers.some((provider) =>
+    provider.models.some((model) =>
+      currentModel && currentModel.providerID === provider.id && currentModel.modelID === model.id
+    )
+  );
+  if (currentModel && !currentInInventory) {
+    const current = document.createElement("div");
+    current.className = "provider-group current-model-only";
+    current.innerHTML = `<h3 class="provider-name">Current session</h3><div class="model-row"><div class="model-name">${escapeHTML(currentModel.providerID)}/${escapeHTML(currentModel.modelID)}</div><div class="current-model-note">目前使用</div></div>`;
+    list.appendChild(current);
+  }
   for (const provider of providers) {
     const group = document.createElement("div");
     group.className = "provider-group";

@@ -18,9 +18,9 @@ later — from the same device or a different one — refresh, and pick up the
 streaming/final result.
 
 The compact UI must also let the user pick model and thinking complexity
-per session, with the same persistence semantics as the existing native
-OpenCode remote (the choice is stored on the OpenCode session record and
-restored when the session is reopened).
+for the same shared session. Compact and native do not own separate model
+state: the latest valid user-message model metadata in shared history is
+restored when the session is reopened or refreshed.
 
 ## Non-Goals
 
@@ -165,20 +165,23 @@ model that declares `variants` (e.g., `low` / `medium` / `high`) renders
 as a row with three pill buttons; models without variants render as a
 single button. Tapping a (model, variant) closes the overlay.
 
-The current selection comes from `GET /session/:id`:
-- `session.model.providerID` → `model.providerID` on the POST
-- `session.model.id` → `model.modelID` on the POST
-- `session.model.variant` → `variant` on the POST
+The current selection comes from the latest valid user message returned by
+`GET /session/:id/message`: `info.model.providerID`,
+`info.model.modelID` (or `id`), and `info.variant`/`info.model.variant`.
+This history metadata is the reliable effective-model record across compact
+and native views; tested OpenCode versions do not reliably update
+`session.model`.
 
-When the user changes the picker, the change is **not** persisted as a
-separate API call. Instead the next `POST /session/:id/message` carries
-the new selection. OpenCode updates `session.model` server-side on receipt.
-Reopening the session later reads the same `session.model` back, so the
-choice survives across refreshes and devices.
+When the user changes the picker, the next prompt carries that explicit
+selection. The resulting user-message metadata becomes shared-session truth,
+so a later native or compact prompt can update the other view on history
+refresh. Per-session compact localStorage remains only a backward-compatible
+fallback for sessions whose history has no model metadata.
 
-Edge case: brand-new session with no `session.model` yet. The picker
-defaults to the workspace default (`opencode.json`'s `model` field — read
-once via `GET /config`).
+Initialization precedence is latest valid user-message metadata, legacy
+compact localStorage, `/config`, then the hard fallback. Send stays disabled
+until this initialization completes. A history model omitted by picker policy
+remains the displayed and effective current model rather than being rewritten.
 
 ### 7. Image upload
 
