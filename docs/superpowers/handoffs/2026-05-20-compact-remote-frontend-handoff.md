@@ -156,11 +156,13 @@ trimmed subset and probe at runtime when shapes matter.
 1. **Model synchronization uses shared message history, not `session.model`.**
    OpenCode accepts `model` and `variant` in the prompt payload and records
    the effective values on user-message metadata even when `session.model`
-   remains stale. Compact reads the latest valid user message first, then
-   uses legacy compact localStorage, `/config`, and the hard fallback only
-   when earlier sources are absent. Native and compact therefore converge on
-   the same session model during history refresh; picker-filtered models stay
-   visible as the current non-selectable model instead of being rewritten.
+   remains stale. Compact renders only the newest 30 messages, while the
+   independent `/c/session/:id/latest-user-model` endpoint follows upstream
+   `X-Next-Cursor` values server-side until it finds the latest valid persisted
+   user model. The browser receives only model metadata. Legacy compact
+   localStorage, `/config`, and the hard fallback are used only after the scan
+   reaches the true end with no model. A model selected in the native composer
+   but not yet sent is client-local and cannot be observed by compact.
 
 2. **Trust mode `PATCH /session/:id { permission: [] }` is append-only.**
    Sending an empty array does not reset overrides. The workaround

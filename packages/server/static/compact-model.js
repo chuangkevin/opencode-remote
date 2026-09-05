@@ -36,6 +36,30 @@ export function latestUserMessageModel(messages) {
   return latestUserMessageSelection(messages)?.model ?? null;
 }
 
+export function normalizeLatestUserModelMetadata(value) {
+  if (value?.model === null) return null;
+  const model = normalizePromptModel(value?.model);
+  const created = Number(value?.created);
+  if (!model || !Number.isFinite(created)) throw new Error("Invalid latest-user-model response");
+  return {
+    model,
+    created,
+    messageID: typeof value?.messageID === "string" && value.messageID ? value.messageID : null,
+  };
+}
+
+export function modelSelectionAsMessage(selection) {
+  if (!selection) return null;
+  return {
+    info: {
+      id: selection.messageID,
+      role: "user",
+      time: { created: selection.created },
+      model: selection.model,
+    },
+  };
+}
+
 export function chooseInitialModel({ history, saved, configured, fallback }) {
   const historyModel = latestUserMessageModel(history);
   const choices = [
@@ -48,6 +72,18 @@ export function chooseInitialModel({ history, saved, configured, fallback }) {
     if (model) return { model, source };
   }
   throw new Error("No valid compact model fallback");
+}
+
+export async function chooseInitialModelAfterMetadata({ loadMetadata, saved, loadConfigured, fallback }) {
+  const metadata = normalizeLatestUserModelMetadata(await loadMetadata());
+  if (metadata) return { ...metadata, source: "history" };
+  const selection = chooseInitialModel({
+    history: [],
+    saved,
+    configured: await loadConfigured(),
+    fallback,
+  });
+  return { ...selection, created: -Infinity, messageID: null };
 }
 
 export function reconcileHistoryModel(
@@ -128,6 +164,19 @@ export function createLatestRequestRunner() {
     const value = await load();
     if (request !== latestStarted) return { value, applied: false };
     const isCurrent = () => request === latestStarted;
+    await apply(value, isCurrent);
+    return { value, applied: isCurrent() };
+  };
+}
+
+export function createCursorGuardedLatestRequestRunner(getGeneration) {
+  let latestStarted = 0;
+  return async function runLatest(load, apply) {
+    const request = ++latestStarted;
+    const generation = getGeneration();
+    const value = await load();
+    const isCurrent = () => request === latestStarted && generation === getGeneration();
+    if (!isCurrent()) return { value, applied: false };
     await apply(value, isCurrent);
     return { value, applied: isCurrent() };
   };

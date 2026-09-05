@@ -6,7 +6,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } from "./session.js";
-import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, matchCompactSessionPath } from "./compact/handlers.js";
+import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
 
@@ -1172,6 +1172,11 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "GET") {
+    const latestUserModelSessionID = matchLatestUserModelPath(req.url);
+    if (latestUserModelSessionID) {
+      void handleLatestUserModel(latestUserModelSessionID, res);
+      return;
+    }
     const compactSessionID = matchCompactSessionPath(req.url);
     if (compactSessionID) {
       handleCompactSession(compactSessionID, res);

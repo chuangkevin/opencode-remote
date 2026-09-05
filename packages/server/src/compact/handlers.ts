@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { config as appConfig } from "../config.js";
 import { renderCompactShell } from "./shell.js";
 import { ensureSessionTrust } from "./trust.js";
+import { LatestUserModelBudgetError, findLatestUserModel } from "./model.js";
 
 const __filename = fileURLToPath(import.meta.url);
 // tsconfig has rootDir=src outDir=dist, so this file ends up at
@@ -46,11 +47,58 @@ export function handleCompactStatic(req: http.IncomingMessage, res: http.ServerR
 }
 
 const SESSION_PATH_RE = /^\/c\/session\/(ses_[A-Za-z0-9]+)\/?$/;
+const LATEST_USER_MODEL_PATH_RE = /^\/c\/session\/(ses_[A-Za-z0-9]+)\/latest-user-model\/?$/;
+const SESSION_ID_RE = /^ses_[A-Za-z0-9]+$/;
 
 export function matchCompactSessionPath(path: string | undefined): string | undefined {
   if (!path) return undefined;
   const m = SESSION_PATH_RE.exec(path);
   return m ? m[1] : undefined;
+}
+
+export function matchLatestUserModelPath(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  const pathname = new URL(path, "http://localhost").pathname;
+  const match = LATEST_USER_MODEL_PATH_RE.exec(pathname);
+  return match ? match[1] : undefined;
+}
+
+export async function handleLatestUserModel(
+  sessionID: string,
+  res: http.ServerResponse,
+  timeoutMs = 10_000,
+): Promise<void> {
+  if (!SESSION_ID_RE.test(sessionID)) {
+    res.writeHead(400, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    res.end(JSON.stringify({ error: "invalid session id" }));
+    return;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const selection = await findLatestUserModel(appConfig.opencodeUrl, sessionID, {
+      signal: controller.signal,
+    });
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-OpenCode-Remote": "compact",
+    });
+    res.end(JSON.stringify(selection));
+  } catch (err) {
+    const timedOut = controller.signal.aborted || err instanceof LatestUserModelBudgetError;
+    console.error(`[opencode-remote] latest user model failed for ${sessionID}:`, err);
+    res.writeHead(timedOut ? 504 : 502, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    res.end(JSON.stringify({ error: timedOut ? "model history scan timed out" : "model history unavailable" }));
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function handleCompactSession(sessionID: string, res: http.ServerResponse): void {

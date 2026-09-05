@@ -327,6 +327,7 @@ HTML + 單一 vanilla ES module，無 build step。
 |---|---|
 | `GET /remote-sessions` | session 列表頁（含 📌 釘選、Compact pill、新 session 按鈕）|
 | `GET /c/session/:id` | compact 對話 UI 主畫面 |
+| `GET /c/session/:id/latest-user-model` | server 端分頁掃描最新 user message，只回 model metadata |
 | `GET /c/static/<file>` | 服 `compact.js` / `compact.css` / `marked.min.js`（白名單檢查）|
 | `POST /c/new-session` | 新建 session（**不帶 title** 讓 OpenCode 自動命名）+ 套 trust ruleset + 303 redirect |
 | `GET /c/pins` | 列出已釘選的 sessionID（從 `<OPENCODE_DIRECTORY>/.opencode-remote/pins.json` 讀）|
@@ -395,7 +396,7 @@ HTML + 單一 vanilla ES module，無 build step。
 ### 已知限制（compact UI）
 
 - **Per-device queue**：localStorage 不跨裝置同步，多 tab 同 session 可能各 drain 一次造成重送
-- **Model 以 shared session history 為準**：compact 讀最新 user message 的 `model`/`variant`，因此 native 或 compact 最近一次 prompt 使用的有效模型會同步到 header、後續送出 payload 與 legacy localStorage fallback。只有 history 沒有 model metadata 時才依序使用舊 compact localStorage、`/config`、hard fallback；不依賴不可靠的 `session.model`
+- **Model 以 shared session history 為準**：compact 額外呼叫 `/c/session/:id/latest-user-model`，由 server 以 `X-Next-Cursor` / `before` 分頁找最新 user message，只把 `model`、`created`、`messageID` metadata 傳給瀏覽器；畫面仍只載入最新 30 則。找到 persisted model 時會同步到 header、後續送出 payload 與 legacy localStorage fallback；只有完整掃描確定沒有 model metadata 時才依序使用舊 compact localStorage、`/config`、hard fallback。原生介面 composer 尚未送出的選擇只存在該 client，沒有 persisted user message，compact 無法觀察或同步
 - **Trust mode `permission` array 是 append-only**：toggle off 用 `[bash * ask, edit * ask]` 末位覆寫；陣列會越長
 - **無語法高亮 / 分頁 / 工具呼叫展開** — 為保持 bundle 小
 - **無自動 reload script**：HTML 修改會破壞 chunked encoding → Caddy 斷線，無解（見「2026-04-22 Caddy HTTPS 修復」）

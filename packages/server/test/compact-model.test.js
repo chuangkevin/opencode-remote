@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   awaitPromptModel,
   chooseInitialModel,
+  chooseInitialModelAfterMetadata,
+  createCursorGuardedLatestRequestRunner,
   createLatestRequestRunner,
   createModelInitializationGate,
   latestUserMessageModel,
@@ -248,4 +250,64 @@ test("older equal-timestamp authoritative request cannot roll back a newer compl
   assert.equal((await olderRequest).applied, false);
   assert.deepEqual(current, { providerID: "openai", modelID: "gpt-5.6", variant: "high" });
   assert.deepEqual(cursor, { created: 400, messageID: "msg_new" });
+});
+
+test("initialization does not read config before latest-model metadata resolves", async () => {
+  let resolveMetadata;
+  const metadata = new Promise((resolve) => { resolveMetadata = resolve; });
+  let configReads = 0;
+  const initialization = chooseInitialModelAfterMetadata({
+    loadMetadata: () => metadata,
+    saved: null,
+    loadConfigured: async () => {
+      configReads += 1;
+      return fallback;
+    },
+    fallback,
+  });
+
+  await Promise.resolve();
+  assert.equal(configReads, 0);
+  resolveMetadata({
+    model: { providerID: "openai", modelID: "gpt-5.6-sol", variant: "medium" },
+    created: 500,
+    messageID: "msg_authoritative",
+  });
+
+  assert.deepEqual(await initialization, {
+    model: { providerID: "openai", modelID: "gpt-5.6-sol", variant: "medium" },
+    source: "history",
+    created: 500,
+    messageID: "msg_authoritative",
+  });
+  assert.equal(configReads, 0);
+});
+
+test("initial metadata failure does not silently fall back to config", async () => {
+  let configReads = 0;
+  await assert.rejects(chooseInitialModelAfterMetadata({
+    loadMetadata: async () => { throw new Error("metadata unavailable"); },
+    saved: null,
+    loadConfigured: async () => {
+      configReads += 1;
+      return fallback;
+    },
+    fallback,
+  }), /metadata unavailable/);
+  assert.equal(configReads, 0);
+});
+
+test("stale metadata cannot overwrite a newer SSE-observed model cursor", async () => {
+  let generation = 0;
+  let resolveMetadata;
+  const metadata = new Promise((resolve) => { resolveMetadata = resolve; });
+  const runLatest = createCursorGuardedLatestRequestRunner(() => generation);
+  let applied = null;
+
+  const request = runLatest(() => metadata, (value) => { applied = value; });
+  generation += 1;
+  resolveMetadata({ model: { providerID: "openai", modelID: "gpt-5.5", variant: null } });
+
+  assert.equal((await request).applied, false);
+  assert.equal(applied, null);
 });

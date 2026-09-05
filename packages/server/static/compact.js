@@ -1,10 +1,12 @@
 ﻿import {
   awaitPromptModel,
-  chooseInitialModel,
+  chooseInitialModelAfterMetadata,
+  createCursorGuardedLatestRequestRunner,
   createLatestRequestRunner,
   createModelInitializationGate,
-  latestUserMessageSelection,
+  modelSelectionAsMessage,
   needsAuthoritativeHistory,
+  normalizeLatestUserModelMetadata,
   normalizePromptModel,
   reconcileModelAfterInitialization,
 } from "./compact-model.js";
@@ -304,8 +306,14 @@ function scrollToBottom() {
 
 // ─── Boot ──────────────────────────────────────────────────
 (async function boot() {
+  await refreshBusyStatus();
   try {
-    await refreshBusyStatus();
+    await initializeModel();
+  } catch (err) {
+    console.error(err);
+    showModelInitializationError(err);
+  }
+  try {
     await loadHistory();
     // Render any prompts queued before the page was reloaded.
     for (const item of queue) renderQueueItem(item);
@@ -313,7 +321,6 @@ function scrollToBottom() {
   } catch (err) {
     console.error(err);
     showToast("載入歷史失敗：" + err.message, "error");
-    await initializeModel([]);
   }
   // History initializes the model before send is enabled. Header refresh can
   // still independently recover through storage/config if history failed.
@@ -323,7 +330,7 @@ function scrollToBottom() {
   drainPendingInteractive().catch((err) => console.warn("drainPendingInteractive:", err));
   // Flush any local prompts left by an older build or failed request. The
   // server owns busy-session queueing, so this no longer waits for idle.
-  if (queue.length > 0) {
+  if (queue.length > 0 && modelInitialized) {
     setTimeout(() => {
       refreshBusyStatus()
         .then(() => drainQueueIfIdle())
@@ -333,11 +340,25 @@ function scrollToBottom() {
 })();
 
 function showToast(text, kind) {
+  els.toast.onclick = null;
   els.toast.textContent = text;
   els.toast.className = "toast" + (kind === "error" ? " error" : "");
   els.toast.hidden = false;
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => { els.toast.hidden = true; }, 4000);
+}
+
+function showModelInitializationError(err) {
+  clearTimeout(showToast._t);
+  els.toast.textContent = "模型同步失敗，點此重試：" + err.message;
+  els.toast.className = "toast error";
+  els.toast.hidden = false;
+  els.toast.onclick = () => {
+    els.toast.onclick = null;
+    initializeModel()
+      .then(() => queue.length > 0 && refreshBusyStatus().then(() => drainQueueIfIdle()))
+      .catch(showModelInitializationError);
+  };
 }
 
 // ─── SSE subscription ──────────────────────────────────────
@@ -432,8 +453,9 @@ async function refreshMessage(messageID) {
     const m = await fetchMessage(messageID);
     // m is shaped { info: { id, sessionID, role, time, ... }, parts: [...] }
     if (m.info?.sessionID && m.info.sessionID !== sessionID) return;
+    if (!modelInitialized) await initializeModel();
     if (needsAuthoritativeHistory([m], latestModelMessageCreated, latestModelMessageID)) {
-      await refreshAuthoritativeModelHistory();
+      await refreshLatestSessionModel();
     } else {
       await reconcileModelFromHistory([m]);
     }
@@ -948,6 +970,12 @@ async function drainPendingInteractive() {
 
 function connectSSE() {
   const es = new EventSource("/event");
+  es.addEventListener("open", () => {
+    refreshLatestSessionModel().catch((err) => {
+      console.warn("latest model sync failed after SSE connect", err);
+      if (!modelInitialized) showModelInitializationError(err);
+    });
+  });
   // All OpenCode events arrive as generic (unnamed) SSE messages — no
   // `event:` header is used; only the `data:` field carries JSON with `type`.
   es.addEventListener("message", (ev) => {
@@ -1105,10 +1133,7 @@ if (!fsSupported) {
 
 // ─── Header refresh ────────────────────────────────────────
 async function refreshHeader() {
-  await Promise.all([
-    loadSessionMeta(),
-    initializeModel([]),
-  ]);
+  await loadSessionMeta();
 }
 
 // ─── Textarea: auto-grow + Enter submits, Shift+Enter newline ─
@@ -1167,10 +1192,14 @@ els.compose.addEventListener("keyup", (e) => {
 let currentModel = null;     // { providerID, modelID, variant }
 let latestModelMessageCreated = -Infinity;
 let latestModelMessageID = null;
+let modelCursorGeneration = 0;
 let modelInitialized = false;
 let modelInitializationTask = null;
 const modelInitialization = createModelInitializationGate();
 const runLatestModelHistoryRequest = createLatestRequestRunner();
+const runLatestModelMetadataRequest = createCursorGuardedLatestRequestRunner(
+  () => modelCursorGeneration,
+);
 
 // Fire-and-forget endpoint:
 //   POST /session/:id/prompt_async returns 204 in ~300ms.
@@ -1442,36 +1471,60 @@ async function loadDefaultModelFromConfig() {
   return defaultModelFromConfig;
 }
 
-async function initializeModel(history) {
+async function initializeModel() {
   if (modelInitialized) return;
   if (modelInitializationTask) return modelInitializationTask;
-  modelInitializationTask = (async () => {
-    const historySelection = latestUserMessageSelection(history);
-    const configured = historySelection ? null : await loadDefaultModelFromConfig();
-    const selection = chooseInitialModel({
-      history,
+  const task = (async () => {
+    els.actionBtn.disabled = true;
+    const selection = await chooseInitialModelAfterMetadata({
+      loadMetadata: () => api(`/c/session/${sessionID}/latest-user-model`),
       saved: readSavedModel(),
-      configured,
+      loadConfigured: loadDefaultModelFromConfig,
       fallback: COMPACT_DEFAULT_MODEL,
     });
     setCurrentModel(selection.model);
     if (selection.source === "history") {
-      latestModelMessageCreated = historySelection?.created ?? latestModelMessageCreated;
-      latestModelMessageID = historySelection?.messageID ?? latestModelMessageID;
+      latestModelMessageCreated = selection.created;
+      latestModelMessageID = selection.messageID;
       persistModel(selection.model);
     }
+    modelCursorGeneration += 1;
     modelInitialized = true;
     modelInitialization.complete();
     els.actionBtn.disabled = false;
+    if (els.toast.onclick) {
+      els.toast.onclick = null;
+      els.toast.hidden = true;
+    }
   })();
-  return modelInitializationTask;
+  modelInitializationTask = task;
+  try {
+    await task;
+  } catch (err) {
+    if (modelInitializationTask === task) modelInitializationTask = null;
+    throw err;
+  }
+}
+
+async function fetchLatestUserModel() {
+  const value = await api(`/c/session/${sessionID}/latest-user-model`);
+  return normalizeLatestUserModelMetadata(value);
+}
+
+async function refreshLatestSessionModel() {
+  if (!modelInitialized) return initializeModel();
+  await runLatestModelMetadataRequest(fetchLatestUserModel, async (selection, isCurrent) => {
+    if (!selection || !isCurrent()) return;
+    const message = modelSelectionAsMessage(selection);
+    if (message) await reconcileModelFromHistory([message], true, isCurrent);
+  });
 }
 
 async function reconcileModelFromHistory(history, authoritative = false, isCurrent = () => true) {
   const reconciled = await reconcileModelAfterInitialization({
     history,
     isInitialized: () => modelInitialized,
-    initialize: () => initializeModel(history),
+    initialize: () => initializeModel(),
     getCurrent: () => currentModel,
     getCursor: () => ({
       created: latestModelMessageCreated,
@@ -1484,21 +1537,16 @@ async function reconcileModelFromHistory(history, authoritative = false, isCurre
   if (!reconciled.changed) return;
   latestModelMessageCreated = reconciled.created;
   latestModelMessageID = reconciled.messageID;
+  modelCursorGeneration += 1;
   setCurrentModel(reconciled.model);
   persistModel(reconciled.model);
 }
 
 async function reconcileAuthoritativeModelHistory(messages, isCurrent) {
+  if (!modelInitialized) return;
   const list = Array.isArray(messages) ? messages : [];
   list.sort((a, b) => (a.info?.time?.created ?? 0) - (b.info?.time?.created ?? 0));
   await reconcileModelFromHistory(list, true, isCurrent);
-}
-
-async function refreshAuthoritativeModelHistory() {
-  await runLatestModelHistoryRequest(
-    () => api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`),
-    reconcileAuthoritativeModelHistory,
-  );
 }
 
 async function openPicker() {
