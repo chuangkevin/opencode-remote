@@ -189,6 +189,7 @@ echo "Staging runtime allowlist..."
   packages/server/dist/index.js \
   packages/server/dist/session.js \
   packages/server/dist/compact/handlers.js \
+  packages/server/dist/compact/model.js \
   packages/server/dist/compact/pins.js \
   packages/server/dist/compact/shell.js \
   packages/server/dist/compact/trust.js \
