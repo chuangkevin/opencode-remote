@@ -67,6 +67,17 @@ Tailnet client
   -> /Users/kevin/Documents/Projects
 ```
 
+`/remote-sessions` 的執行中狀態另走 same-origin bridge：browser 呼叫
+`GET /c/session-status?directory=<absolute-path>`，Node proxy 平行查詢自己啟動的
+`127.0.0.1:4196` 與 OpenCode Desktop 的 authenticated dynamic-port loopback
+sidecar，再合併成功來源。Remote-owned source timeout 是 1500ms，Desktop source 最多等待
+750ms；browser 維持整批 3 秒 timeout、最多 4 個 directory request 並行。這個 endpoint
+先做 lexical validation，再以 `realpath` 驗證 requested directory 確實存在於 real root 內；
+不存在或透過 symlink 逃出 root 會回 `400`，不會發出 status request。
+root 外的復原 pinned session 不會發出 status request，也不顯示執行中 indicator。
+任一來源失敗不會遮蔽另一來源；兩邊都失敗才回 `502`。重複 session ID 的
+`busy` 優先於 `idle`、`retry` 或未知狀態，不受來源順序影響。
+
 - Runtime: `/Users/kevin/.local/share/opencode-remote`
 - Plist: `/Users/kevin/Library/LaunchAgents/io.interagent.opencode-sara.plist`
 - Logs: `/Users/kevin/Library/Logs/opencode-remote/opencode-sara.log` and `opencode-sara.error.log`
@@ -74,12 +85,23 @@ Tailnet client
 - OpenCode: `/opt/homebrew/bin/opencode`
 - Tailscale CLI: `/Applications/Tailscale.app/Contents/MacOS/Tailscale`
 - Runtime wrapper: `/Users/kevin/.local/share/opencode-remote/run-opencode-sara.sh`
+- Desktop bridge plugin: `/Users/kevin/.config/opencode/plugins/opencode-remote-desktop-bridge.js`
+- Desktop bridge library: `/Users/kevin/.config/opencode/opencode-remote/opencode-remote-desktop-bridge-lib.js`
+- Desktop connection runtime state: `/Users/kevin/.local/share/opencode-remote/desktop-connection.json`
 
 LaunchAgent 直接執行 installed runtime wrapper。wrapper 先確認 exact Tailscale IPv4，再以 `/usr/bin/env -i` 建立固定 application environment 並 `exec /opt/homebrew/bin/node`；Node 直接啟動 `/opt/homebrew/bin/opencode serve` child。plist 不包含環境變數或 application credentials。
 
 這個 direct-FDA design 已部署。production installer 已連續驗證 clean restart、direct Node ownership，以及移除舊 self-SSH runtime launcher。
 
 這個 macOS 服務沒有 Basic auth，只能綁定核准的 Tailscale IP。不要改成 `0.0.0.0`、不要加 Funnel/Cloudflare Tunnel/public reverse proxy，也不要把 `4196` 對外開放。私有網域是 `https://opencode-sara.sisihome.org`，使用既有 DNS-only wildcard 經 GN100 Caddy；`https://opencode.sisihome.org` 仍是 Windows `kevinhome` 的既有私有路由。
+
+Desktop connection file 是本機 `0600` runtime state，不是設定或部署 secret source。
+它只包含 Desktop loopback origin 與 sidecar Basic Auth connection data，由全域 plugin
+在 Desktop startup 產生，並在 Desktop process 存活期間每 5 分鐘 heartbeat 更新
+`updatedAt`；server 讀取後只回 session status map，credential 永不送到 browser、永不寫入
+log、永不 commit。父目錄固定為 `0700`。server 以 `O_NOFOLLOW` 開啟一次後從同一 descriptor
+驗證及讀取；檔案格式或權限不符、超過 15 分鐘未更新、時間超前 60 秒以上、PID 已結束，
+或 origin 不是 loopback，都會忽略它並回退到 `:4196`。
 
 ### Full Disk Access 前置條件
 
@@ -99,7 +121,10 @@ cd /Users/kevin/Documents/Projects/private-codebase/opencode-remote
 ./deploy/macos/deploy-local.sh
 ```
 
-腳本會先驗證固定 dependencies，再執行 `npm ci` / typecheck / build、用明確 allowlist 複製 runtime、保留 `packages/server/package.json` ESM metadata、安裝 direct runtime wrapper/plist，並以目前 GUI UID 執行 exact `launchctl bootout/bootstrap/kickstart`。bootout 後會 bounded-wait，直到 exact `9223` 與 `4196` listeners 都不存在；若殘留就 fail closed，不會依 port 或 PID kill process。
+腳本會先驗證固定 dependencies，再執行 `npm ci` / typecheck / build、用明確 allowlist 複製 runtime、保留 `packages/server/package.json` ESM metadata、安裝 direct runtime wrapper/plist，並以 `0600` 安裝只有一個 function export 的 Desktop bridge wrapper 到既有 `~/.config/opencode/plugins/`，另以 `0600` 安裝 implementation library 與其 ESM package metadata 到 auto-discovery 外的 `~/.config/opencode/opencode-remote/`；兩個目錄皆為 `0700`，installed wrapper 的 `../opencode-remote/` relative import 會指向該 library（不清除其他 plugin、不修改 `opencode.json`）。接著以目前 GUI UID 執行 exact `launchctl bootout/bootstrap/kickstart`。bootout 後會 bounded-wait，直到 exact `9223` 與 `4196` listeners 都不存在；若殘留就 fail closed，不會依 port 或 PID kill process。
+
+Config-time plugin 安裝後必須重啟 OpenCode Desktop，未重啟前不會產生新的 Desktop
+connection runtime state。部署腳本本身不會重啟 Desktop。
 
 最後的 bounded success gate 會用固定 Node 解析 `http://100.113.121.103:9223/remote-health` JSON，要求精確的 proxy/port/upstream/healthy 值；確認 LaunchAgent state 是 running、launchctl PID 等於 exact `100.113.121.103:9223` Node listener PID、command 精確為 fixed Node + runtime entry；並確認 exact `127.0.0.1:4196` owner command 是 fixed OpenCode command且為 Node 的 direct child。它不讀 `.env`、不複製 `.env`/secret/node_modules/source，也不遞迴刪除 runtime 或服務資料。
 

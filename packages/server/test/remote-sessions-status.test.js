@@ -64,8 +64,8 @@ test("loads and merges statuses once per encoded session directory", async () =>
   );
 
   assert.deepEqual(requests.map(({ url }) => url), [
-    "/session/status?directory=%2Fworkspace%2Fone",
-    "/session/status?directory=%2Fworkspace%2Fspace%20%26%20%E4%BA%8C",
+    "/c/session-status?directory=%2Fworkspace%2Fone",
+    "/c/session-status?directory=%2Fworkspace%2Fspace%20%26%20%E4%BA%8C",
   ]);
   assert.ok(requests.every((request) => request.signal === signal));
   assert.deepEqual(statuses, {
@@ -192,11 +192,14 @@ test("remote sessions HTML wires an accessible reduced-motion-safe indicator", a
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
 
   assert.match(source, /class="running-indicator"[^>]*hidden[^>]*title="執行中"[^>]*aria-label="執行中"/);
-  assert.match(source, /data-session-directory="\$\{escapeHtml\(session\.directory\)\}"/);
+  assert.match(source, /isPathWithinRoot\(session\.directory, config\.opencodeDirectory\)/);
+  assert.match(source, /directoryAttribute/);
   assert.match(source, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(source, /<script type="module" src="\/c\/static\/remote-sessions\.js"><\/script>/);
 
   const client = await readFile(new URL("../static/remote-sessions.js", import.meta.url), "utf8");
+  assert.match(client, /`\/c\/session-status\?directory=/);
+  assert.doesNotMatch(client, /`\/session\/status\?directory=/);
   assert.match(client, /addEventListener\("visibilitychange", handleVisibilityChange\)/);
   assert.match(client, /addEventListener\("pagehide", handlePageHide\)/);
   assert.match(client, /addEventListener\("pageshow", handlePageShow\)/);

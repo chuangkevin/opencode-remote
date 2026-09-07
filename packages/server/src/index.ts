@@ -9,6 +9,7 @@ import { encodeDirSlug, listSessionPickerSessions, mergePinnedSessions, resolveA
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
+import { handleMergedSessionStatus, isMergedSessionStatusPath, isPathWithinRoot } from "./compact/session-status.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -957,7 +958,10 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
       const pinned = pinnedSet.has(session.id);
       const pinClass = pinned ? "pin-btn pinned" : "pin-btn";
       const pinLabel = pinned ? "取消釘選" : "釘選";
-      return `<div class="session${pinned ? " is-pinned" : ""}" data-session-id="${session.id}" data-session-directory="${escapeHtml(session.directory)}">
+      const directoryAttribute = isPathWithinRoot(session.directory, config.opencodeDirectory)
+        ? ` data-session-directory="${escapeHtml(session.directory)}"`
+        : "";
+      return `<div class="session${pinned ? " is-pinned" : ""}" data-session-id="${session.id}"${directoryAttribute}>
         <button class="${pinClass}" type="button" data-pin-toggle="${session.id}" data-pinned="${pinned ? "1" : "0"}" aria-label="${pinLabel}" title="${pinLabel}">📌</button>
         <a class="session-link" href="${nativePath}">
           <strong><span class="running-indicator" hidden title="執行中" aria-label="執行中" role="img"></span><span class="session-title">${escapeHtml(title)}</span></strong>
@@ -1159,6 +1163,14 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "GET" && req.url === "/remote-sessions") {
     void handleRemoteSessions(res);
+    return;
+  }
+
+  if (req.method === "GET" && isMergedSessionStatusPath(req.url)) {
+    void handleMergedSessionStatus(req, res, {
+      ownOrigin: config.opencodeUrl,
+      allowedRoot: config.opencodeDirectory,
+    });
     return;
   }
 

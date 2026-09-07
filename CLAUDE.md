@@ -328,6 +328,7 @@ HTML + 單一 vanilla ES module，無 build step。
 | `GET /remote-sessions` | session 列表頁（含 📌 釘選、Compact pill、新 session 按鈕）|
 | `GET /c/session/:id` | compact 對話 UI 主畫面 |
 | `GET /c/session/:id/latest-user-model` | server 端分頁掃描最新 user message，只回 model metadata |
+| `GET /c/session-status?directory=<absolute-path>` | 僅接受 `OPENCODE_DIRECTORY` 或其子目錄，合併 Remote-owned `:4196` 與 macOS Desktop sidecar 的 session status；任一來源失敗時使用另一來源 |
 | `GET /c/static/<file>` | 服 `compact.js` / `compact.css` / `marked.min.js`（白名單檢查）|
 | `POST /c/new-session` | 新建 session（**不帶 title** 讓 OpenCode 自動命名）+ 套 trust ruleset + 303 redirect |
 | `GET /c/pins` | 列出已釘選的 sessionID（從 `<OPENCODE_DIRECTORY>/.opencode-remote/pins.json` 讀）|
@@ -342,6 +343,7 @@ HTML + 單一 vanilla ES module，無 build step。
 | `packages/server/src/compact/shell.ts` | session 頁的 HTML template |
 | `packages/server/src/compact/trust.ts` | session permission allowlist + `ensureSessionTrust()` |
 | `packages/server/src/compact/pins.ts` | file-backed pin store（atomic tmp + rename）|
+| `packages/server/src/compact/session-status.ts` | 驗證 Desktop runtime credential，帶 Basic Auth 平行讀兩個 loopback status source 並合併 |
 | `packages/server/static/compact.js` | 整個 client（state / SSE / send / queue / pins / question UI ...）|
 | `packages/server/static/compact.css` | 樣式 |
 | `packages/server/static/marked.min.js` | vendored `marked@12.0.2` 渲染 markdown |
@@ -392,6 +394,16 @@ HTML + 單一 vanilla ES module，無 build step。
 - `handleCompactSession` 載入時 fire-and-forget `ensureSessionTrust(sessionID)`
 - PATCH 一組 allow-most-deny-destructive 規則（見 `trust.ts`）
 - 使用者第一個 prompt 就不會被擋
+
+**8. macOS Desktop running status bridge**
+- Desktop 與 Remote-owned `:4196` 是兩個獨立 OpenCode server；`/remote-sessions` 不再直接把 status polling 送到 `:4196`，而是呼叫 same-origin `/c/session-status`。
+- 全域 plugin wrapper `deploy/macos/opencode-remote-desktop-bridge.js` 只有一個 function export；實作位於 `deploy/opencode-remote/opencode-remote-desktop-bridge-lib.js`，只在 `OPENCODE_CLIENT=desktop`、Basic Auth username/password 存在且 `input.serverUrl` 是 HTTP(S) loopback 時寫入連線資訊。
+- runtime state 固定在 `~/.local/share/opencode-remote/desktop-connection.json`。目錄權限 `0700`，credential file 與 atomic temp file 權限 `0600`；內容在 Desktop startup 產生，Desktop process 存活期間每 5 分鐘 heartbeat 重寫 `updatedAt`，不送到 browser，也不 commit。
+- Server 以單一 `O_NOFOLLOW` descriptor 驗證並讀取 owner-only regular file，只接受 HTTP(S) loopback origin、非空 username/password、仍存活 PID，以及 15 分鐘內且不超前 server 時鐘 60 秒的 timestamp。Desktop credential 缺少、過期或 sidecar 無法連線時，仍回退到 Remote-owned `:4196`；兩邊都失敗才回 `502`。
+- `/c/session-status` 先做 lexical path validation，再以 `realpath` 解析 allowed root 與 requested directory；不存在或透過 symlink 逃出 root 的目錄回 `400`，且不會發出 status request。復原出的 pinned session 若 lexically 位於 root 外，卡片不輸出 `data-session-directory`，因此不顯示執行中 indicator。
+- 合併重複 session ID 時 `busy` 永遠優先於 `idle`、`retry` 或未知狀態，不受來源順序影響；所有非重複 ID 都保留。
+- Remote-owned status timeout 為 1500ms，Desktop timeout 上限為 750ms；瀏覽器維持 3 秒整批 timeout、最多 4 個 directory request 並行，任一 directory 失敗仍不套用該次 poll 的部分結果。
+- `deploy-local.sh` 把單一 export wrapper 複製到 `~/.config/opencode/plugins/`，並把 library 與其 ESM package metadata 以 `0600` 複製到 auto-discovery 外的 `~/.config/opencode/opencode-remote/`；兩個目錄皆為 `0700`。wrapper 的 `../opencode-remote/` import 會從 installed plugin directory 指向該 library。腳本不修改 `opencode.json`，也不移除既有 plugins。安裝後要重啟 OpenCode Desktop，才會在下次 Desktop startup 產生/更新 runtime state。
 
 ### 已知限制（compact UI）
 

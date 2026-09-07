@@ -21,9 +21,18 @@ readonly HEALTH_WAIT_SECONDS=2
 readonly STOP_ATTEMPTS=15
 readonly STOP_WAIT_SECONDS=1
 readonly SERVER_ENTRY="$RUNTIME_DIR/packages/server/dist/index.js"
+readonly PLUGIN_SOURCE_NAME="opencode-remote-desktop-bridge.js"
+readonly PLUGIN_DIR="/Users/kevin/.config/opencode/plugins"
+readonly PLUGIN_DEST="$PLUGIN_DIR/$PLUGIN_SOURCE_NAME"
+readonly BRIDGE_LIB_SOURCE_NAME="opencode-remote-desktop-bridge-lib.js"
+readonly BRIDGE_LIB_DIR="/Users/kevin/.config/opencode/opencode-remote"
+readonly BRIDGE_LIB_DEST="$BRIDGE_LIB_DIR/$BRIDGE_LIB_SOURCE_NAME"
+readonly BRIDGE_LIB_PACKAGE_DEST="$BRIDGE_LIB_DIR/package.json"
 readonly BUILD_PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly BRIDGE_LIB_SOURCE="$SCRIPT_DIR/../opencode-remote/$BRIDGE_LIB_SOURCE_NAME"
+readonly BRIDGE_LIB_PACKAGE_SOURCE="$SCRIPT_DIR/../opencode-remote/package.json"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 STAGE_ARCHIVE=""
 
@@ -49,6 +58,9 @@ require_executable() {
 [[ -f "$REPO_ROOT/package-lock.json" ]] || fail "run from the opencode-remote repository"
 [[ -f "$SCRIPT_DIR/run-opencode-sara.sh" ]] || fail "runtime wrapper is missing"
 [[ -f "$SCRIPT_DIR/$PLIST_SOURCE_NAME" ]] || fail "LaunchAgent plist is missing"
+[[ -f "$SCRIPT_DIR/$PLUGIN_SOURCE_NAME" ]] || fail "Desktop status bridge plugin is missing"
+[[ -f "$BRIDGE_LIB_SOURCE" ]] || fail "Desktop status bridge library is missing"
+[[ -f "$BRIDGE_LIB_PACKAGE_SOURCE" ]] || fail "Desktop status bridge library package metadata is missing"
 
 require_executable "$NODE_BIN"
 require_executable "$NPM_BIN"
@@ -191,6 +203,7 @@ echo "Staging runtime allowlist..."
   packages/server/dist/compact/handlers.js \
   packages/server/dist/compact/model.js \
   packages/server/dist/compact/pins.js \
+  packages/server/dist/compact/session-status.js \
   packages/server/dist/compact/shell.js \
   packages/server/dist/compact/trust.js \
   packages/server/static \
@@ -217,6 +230,10 @@ echo "Updating runtime copy without deleting service data..."
 /bin/rm -f -- "$RUNTIME_DIR/launch-opencode-sara.sh"
 /usr/bin/install -m 0755 "$SCRIPT_DIR/run-opencode-sara.sh" "$RUNTIME_DIR/run-opencode-sara.sh"
 /usr/bin/install -m 0644 "$SCRIPT_DIR/$PLIST_SOURCE_NAME" "$PLIST_DEST"
+/usr/bin/install -d -m 0700 "$PLUGIN_DIR" "$BRIDGE_LIB_DIR"
+/usr/bin/install -m 0600 "$SCRIPT_DIR/$PLUGIN_SOURCE_NAME" "$PLUGIN_DEST"
+/usr/bin/install -m 0600 "$BRIDGE_LIB_SOURCE" "$BRIDGE_LIB_DEST"
+/usr/bin/install -m 0600 "$BRIDGE_LIB_PACKAGE_SOURCE" "$BRIDGE_LIB_PACKAGE_DEST"
 
 echo "Loading LaunchAgent..."
 /bin/launchctl bootstrap "$GUI_DOMAIN" "$PLIST_DEST"

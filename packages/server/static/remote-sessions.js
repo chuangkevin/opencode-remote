@@ -15,7 +15,7 @@ export async function loadSessionStatuses(directories, signal, fetchFn = globalT
       const index = nextIndex;
       nextIndex += 1;
       const directory = uniqueDirectories[index];
-      const url = `/session/status?directory=${encodeURIComponent(directory)}`;
+      const url = `/c/session-status?directory=${encodeURIComponent(directory)}`;
       const response = await fetchFn(url, { signal });
       if (!response.ok) throw new Error(`GET ${url} returned ${response.status}`);
       const statuses = await response.json();
