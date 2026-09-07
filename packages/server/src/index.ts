@@ -957,10 +957,10 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
       const pinned = pinnedSet.has(session.id);
       const pinClass = pinned ? "pin-btn pinned" : "pin-btn";
       const pinLabel = pinned ? "取消釘選" : "釘選";
-      return `<div class="session${pinned ? " is-pinned" : ""}" data-session-id="${session.id}">
+      return `<div class="session${pinned ? " is-pinned" : ""}" data-session-id="${session.id}" data-session-directory="${escapeHtml(session.directory)}">
         <button class="${pinClass}" type="button" data-pin-toggle="${session.id}" data-pinned="${pinned ? "1" : "0"}" aria-label="${pinLabel}" title="${pinLabel}">📌</button>
         <a class="session-link" href="${nativePath}">
-          <strong>${escapeHtml(title)}</strong>
+          <strong><span class="running-indicator" hidden title="執行中" aria-label="執行中" role="img"></span><span class="session-title">${escapeHtml(title)}</span></strong>
           <small>${escapeHtml(formatTime(session.time.updated))}</small>
         </a>
         <a class="compact-btn" href="${compactPath}" title="開啟 compact 視圖">Compact</a>
@@ -993,7 +993,12 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
             .pin-btn.pinned { opacity: 1; filter: none; }
             .pin-btn:active { transform: translateY(-50%) scale(0.92); }
             .session-link { display: flex; align-items: baseline; gap: 8px; color: inherit; text-decoration: none; padding-right: 76px; min-width: 0; }
-            .session-link strong { flex: 1; font-size: 13.5px; font-weight: 500; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: #f4f4f5; }
+            .session-link strong { display: flex; align-items: center; gap: 7px; flex: 1; font-size: 13.5px; font-weight: 500; line-height: 1.3; min-width: 0; color: #f4f4f5; }
+            .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+            .running-indicator { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 2px rgba(34,197,94,.16); animation: running-pulse 1.8s ease-in-out infinite; }
+            .running-indicator[hidden] { display: none; }
+            @keyframes running-pulse { 0%, 100% { opacity: .65; } 50% { opacity: 1; box-shadow: 0 0 0 4px rgba(34,197,94,.1); } }
+            @media (prefers-reduced-motion: reduce) { .running-indicator { animation: none; } }
             .session-link small { flex-shrink: 0; font-size: 11px; color: #71717a; font-weight: normal; }
             .compact-btn { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); font-size: 11px; font-weight: 500; padding: 4px 10px; border-radius: 999px; background: #312e81; color: #c7d2fe; border: 1px solid #4338ca; text-decoration: none; line-height: 1; }
             .compact-btn:active { background: #4338ca; color: #fff; }
@@ -1030,6 +1035,7 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
               }
             });
           </script>
+          <script type="module" src="/c/static/remote-sessions.js"></script>
         </body>
       </html>`);
   } catch (err) {

@@ -485,3 +485,15 @@ request instead of the default latest-100 response. Pinned IDs missing from that
 bounded result are recovered with `GET /session/:id`; stale 404 pins are omitted,
 while other upstream failures remain visible as errors. Recovered sessions are
 deduplicated and sorted with all pins first.
+
+### 9. Running session indicator
+
+Every `/remote-sessions` card includes a hidden, accessible green indicator before
+its title. The page polls same-origin `GET /session/status?directory=<directory>`
+once per unique card directory immediately and every 5 seconds, showing indicators
+only for `type: "busy"`. Each poll loads at most four directories concurrently through
+encoded directory URLs, aborts after 3 seconds, never overlaps, and applies only when
+every directory succeeds, leaving the last complete indicator state unchanged on
+failure. Polling pauses while the document is hidden and polls immediately when it
+becomes visible again, while retaining pagehide/pageshow bfcache handling. The pulse
+animation is disabled when `prefers-reduced-motion` is enabled.
