@@ -477,3 +477,11 @@ each response to complete.
   honor pin time order from `pins.json` array order)
 - Question UI custom answer text input (`custom: true` field) — not
   rendered; only listed options are clickable
+
+### 8. Complete session picker results
+
+`/remote-sessions` now uses a dedicated `GET /session?roots=true&limit=1000`
+request instead of the default latest-100 response. Pinned IDs missing from that
+bounded result are recovered with `GET /session/:id`; stale 404 pins are omitted,
+while other upstream failures remain visible as errors. Recovered sessions are
+deduplicated and sorted with all pins first.

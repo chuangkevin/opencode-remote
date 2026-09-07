@@ -1,6 +1,6 @@
 import { config } from "./config.js";
 
-type OpenCodeSession = {
+export type OpenCodeSession = {
   id: string;
   slug: string;
   projectID: string;
@@ -15,6 +15,22 @@ export async function listSessions(): Promise<OpenCodeSession[]> {
   const res = await fetch(`${config.opencodeUrl}/session`);
   if (!res.ok) throw new Error(`OpenCode /session returned ${res.status}`);
   return res.json() as Promise<OpenCodeSession[]>;
+}
+
+export async function listSessionPickerSessions(): Promise<OpenCodeSession[]> {
+  const url = new URL(`${config.opencodeUrl}/session`);
+  url.searchParams.set("roots", "true");
+  url.searchParams.set("limit", "1000");
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`OpenCode /session returned ${res.status}`);
+  return res.json() as Promise<OpenCodeSession[]>;
+}
+
+export async function getSession(id: string): Promise<OpenCodeSession | undefined> {
+  const res = await fetch(`${config.opencodeUrl}/session/${encodeURIComponent(id)}`);
+  if (res.status === 404) return undefined;
+  if (!res.ok) throw new Error(`OpenCode /session/${id} returned ${res.status}`);
+  return res.json() as Promise<OpenCodeSession>;
 }
 
 async function createSession(): Promise<OpenCodeSession> {
@@ -42,6 +58,26 @@ function isConfiguredDirectory(session: OpenCodeSession): boolean {
 
 export function isUserSession(session: OpenCodeSession): boolean {
   return !session.parentID;
+}
+
+export async function mergePinnedSessions(
+  sessions: OpenCodeSession[],
+  pinnedIds: readonly string[],
+  loadSession: (id: string) => Promise<OpenCodeSession | undefined> = getSession,
+): Promise<OpenCodeSession[]> {
+  const pinnedSet = new Set(pinnedIds);
+  const byId = new Map(sessions.filter(isUserSession).map((session) => [session.id, session]));
+  const missingPinnedIds = [...pinnedSet].filter((id) => !byId.has(id));
+  const recovered = await Promise.all(missingPinnedIds.map(loadSession));
+
+  for (const session of recovered) {
+    if (session && isUserSession(session)) byId.set(session.id, session);
+  }
+
+  return [...byId.values()].sort((a, b) => {
+    const pinOrder = Number(pinnedSet.has(b.id)) - Number(pinnedSet.has(a.id));
+    return pinOrder || byUpdatedDesc(a, b);
+  });
 }
 
 /**

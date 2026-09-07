@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import { encodeDirSlug, isUserSession, listSessions, resolveActiveSessionPath } from "./session.js";
+import { encodeDirSlug, listSessionPickerSessions, mergePinnedSessions, resolveActiveSessionPath } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
@@ -944,21 +944,11 @@ function formatTime(timestamp: number): string {
 async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
   try {
     const [allSessions, pinnedIds] = await Promise.all([
-      listSessions(),
+      listSessionPickerSessions(),
       listPins(),
     ]);
     const pinnedSet = new Set(pinnedIds);
-    const filtered = allSessions.filter(isUserSession);
-    // Pinned first (each group sorted by recency); pinned references that no
-    // longer correspond to a real session are silently dropped here — we do
-    // not auto-prune the file, the next pin/unpin write rewrites it anyway.
-    const pinnedSessions = filtered
-      .filter((s) => pinnedSet.has(s.id))
-      .sort((a, b) => b.time.updated - a.time.updated);
-    const otherSessions = filtered
-      .filter((s) => !pinnedSet.has(s.id))
-      .sort((a, b) => b.time.updated - a.time.updated);
-    const ordered = [...pinnedSessions, ...otherSessions];
+    const ordered = await mergePinnedSessions(allSessions, pinnedIds);
 
     const items = ordered.map((session) => {
       const nativePath = `/${encodeDirSlug(session.directory)}/session/${session.id}`;
