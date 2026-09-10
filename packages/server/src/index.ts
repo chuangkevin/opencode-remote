@@ -1,7 +1,7 @@
 import http from "node:http";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
@@ -11,6 +11,7 @@ import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
 import { handleMergedSessionStatus, isMergedSessionStatusPath, isPathWithinRoot } from "./compact/session-status.js";
 import { rejectPromptWhileQuiesced } from "./update-quiesce.js";
+import { resolveOpenCodeCommand } from "./opencode-command.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -1407,24 +1408,6 @@ function startKeepAlive(): void {
 
 // ─── Startup ─────────────────────────────────────────────────────────────────
 
-function resolveOpenCodeCommand(): string {
-  if (process.env.OPENCODE_CLI_PATH) {
-    return process.env.OPENCODE_CLI_PATH;
-  }
-
-  if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA;
-    if (localAppData) {
-      const localCli = join(localAppData, "opencode", "opencode-cli.exe");
-      if (existsSync(localCli)) {
-        return localCli;
-      }
-    }
-  }
-
-  return "opencode";
-}
-
 async function waitForOpenCode(): Promise<void> {
   for (let i = 0; i < 60; i++) {
     try {
@@ -1451,14 +1434,17 @@ async function refreshSessionPath(): Promise<void> {
 async function main(): Promise<void> {
   // 1. Spawn OpenCode headless server
   console.log(`[opencode-remote] spawning opencode serve in ${config.opencodeDirectory}`);
-  const opencodeCmd = resolveOpenCodeCommand();
+  const opencodeCmd = resolveOpenCodeCommand({
+    explicitPath: process.env.OPENCODE_CLI_PATH,
+    localAppData: process.env.LOCALAPPDATA ?? "",
+  });
   const oc = spawn(
     opencodeCmd,
     ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],
     {
       cwd: config.opencodeDirectory,
       stdio: "inherit",
-      shell: process.platform === "win32",
+      shell: false,
       env: { ...process.env, OPENCODE_SERVER_PASSWORD: "" },
     },
   );

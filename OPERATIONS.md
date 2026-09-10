@@ -13,7 +13,7 @@ cd D:\GitClone\_HomeProject\opencode-remote
 
 服務在背景執行，不阻塞終端。**AI agent（Claude Code task）可直接透過 PowerShell tool 執行此指令。**
 
-`start-hidden.ps1` 是一鍵啟動：會自動準備 `.env`、同步 capability config 到 `OPENCODE_DIRECTORY`、移除 user-level Pencil MCP、執行 build、安裝每 5 分鐘執行一次的 watchdog scheduled task，然後啟動服務。
+`start-hidden.ps1` 是一鍵啟動：會準備 `.env`、同步 capability config、build、在 configured ports 啟動服務，並先通過 exact CLI version health 與 workspace probe；之後才安裝 watchdog、Windows Desktop bridge 與 updater。
 
 - 本地訪問: http://localhost:9223
 - 外網訪問: https://opencode.sisihome.org
@@ -37,6 +37,56 @@ curl http://localhost:9223/
 ```
 
 兩個都正常就代表目前檢查的 Windows 服務完全就緒。
+
+### Windows Desktop bridge 與 updater
+
+安裝器不清除其他 plugin，也不修改 `opencode.json`。它只複製 wrapper 到 `%USERPROFILE%\.config\opencode\plugins\opencode-remote-desktop-bridge.js`，並把 common library 與 ESM `package.json` 放在 sibling private directory `%USERPROFILE%\.config\opencode\opencode-remote\`。runtime credential 固定為 `%LOCALAPPDATA%\opencode-remote\desktop-connection.json`；runtime/CLI state ACL 限 current user 與 SYSTEM。第一次安裝後要手動重啟 Desktop 一次，installer/updater 永不代為重啟。
+
+```powershell
+# 安裝（current Remote 必須先通過 exact health/version/probe）
+.\deploy\windows\install-opencode-updater.ps1
+
+# 手動 idle-only run
+.\deploy\windows\update-opencode-remote.ps1
+
+# Task 與 logs
+Get-ScheduledTask -TaskName opencode-remote-updater | Select-Object TaskName, State
+Get-ScheduledTaskInfo -TaskName opencode-remote-updater
+Get-Content "$env:LOCALAPPDATA\opencode-remote\logs\opencode-remote-updater.log" -Tail 100
+
+# Strict status 的成功來源只含非 secret 名稱
+$workspace = (Get-Content .env | Where-Object { $_ -match '^OPENCODE_DIRECTORY=' } | Select-Object -First 1) -replace '^OPENCODE_DIRECTORY=', ''
+$response = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:9223/c/session-status?strict=1&directory=$([Uri]::EscapeDataString($workspace))"
+$response.Headers['X-OpenCode-Status-Sources']
+```
+
+預期 source 至少有 `remote`；Desktop 正在跑時必須同時有 `desktop`，否則 updater defer。Body 維持原 session status map，不含 credential。strict configured Desktop request 失敗會回 502；一般 UI 仍保留單一成功來源 fallback。
+
+Managed CLI pointer 是 `%LOCALAPPDATA%\opencode-remote\cli\active.json`，解析順序在 explicit `OPENCODE_CLI_PATH` 之後、legacy CLI 與 PATH 之前。Pointer 只接受 schema 1、exact version、absolute regular `.exe`，且 lexical/real path 都必須留在 exact immutable version directory；traversal、symlink/reparse escape 一律忽略。
+
+更新器先持有 `Local\opencode-remote-updater`，再持有 `Local\opencode-remote-service-lifecycle`，並在一般preflight前recover `%LOCALAPPDATA%\opencode-remote\update-transaction.json`。它要求current exact health/version/probe、strict known-idle status、bounded npm latest lookup；SemVer latest必須大於current才更新，絕不downgrade。若latest等於current但尚無有效managed pointer，則安裝該exact version完成初始migration。
+
+Pinned package先進unique stage。npm timeout只用exact PID的`taskkill.exe /T /F`並等待process tree退出；pointer切換前的install/version/ACL failure不寫block、不還原pointer、不重啟service。發布immutable version後，updater先atomically寫journal，再建立含PID/token/timestamp的`update.quiesce`，等待1秒重查status，最後才切pointer。watchdog/manual lifecycle共用lifecycle mutex，不能在這段時間競爭。
+
+失敗 recovery：
+
+```powershell
+Test-Path "$env:LOCALAPPDATA\opencode-remote\update.blocked"
+Get-Content "$env:LOCALAPPDATA\opencode-remote\logs\opencode-remote-updater.log" -Tail 200
+Get-Content "$env:LOCALAPPDATA\opencode-remote\cli\active.json" -ErrorAction SilentlyContinue
+Get-Content "$env:LOCALAPPDATA\opencode-remote\update-transaction.json" -ErrorAction SilentlyContinue
+Get-Content "$env:LOCALAPPDATA\opencode-remote\update.quiesce" -ErrorAction SilentlyContinue
+curl "http://127.0.0.1:9223/remote-health"
+
+# 手動確認 previous/legacy CLI 恢復後，重新安裝；health/probe gate 成功才清 block
+.\deploy\windows\install-opencode-updater.ps1
+```
+
+不要手動刪`cli\versions`、journal或quiesce。下一次updater會先依journal做deterministic recovery：new pointer/runtime健康則finalize；prior pointer/runtime仍健康則視為pre-switch中斷，只清transaction、不重啟；其餘狀態才還原prior pointer/absence並驗證old runtime，再寫block。損壞journal只在current runtime驗證健康後解除quiesce並block待人工檢查；沒有journal的marker只有在已取得exclusive updater mutex、owner正確且超過25分鐘bound後才會回收。Logging與Skynet都是best effort，不得阻止rollback；rollback failure時maintenance留給TTL到期。
+
+`stop.ps1`、`restart-service.ps1`、watchdog與updater不再sweep `OpenCode*`/`opencode*`。Proxy必須同時吻合current `node.exe`的exact `ExecutablePath`與parsed env-file/server-entry argv；child必須吻合`Resolve-OpenCodeCli`的exact executable、parent PID、configured loopback port與完整serve argv。任一configured port被其他process佔用就fail closed，不另找fallback port，也不會碰Desktop。
+
+目前證據範圍：repository tests/typecheck/build、Node static/contract checks 在 macOS 執行；Windows host 先前 offline/version-blocked，所以 live ACL inheritance、Task trigger、Desktop bridge heartbeat、update/restart/rollback 尚待 Windows host runtime validation，不能視為已部署。
 
 > **Port 提醒**：本機 OpenCode CLI 預設用 **4196**（不是 4096），因為 4096 已被
 > 本 repo 的 `docker-compose.yml` 容器占用。`.env` 的 `OPENCODE_PORT` 控制；
@@ -238,8 +288,7 @@ cd D:\GitClone\_HomeProject\opencode-remote
 .\stop.ps1
 ```
 
-`stop.ps1` 會同時停止 proxy (port 9223) 和 OpenCode (port 從 `.env` `OPENCODE_PORT` 讀，預設 4196)。
-殺 process 前有 **process-name allowlist 防呆** — 只殺 `node` / `opencode-cli` / `opencode`，碰到其他持有者（例如 Docker vpnkit）會 log `skipping` 跳過。
+`stop.ps1` 會從 `.env` 讀 `PORT` 與 `OPENCODE_PORT`。只有 exact repo server-entry listener 與其 direct loopback child 會被停止；其他 Node/OpenCode/Desktop 或 port owner 會使 lifecycle fail closed，不會被殺。
 預設也會停用 `opencode-remote-watchdog`，避免手動停止後被自動拉起。若要測試自動重啟，使用 `.\stop.ps1 -KeepWatchdog`。
 
 ### 自動重啟 watchdog
@@ -262,7 +311,7 @@ watchdog 每 5 分鐘檢查：
 - `http://127.0.0.1:9223/remote-health` 必須回 `200` 且 `upstreamHealth.healthy === true`
 - `http://127.0.0.1:9223/remote-sessions` 必須回 `200`
 
-任一檢查失敗時，會用 `start.ps1 -NoPrepare` 在背景重啟服務。紀錄寫入 `opencode-remote-watchdog.log`。
+任一檢查失敗時，watchdog 會持有 shared lifecycle mutex，使用 configured ports 做 bounded restart 並等到 health/probe 結果。紀錄寫入 `%LOCALAPPDATA%\opencode-remote\logs\opencode-remote-watchdog.log`。
 排程透過 `run-watchdog-hidden.vbs` 啟動隱藏 PowerShell，不應跳出 console 視窗。
 
 > **歷史地雷（2026-05-21 已修）**：舊版 `start.ps1` 用 `netstat | Select-String ":<port>.*LISTENING"`

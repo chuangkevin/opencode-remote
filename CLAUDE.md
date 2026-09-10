@@ -158,7 +158,7 @@ GET  /event                      → SSE stream
 
 ### Windows 特有問題
 
-**⚠️ 必須使用 opencode-cli.exe（重要！）**
+**必須解析到 CLI executable（重要）**
 
 Windows 上 OpenCode 有兩個執行檔：
 - `OpenCode.exe` (25MB) - GUI 版本，會立即退出（exit code 0）
@@ -181,14 +181,14 @@ spawn("opencode", ["serve", ...])  // 在 Windows 上會啟動 OpenCode.exe (GUI
 const opencodeCmd = resolveOpenCodeCommand();
 
 spawn(opencodeCmd, ["serve", ...], {
-  shell: process.platform === "win32",  // Windows 需要 shell
+  shell: false,  // 保持 CLI listener 為 proxy direct child
   ...
 });
 ```
 
 **驗證方式：**
 ```powershell
-# 預設會尋找目前 Windows 使用者的 CLI
+# Legacy fallback
 Test-Path "$env:LOCALAPPDATA\opencode\opencode-cli.exe"
 
 # 非標準安裝路徑時，在 .env 設定，不要改 source code
@@ -202,6 +202,19 @@ netstat -ano | findstr :4096
 **Directory 亂碼：** 某些舊 session 的 `directory` 欄位含有非 UTF-8 bytes（Windows 路徑編碼問題）。URL 必須用 session 自己的 `directory` 編碼（才能對應 SPA 內部 workspace context），所以亂碼 session 產生的 URL 無法使用。解法是優先挑選 `directory === OPENCODE_DIRECTORY` 的 session，這樣被編碼的就是乾淨的設定路徑。
 
 **EADDRINUSE：** 開發時 OpenCode 可能已在 port 4096 運行。proxy 的 spawn 會失敗，但 `oc.on("exit")` handler 會檢查 OpenCode 是否已經健康，若是則不 crash。
+
+### Windows idle-only updater（0.3.0）
+
+- `deploy/windows/opencode-remote-runtime.psm1` 是 Windows paths/env/atomic writes/ACL/mutex/health/probe/exact process ownership 的共同來源。
+- Manual lifecycle、watchdog 與 updater 共用 `Local\opencode-remote-service-lifecycle`；updater 先取得 `Local\opencode-remote-updater`。Watchdog 每 5 分鐘執行且持有 lifecycle lock 到 bounded recovery 驗證結束。
+- Stop/restart只接受configured `PORT`上`ExecutablePath`等於current `node.exe`且parsed argv精確包含repo env-file/server entry的Node，以及configured `127.0.0.1:OPENCODE_PORT`上executable等於`Resolve-OpenCodeCli`、parent PID與完整serve argv精確的direct child。沒有substring ownership、broad process sweep或fallback port，永不停止Desktop。
+- Windows default quiesce marker 是 `%LOCALAPPDATA%\opencode-remote\update.quiesce`；明確 `OPENCODE_UPDATE_QUIESCE_FILE` 仍優先，既有 prompt guard 不變。
+- Common Desktop bridge 在 Windows 寫 `%LOCALAPPDATA%\opencode-remote\desktop-connection.json`，macOS path 不變。Installer 保留其他 plugins/config，安裝 single-export wrapper、private common library/package metadata，並以 current user + SYSTEM ACL 保護 runtime/CLI state。Windows server 拒絕 symlink/reparse state，再驗 loopback、live PID、freshness；credential 不進 body/header/log。
+- Strict status success 增加 non-secret `X-OpenCode-Status-Sources`。Updater independently detect Desktop process；Desktop running 但 header 缺 `desktop` 時 defer。
+- Updater只用bounded npm lookup與pinned non-global stage；timeout用exact PID `taskkill /T /F`等待process tree退出。SemVer只升不降；equal但沒有valid managed pointer時完成initial migration。Pre-switch failure只清owned stage，不block/restart。
+- Pointer switch前atomically寫`update-transaction.json`，再建立含PID/token/timestamp的quiesce。每次run取得mutex後先recover journal；new runtime exact健康則finalize，prior pointer/runtime仍健康則只清pre-switch transaction不重啟，其餘狀態才restore prior pointer/absence、驗old runtime並block。損壞journal只在current runtime健康時解除quiesce並block；journal-less marker在exclusive updater mutex、owner與25分鐘staleness成立時reclaim。Logging不可阻止rollback。
+- `opencode-remote-updater` Scheduled Task是current interactive user、logon + genuinely indefinite hourly repetition、hidden、StartWhenAvailable、IgnoreNew、20分鐘上限、無credentials。VBS同步等待並propagate exit。`start-hidden.ps1`只在current service exact health/probe後安裝並immediate check；第一次安裝後需人工重啟Desktop一次。
+- Windows source目前只在 macOS 跑 repository contract/type/build/static checks；Windows host 先前 offline/version-blocked，live Task/ACL/process tree/update/rollback 仍 pending，不可宣稱 deployed。
 
 ### 認證問題與解決方案
 
@@ -444,7 +457,7 @@ HTML + 單一 vanilla ES module，無 build step。
 - [x] 每 30 秒刷新 active session path
 - [x] Background SSE keep-alive（指數退避重連）
 - [x] `waitForOpenCode()` 健康檢查（60 秒超時）
-- [x] Windows 動態解析 `opencode-cli.exe`（`OPENCODE_CLI_PATH` → `%LOCALAPPDATA%\opencode\opencode-cli.exe` → `opencode`）加 `shell: true`
+- [x] Windows fail-closed managed CLI resolution（explicit → managed pointer → legacy → PATH）與 direct-child spawn
 - [x] `OPENCODE_SERVER_PASSWORD=""` 禁用 Basic Auth
 - [x] EADDRINUSE 不 crash（檢測既有 OpenCode 是否健康）
 - [x] `.env` 透過 `--env-file` 載入
@@ -783,4 +796,4 @@ opencode exited with code 0
 const opencodeCmd = resolveOpenCodeCommand();
 ```
 
-**解析順序：** `OPENCODE_CLI_PATH` → `%LOCALAPPDATA%\opencode\opencode-cli.exe` → `opencode`。
+**解析順序：** `OPENCODE_CLI_PATH` → valid `%LOCALAPPDATA%\opencode-remote\cli\active.json` → `%LOCALAPPDATA%\opencode\opencode-cli.exe` → PATH `opencode`。Managed pointer 只接受 schema 1、exact version、absolute regular `.exe`，且 lexical/real path 都在 exact `%LOCALAPPDATA%\opencode-remote\cli\versions\<version>` 內；traversal 或 symlink/reparse escape fail closed。

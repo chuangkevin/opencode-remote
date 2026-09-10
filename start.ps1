@@ -1,121 +1,55 @@
 # One-click foreground start for opencode-remote.
-
 param(
-    [switch]$NoPrepare
+    [switch]$NoPrepare,
+    [switch]$InternalSkipLifecycleLock
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
+Import-Module (Join-Path $PSScriptRoot "deploy\windows\opencode-remote-runtime.psm1") -Force
+$paths = Get-OpenCodeRemotePaths $PSScriptRoot
+$configuration = Get-OpenCodeRemoteConfiguration $PSScriptRoot
+$lifecycleMutex = $null
+$runtimeProcess = $null
 
-function Stop-PortProcess {
-    param([int]$Port)
-
-    # Two-layer defense to stop us from killing the wrong process:
-    #   1. Numeric port match via Get-NetTCPConnection (the previous
-    #      substring `netstat | Select-String ":$Port.*LISTENING"` matched
-    #      40961, 14096, 92230 etc.).
-    #   2. Process-name allowlist — even if a process LEGITIMATELY owns
-    #      our target port (e.g. a Docker container publishing 4096 via
-    #      vpnkit), we must not kill it. That happened: the repo's own
-    #      docker-compose.yml publishes 4096, vpnkit binds 4096 on host,
-    #      and Stop-PortProcess murdered vpnkit → Docker stack collapsed.
-    $candidates = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-        ForEach-Object { $_.OwningProcess } |
-        Select-Object -Unique
-
-    foreach ($processId in $candidates) {
-        if (-not $processId) { continue }
-        $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
-        if (-not $proc) { continue }
-
-        $name = $proc.ProcessName
-        # Allowlist: our proxy (node) and the OpenCode CLI. Anything else
-        # owns the port for a legit reason — leave it alone.
-        $isOurs = $name -ieq "node" -or $name -ieq "opencode-cli" -or $name -ieq "opencode"
-        if (-not $isOurs) {
-            Write-Host "Port $Port is held by '$name' (PID $processId); skipping — not an opencode process." -ForegroundColor Yellow
-            continue
-        }
-
-        Write-Host "Stopping $name on port $Port (PID $processId)..." -ForegroundColor Yellow
-        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+try {
+    if (-not $InternalSkipLifecycleLock) {
+        $lifecycleMutex = Enter-OpenCodeRemoteMutex -Name Lifecycle -TimeoutMilliseconds 30000
+        if (-not $lifecycleMutex) { throw "Timed out waiting for the service lifecycle lock." }
     }
-}
-
-function Get-EnvValue {
-    param(
-        [string]$Name,
-        [string]$Fallback
-    )
-
-    $envPath = Join-Path $PSScriptRoot ".env"
-    if (Test-Path -LiteralPath $envPath) {
-        $line = Get-Content -LiteralPath $envPath | Where-Object { $_ -match "^$([regex]::Escape($Name))=" } | Select-Object -First 1
-        if ($line) {
-            return ($line -replace "^$([regex]::Escape($Name))=", "").Trim()
-        }
+    Stop-OwnedOpenCodeRemote $paths $configuration
+    if (-not $NoPrepare) {
+        Write-Host "Preparing opencode capability config..." -ForegroundColor Cyan
+        .\setup-capabilities.ps1 -SkipGithubToken -NonInteractive -Force -CopyFallback
+        Write-Host "Building opencode-remote..." -ForegroundColor Cyan
+        npm run build
+        if ($LASTEXITCODE -ne 0) { throw "npm run build failed; refusing to start stale dist output." }
     }
+    $node = (Get-Command node.exe -ErrorAction Stop).Source
+    $env:PORT = [string]$configuration.RemotePort
+    $env:OPENCODE_PORT = [string]$configuration.OpenCodePort
+    $env:OPENCODE_DIRECTORY = $configuration.Workspace
+    $env:OPENCODE_UPDATE_QUIESCE_FILE = $paths.QuiesceFile
+    $probeFile = Ensure-OpenCodeRemoteProbe $configuration
+    Write-Host "Starting opencode-remote on configured ports $($configuration.RemotePort)/$($configuration.OpenCodePort)..." -ForegroundColor Cyan
 
-    return $Fallback
-}
-
-function Test-PortListening {
-    param([int]$Port)
-
-    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    return $null -ne $listener
-}
-
-function Get-AvailablePort {
-    param([int]$StartPort)
-
-    $port = $StartPort
-    while (Test-PortListening $port) {
-        $port++
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $node
+    $quotedEnv = '"' + ($paths.EnvFile -replace '"', '\"') + '"'
+    $quotedEntry = '"' + ($paths.ServerEntry -replace '"', '\"') + '"'
+    $startInfo.Arguments = "--env-file=$quotedEnv $quotedEntry"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $runtimeProcess = New-Object Diagnostics.Process
+    $runtimeProcess.StartInfo = $startInfo
+    if (-not $runtimeProcess.Start()) { throw "Failed to start the Node runtime." }
+    if (-not (Wait-OpenCodeRemoteRuntime $configuration "" $probeFile)) {
+        if (-not $runtimeProcess.HasExited) { $runtimeProcess.Kill() }
+        throw "OpenCode Remote did not pass bounded health and workspace probe checks."
     }
-    return $port
+} finally {
+    Exit-OpenCodeRemoteMutex $lifecycleMutex
 }
 
-function Get-CurrentOpenCodePort {
-    param([int]$RemotePort)
-
-    try {
-        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$RemotePort/remote-health" -TimeoutSec 2
-        if ($health.upstream -match ':(\d+)$') {
-            return [int]$Matches[1]
-        }
-    } catch {
-        return $null
-    }
-
-    return $null
-}
-
-$remotePort = [int](Get-EnvValue "PORT" "9223")
-$opencodePort = [int](Get-EnvValue "OPENCODE_PORT" "4096")
-$currentOpenCodePort = Get-CurrentOpenCodePort $remotePort
-
-if ($null -ne $currentOpenCodePort -and $currentOpenCodePort -ne $opencodePort) {
-    Stop-PortProcess $currentOpenCodePort
-}
-
-Stop-PortProcess $remotePort
-Stop-PortProcess $opencodePort
-Start-Sleep -Seconds 1
-
-if (Test-PortListening $opencodePort) {
-    $fallbackPort = Get-AvailablePort ($opencodePort + 1)
-    Write-Host "OpenCode port $opencodePort is still unavailable; using $fallbackPort for this start." -ForegroundColor Yellow
-    $env:OPENCODE_PORT = [string]$fallbackPort
-}
-
-if (-not $NoPrepare) {
-    Write-Host "Preparing opencode capability config..." -ForegroundColor Cyan
-    .\setup-capabilities.ps1 -SkipGithubToken -NonInteractive -Force -CopyFallback
-
-    Write-Host "Building opencode-remote..." -ForegroundColor Cyan
-    npm run build
-}
-
-Write-Host "Starting opencode-remote..." -ForegroundColor Cyan
-npm start
+$runtimeProcess.WaitForExit()
+exit $runtimeProcess.ExitCode

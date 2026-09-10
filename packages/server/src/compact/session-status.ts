@@ -1,16 +1,17 @@
 import type http from "node:http";
 import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export const DESKTOP_CONNECTION_PATH = join(
-  homedir(),
-  ".local",
-  "share",
-  "opencode-remote",
-  "desktop-connection.json",
-);
+export function desktopConnectionPath(platform = process.platform, env = process.env): string {
+  if (platform === "win32" && env.LOCALAPPDATA) {
+    return join(env.LOCALAPPDATA, "opencode-remote", "desktop-connection.json");
+  }
+  return join(homedir(), ".local", "share", "opencode-remote", "desktop-connection.json");
+}
+
+export const DESKTOP_CONNECTION_PATH = desktopConnectionPath();
 
 const MAX_CREDENTIAL_BYTES = 16 * 1024;
 const MAX_DIRECTORY_BYTES = 4096;
@@ -28,6 +29,7 @@ export type DesktopConnection = {
 };
 
 type SessionStatusMap = Record<string, unknown>;
+export type SessionStatusResult = { statuses: SessionStatusMap; sources: string[] };
 type FetchFunction = typeof globalThis.fetch;
 
 type MergeOptions = {
@@ -101,11 +103,23 @@ export async function readDesktopConnection(
 ): Promise<DesktopConnection | undefined> {
   let file;
   try {
-    file = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const linkInfo = await lstat(filePath);
+    if (!linkInfo.isFile() || linkInfo.isSymbolicLink()) return undefined;
+    if (process.platform === "win32") {
+      const parentPath = dirname(filePath);
+      const parentInfo = await lstat(parentPath);
+      if (!parentInfo.isDirectory() || parentInfo.isSymbolicLink()) return undefined;
+      const [resolvedFile, resolvedParent] = await Promise.all([realpath(filePath), realpath(parentPath)]);
+      if (resolve(resolvedFile).toLowerCase() !== resolve(join(resolvedParent, filePath.split(/[\\/]/).at(-1) ?? "")).toLowerCase()) return undefined;
+    }
+    const flags = process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
+    file = await open(filePath, flags);
     const info = await file.stat();
     if (!info.isFile() || info.size > MAX_CREDENTIAL_BYTES) return undefined;
-    if ((info.mode & 0o777) !== 0o600) return undefined;
-    if (typeof process.getuid === "function" && info.uid !== process.getuid()) return undefined;
+    if (process.platform !== "win32") {
+      if ((info.mode & 0o777) !== 0o600) return undefined;
+      if (typeof process.getuid === "function" && info.uid !== process.getuid()) return undefined;
+    }
 
     const buffer = Buffer.alloc(MAX_CREDENTIAL_BYTES + 1);
     let length = 0;
@@ -169,34 +183,37 @@ async function fetchStatusMap(
   }
 }
 
-export async function mergeSessionStatuses(
+export async function mergeSessionStatusSources(
   directory: string,
   options: MergeOptions,
-): Promise<SessionStatusMap> {
+): Promise<SessionStatusResult> {
   const fetchFn = options.fetchFn ?? globalThis.fetch;
   const ownTimeoutMs = options.ownTimeoutMs ?? options.timeoutMs ?? OWN_STATUS_TIMEOUT_MS;
   const desktopTimeoutMs = options.desktopTimeoutMs ?? options.timeoutMs ?? DESKTOP_STATUS_TIMEOUT_MS;
-  const requests = [fetchStatusMap(options.ownOrigin, directory, fetchFn, ownTimeoutMs)];
+  const requests = [{ source: "remote", request: fetchStatusMap(options.ownOrigin, directory, fetchFn, ownTimeoutMs) }];
   if (options.desktopConnection) {
-    requests.push(fetchStatusMap(
-      options.desktopConnection.origin,
-      directory,
-      fetchFn,
-      desktopTimeoutMs,
-      options.desktopConnection,
-    ));
+    requests.push({
+      source: "desktop",
+      request: fetchStatusMap(
+        options.desktopConnection.origin,
+        directory,
+        fetchFn,
+        desktopTimeoutMs,
+        options.desktopConnection,
+      ),
+    });
   }
 
-  const results = await Promise.allSettled(requests);
+  const results = await Promise.allSettled(requests.map(({ request }) => request));
   if (options.strict && results.some((result) => result.status === "rejected")) {
     throw new Error("session status unavailable");
   }
-  const fulfilled = results
-    .filter((result): result is PromiseFulfilledResult<SessionStatusMap> => result.status === "fulfilled")
-    .map((result) => result.value);
+  const fulfilled = results.flatMap((result, index) => result.status === "fulfilled"
+    ? [{ source: requests[index].source, statuses: result.value }]
+    : []);
   if (fulfilled.length === 0) throw new Error("session status unavailable");
   const merged: SessionStatusMap = {};
-  for (const statuses of fulfilled) {
+  for (const { statuses } of fulfilled) {
     for (const [sessionID, status] of Object.entries(statuses)) {
       const current = merged[sessionID];
       const currentType = current && typeof current === "object" && "type" in current ? current.type : undefined;
@@ -205,7 +222,14 @@ export async function mergeSessionStatuses(
       merged[sessionID] = status;
     }
   }
-  return merged;
+  return { statuses: merged, sources: fulfilled.map(({ source }) => source) };
+}
+
+export async function mergeSessionStatuses(
+  directory: string,
+  options: MergeOptions,
+): Promise<SessionStatusMap> {
+  return (await mergeSessionStatusSources(directory, options)).statuses;
 }
 
 export function isMergedSessionStatusPath(path: string | undefined): boolean {
@@ -248,7 +272,7 @@ export async function handleMergedSessionStatus(
 
   try {
     const desktopConnection = await (options.loadDesktopConnection ?? readDesktopConnection)();
-    const statuses = await mergeSessionStatuses(directory, {
+    const result = await mergeSessionStatusSources(directory, {
       ownOrigin: options.ownOrigin,
       desktopConnection,
       strict,
@@ -261,8 +285,9 @@ export async function handleMergedSessionStatus(
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
       "X-OpenCode-Remote": "true",
+      ...(strict ? { "X-OpenCode-Status-Sources": result.sources.join(",") } : {}),
     });
-    res.end(JSON.stringify(statuses));
+    res.end(JSON.stringify(result.statuses));
   } catch {
     res.writeHead(502, {
       "Content-Type": "application/json; charset=utf-8",

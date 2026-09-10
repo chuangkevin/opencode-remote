@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   DESKTOP_STATUS_TIMEOUT_MS,
+  desktopConnectionPath,
   handleMergedSessionStatus,
   isPathWithinRoot,
   mergeSessionStatuses,
@@ -68,6 +69,14 @@ test("credential parser rejects malformed and non-loopback data", () => {
     updatedAt: credential.updatedAt - 15 * 60_000,
   });
   assert.deepEqual(parseDesktopConnection(JSON.stringify(credential)), credential);
+});
+
+test("Desktop runtime state path is platform-aware", () => {
+  assert.equal(
+    desktopConnectionPath("win32", { LOCALAPPDATA: "C:\\Users\\Kevin\\AppData\\Local" }),
+    join("C:\\Users\\Kevin\\AppData\\Local", "opencode-remote", "desktop-connection.json"),
+  );
+  assert.match(desktopConnectionPath("darwin", {}), /\.local[\\/]share[\\/]opencode-remote[\\/]desktop-connection\.json$/);
 });
 
 test("directory authorization accepts only the configured root and descendants", () => {
@@ -308,6 +317,27 @@ test("strict merged endpoint returns 502 instead of using a successful fallback"
 
   assert.equal(res.status, 502);
   assert.deepEqual(JSON.parse(res.body), { error: "session status unavailable" });
+});
+
+test("strict merged endpoint reports only successful non-secret source names", async () => {
+  const res = responseRecorder();
+  const directory = process.cwd();
+  await handleMergedSessionStatus(
+    { method: "GET", url: `/c/session-status?strict=1&directory=${encodeURIComponent(directory)}` },
+    res,
+    {
+      ownOrigin: "http://127.0.0.1:4196",
+      allowedRoot: directory,
+      loadDesktopConnection: async () => credential,
+      fetchFn: statusFetch({
+        "http://127.0.0.1:4196": { ses_own: { type: "idle" } },
+        [credential.origin]: { ses_desktop: { type: "retry" } },
+      }, directory),
+    },
+  );
+  assert.equal(res.status, 200);
+  assert.equal(res.headers["X-OpenCode-Status-Sources"], "remote,desktop");
+  assert.doesNotMatch(JSON.stringify(res.headers), /desktop-user|desktop-secret/);
 });
 
 test("merged endpoint validates an absolute bounded directory", async () => {

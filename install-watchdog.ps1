@@ -32,8 +32,12 @@ if (-not (Test-Path -LiteralPath $runnerPath)) {
 
 $taskCommand = "`"$wscriptPath`" `"$runnerPath`""
 & schtasks.exe /Create /TN $taskName /SC MINUTE /MO 5 /TR $taskCommand /RL HIGHEST /F | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Failed to create watchdog scheduled task." }
 & schtasks.exe /Run /TN $taskName | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Failed to start watchdog scheduled task." }
 
 Write-Host "Installed watchdog scheduled task: $taskName" -ForegroundColor Green
 Write-Host "It is configured to run with highest privileges." -ForegroundColor Cyan
-Write-Host "It checks http://127.0.0.1:9223/remote-health every 5 minutes." -ForegroundColor Cyan
+Import-Module (Join-Path $PSScriptRoot "deploy\windows\opencode-remote-runtime.psm1") -Force
+$configuration = Get-OpenCodeRemoteConfiguration $PSScriptRoot
+Write-Host "It checks configured proxy port $($configuration.RemotePort) every 5 minutes." -ForegroundColor Cyan

@@ -19,6 +19,11 @@ test("global Desktop bridge plugin exposes exactly one function export", async (
   assert.equal(typeof plugin.OpenCodeRemoteDesktopBridge, "function");
 });
 
+test("Windows Desktop bridge wrapper exposes exactly one function export", async () => {
+  const plugin = await import("../../../deploy/windows/opencode-remote-desktop-bridge.js");
+  assert.deepEqual(Object.keys(plugin), ["OpenCodeRemoteDesktopBridge"]);
+});
+
 test("desktop bridge accepts only HTTP loopback server URLs", () => {
   for (const url of [
     "http://localhost:1234",

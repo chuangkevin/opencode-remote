@@ -4,9 +4,9 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 export const DESKTOP_CONNECTION_PATH = join(
-  homedir(),
-  ".local",
-  "share",
+  process.platform === "win32" && process.env.LOCALAPPDATA
+    ? process.env.LOCALAPPDATA
+    : join(homedir(), ".local", "share"),
   "opencode-remote",
   "desktop-connection.json",
 );

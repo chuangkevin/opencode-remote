@@ -1,70 +1,28 @@
-# Health check and self-heal entrypoint for Windows Task Scheduler.
-
+# Health check and bounded self-heal entrypoint for Windows Task Scheduler.
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
+Import-Module (Join-Path $PSScriptRoot "deploy\windows\opencode-remote-runtime.psm1") -Force
+$paths = Get-OpenCodeRemotePaths $PSScriptRoot
+$configuration = Get-OpenCodeRemoteConfiguration $PSScriptRoot
+[IO.Directory]::CreateDirectory($paths.LogRoot) | Out-Null
+$logPath = Join-Path $paths.LogRoot "opencode-remote-watchdog.log"
 
-$logPath = Join-Path $PSScriptRoot "opencode-remote-watchdog.log"
-$mutex = New-Object System.Threading.Mutex($false, "opencode-remote-watchdog")
-
-function Write-WatchdogLog {
-    param([string]$Message)
-
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Add-Content -LiteralPath $logPath -Value "[$timestamp] $Message"
+function Write-WatchdogLog([string]$Message) {
+    Add-Content -LiteralPath $logPath -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message"
 }
 
-function Test-RemoteHealth {
-    try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:9223/remote-health" -TimeoutSec 5
-        $json = $response.Content | ConvertFrom-Json
-        return ($response.StatusCode -eq 200 -and $json.upstreamHealth.healthy -eq $true)
-    } catch {
-        return $false
-    }
-}
-
-function Test-ProxyHealth {
-    try {
-        $request = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:9223/remote-sessions")
-        $request.AllowAutoRedirect = $false
-        $request.Timeout = 5000
-        $request.Method = "GET"
-        $response = $request.GetResponse()
-        try {
-            $statusCode = [int]$response.StatusCode
-            return ($statusCode -eq 200)
-        } finally {
-            $response.Close()
-        }
-    } catch {
-        return $false
-    }
-}
-
-$hasLock = $false
-
+$lifecycleMutex = Enter-OpenCodeRemoteMutex -Name Lifecycle -TimeoutMilliseconds 0
+if (-not $lifecycleMutex) { exit 0 }
 try {
-    $hasLock = $mutex.WaitOne(0)
-    if (-not $hasLock) {
-        exit 0
-    }
-
-    if ((Test-RemoteHealth) -and (Test-ProxyHealth)) {
-        exit 0
-    }
-
-    Write-WatchdogLog "Service unhealthy; restarting opencode-remote."
-    $process = Start-Process -FilePath "powershell.exe" `
-        -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "start.ps1"), "-NoPrepare" `
-        -WindowStyle Hidden `
-        -PassThru
-    Write-WatchdogLog "Started restart process PID $($process.Id)."
+    $probeFile = Ensure-OpenCodeRemoteProbe $configuration
+    if (Test-OpenCodeRemoteRuntime $configuration "" $probeFile) { exit 0 }
+    Write-WatchdogLog "Service unhealthy; starting bounded recovery on configured ports."
+    & (Join-Path $PSScriptRoot "restart-service.ps1") -InternalSkipLifecycleLock
+    if (-not (Test-OpenCodeRemoteRuntime $configuration "" $probeFile)) { throw "Recovery returned without verified health." }
+    Write-WatchdogLog "Service recovery verified."
 } catch {
     Write-WatchdogLog "Watchdog failed: $($_.Exception.Message)"
     exit 1
 } finally {
-    if ($hasLock) {
-        $mutex.ReleaseMutex()
-    }
-    $mutex.Dispose()
+    Exit-OpenCodeRemoteMutex $lifecycleMutex
 }

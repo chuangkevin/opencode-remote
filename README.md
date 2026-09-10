@@ -11,7 +11,7 @@ cd D:\GitClone\_HomeProject\opencode-remote
 
 服務在背景執行，不阻塞終端。AI agent（Claude Code task）可直接用 PowerShell tool 執行此指令。
 
-`start-hidden.ps1` 是一鍵啟動：會自動準備本機 `.env`、同步 `opencode.json` / `AGENTS.md` / `.opencode\agents` 到 runtime root、移除 user-level Pencil MCP、build、安裝每 5 分鐘健康檢查 watchdog，然後啟動服務。
+`start-hidden.ps1` 是一鍵啟動：會自動準備本機 `.env`、同步 capability files、build、在 configured ports 啟動並通過 exact health/workspace probe，之後才安裝每 5 分鐘 watchdog、Desktop status bridge 與 hourly idle-only updater。第一次安裝 bridge 後需由使用者重啟一次 OpenCode Desktop；腳本不會自動重啟 Desktop。
 GitHub MCP 需要 `GITHUB_TOKEN`；沒有 token 時會自動停用，避免啟動紅燈。
 
 > **手動備用（需開終端機）：** `npm start`（前景模式，日誌直接顯示，Ctrl+C 停止）
@@ -27,6 +27,32 @@ curl http://localhost:4096/global/health
 curl http://localhost:9223/
 # 預期: 302 redirect 到 /remote-sessions
 ```
+
+Windows CLI 解析順序為：明確 `OPENCODE_CLI_PATH`、有效 managed pointer `%LOCALAPPDATA%\opencode-remote\cli\active.json`、legacy `%LOCALAPPDATA%\opencode\opencode-cli.exe`、PATH `opencode`。`active.json` 驗證失敗會 fail closed 並往後 fallback，不會執行越出 `%LOCALAPPDATA%\opencode-remote\cli\versions\<version>` 的 path。
+
+## Windows CLI 自動更新
+
+Scheduled Task `opencode-remote-updater` 在目前互動式使用者登入時及之後無限期每小時執行，hidden、`IgnoreNew`、最長 20 分鐘，不保存帳密。VBS runner 同步等待 updater 並回傳 exit code，讓重疊與執行上限套用到真正的 updater。它只在 Remote health/version 與固定 workspace probe 都吻合、strict status 所有已連線來源成功且沒有 `busy` 時更新。若獨立偵測到 Desktop 正在執行，status header 必須包含 `desktop`，否則 defer。`idle` 與 `retry` 不阻擋；request failure、unknown/malformed status 或 persistent block marker 都會 defer。
+
+更新只使用 local pinned `npm install opencode-ai@<exact-version> --prefix <unique-stage> --no-save --package-lock=false`，不做 global install，也不刪舊版本。SemVer（含 prerelease）只有 npm latest 較新時才更新，絕不 downgrade；版本相同但尚無有效 managed pointer 時會安裝該 exact current version並建立初始 pointer。切換前的 staging/install/version/ACL failure只清理自己的stage並回傳nonzero。npm timeout使用exact PID的`taskkill /T /F`等待整棵process tree結束後才cleanup。
+
+切換前，updater會先atomically寫非secret `%LOCALAPPDATA%\opencode-remote\update-transaction.json`，再建立含PID、token、timestamp的quiesce marker。每次啟動取得兩把mutex後會先recover journal：new pointer/runtime已通過exact version與probe就finalize；prior pointer/runtime仍健康代表中斷發生在切換前，只清transaction且不重啟；其餘狀態才還原prior pointer/absence、重啟並驗證old version、寫`update.blocked`。損壞journal只在current runtime驗證健康後解除quiesce並block待人工檢查；沒有journal的marker則在取得exclusive updater mutex、確認owner且超過bounded runtime後回收，避免crash造成永久503。Desktop永不由updater停止或重啟。
+
+```powershell
+# 安裝或修復 bridge + updater（目前服務必須先通過 health/probe）
+.\deploy\windows\install-opencode-updater.ps1
+
+# 手動執行同一個 idle-only check
+.\deploy\windows\update-opencode-remote.ps1
+
+# 狀態、log、blocked recovery
+Get-ScheduledTask -TaskName opencode-remote-updater
+Get-Content "$env:LOCALAPPDATA\opencode-remote\logs\opencode-remote-updater.log" -Tail 100
+Test-Path "$env:LOCALAPPDATA\opencode-remote\update.blocked"
+Get-Content "$env:LOCALAPPDATA\opencode-remote\update-transaction.json" -ErrorAction SilentlyContinue
+```
+
+若 `update.blocked` 存在，先以 legacy/previous CLI 手動恢復服務並確認 exact `/remote-health` 與 `.opencode-remote\remote-fda-probe.txt` 可由 `/file/content` 讀取，再重跑 installer；installer 只有在 current health/version/probe 成功後才清除 marker。Windows scripts 已在 macOS 以 Node contract tests 與可用 parser/static checks 驗證；Windows host 先前 offline/version-blocked，因此 Scheduled Task、ACL、process ownership、實際 update/restart/rollback 仍待 Windows runtime 驗證。
 
 手機如果 OpenCode 原生側欄看不到工作階段列表，可開 `https://opencode.sisihome.org/remote-sessions` 使用手機友善列表。
 要確認目前是否經過 opencode-remote proxy，可開 `https://opencode.sisihome.org/remote-health`。
@@ -89,6 +115,7 @@ The runtime wrapper uses a clean environment and contains no application credent
 
 `stop.ps1` 會停用 watchdog，避免手動停止後被自動拉起。若只想測試自復原，可用 `.\stop.ps1 -KeepWatchdog` 後等下一次排程重啟。
 watchdog 透過 `run-watchdog-hidden.vbs` 隱藏執行，不應每分鐘跳出 console 視窗。
+停止只會作用於configured proxy port上`ExecutablePath`等於current `node.exe`且parsed argv精確包含本repo env-file/server entry的Node listener，以及parent PID、resolved CLI executable與完整serve argv都精確吻合的configured loopback child；不再依名稱或substring掃描，且永不停止Desktop。
 
 ## 設定（`.env`）
 
