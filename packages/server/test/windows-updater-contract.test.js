@@ -201,3 +201,16 @@ test("every function in the Windows runtime module is actually exported", async 
   const unexported = functions.filter((name) => !matches(name));
   assert.deepEqual(unexported, [], `these functions are defined but never exported: ${unexported.join(", ")}`);
 });
+
+test("Windows start exports the workspace with forward slashes so OpenCode file routes work", async () => {
+  const start = await file("start.ps1");
+
+  // 2026-09-10 kevinhome 實機：健康探針 /file/content 固定回 400，服務被 start.ps1
+  // 在 60 秒後殺掉。實測同一台上，OPENCODE_DIRECTORY 用 D:/GitClone/_HomeProject
+  // 三種查詢組合全部成功；改成 D:\GitClone\_HomeProject 則全部 400。
+  // node 的 --env-file 不覆蓋既有環境變數，所以這行會蓋掉 .env 裡正確的值。
+  const line = start.split("\n").find((l) => l.includes("$env:OPENCODE_DIRECTORY ="));
+  assert.ok(line, "start.ps1 must export OPENCODE_DIRECTORY");
+  assert.ok(line.includes("-replace"), `workspace must be normalised before export: ${line.trim()}`);
+  assert.ok(line.includes("'/'"), `workspace must be exported with forward slashes: ${line.trim()}`);
+});

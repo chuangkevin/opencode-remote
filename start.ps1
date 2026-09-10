@@ -28,7 +28,11 @@ try {
     $node = (Get-Command node.exe -ErrorAction Stop).Source
     $env:PORT = [string]$configuration.RemotePort
     $env:OPENCODE_PORT = [string]$configuration.OpenCodePort
-    $env:OPENCODE_DIRECTORY = $configuration.Workspace
+    # OpenCode 1.18.30 的 /file/content 在工作目錄是反斜線形式時一律回 400，
+    # 正斜線形式則正常。Get-OpenCodeRemoteConfiguration 用 [IO.Path]::GetFullPath()
+    # 會產生反斜線，而 node 的 --env-file 不會覆蓋已存在的環境變數，
+    # 所以這個值會蓋掉 .env 裡正確的正斜線設定，健康探針就永遠過不了。
+    $env:OPENCODE_DIRECTORY = $configuration.Workspace -replace '\\', '/'
     $env:OPENCODE_UPDATE_QUIESCE_FILE = $paths.QuiesceFile
     $probeFile = Ensure-OpenCodeRemoteProbe $configuration
     Write-Host "Starting opencode-remote on configured ports $($configuration.RemotePort)/$($configuration.OpenCodePort)..." -ForegroundColor Cyan
