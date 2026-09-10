@@ -258,3 +258,51 @@ test("compact removal and variant controls have accessible touch targets", async
   assert.match(mockup, /<button class="x" type="button" aria-label="移除附件"><span aria-hidden="true">×<\/span><\/button>/);
   assert.match(mockup, /--send-disabled-bg/);
 });
+
+test("running indicator uses themed tokens and passes contrast in light mode", async () => {
+  const index = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+
+  // 綠點原本寫死 #22c55e，切到淺色不會變。實測在白卡片上只有 2.28:1，
+  // 低於非文字圖形元件的 3:1 門檻（WCAG 1.4.11）。改走 token 後淺色用 #15803d（5.02:1）。
+  assert.match(
+    index,
+    /\.running-indicator\s*\{[^}]*background:\s*var\(--running\)[^}]*box-shadow:\s*0 0 0 2px var\(--running-glow\)/s,
+  );
+  assert.match(index, /@keyframes running-pulse[\s\S]{0,240}var\(--running-glow-wide\)/);
+  assert.doesNotMatch(index, /\.running-indicator\s*\{[^}]*#22c55e/s);
+  assert.doesNotMatch(index, /@keyframes running-pulse[\s\S]{0,240}rgba\(34,\s*197,\s*94/);
+
+  const darkTokens = index.match(/:root \{ color-scheme: dark;[^}]*--running:[^;]*;[^}]*\}/);
+  const lightTokens = index.match(/:root\[data-theme="light"\] \{[^}]*--running:[^;]*;[^}]*\}/);
+  assert.ok(darkTokens, "dark block must define --running");
+  assert.ok(lightTokens, "light block must define --running");
+
+  const relativeLuminance = (hex) => {
+    const channel = (value) => {
+      const c = parseInt(value, 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const r = channel(hex.slice(1, 3));
+    const g = channel(hex.slice(3, 5));
+    const b = channel(hex.slice(5, 7));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const [hi, lo] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+
+  const lightRunning = lightTokens[0].match(/--running:\s*(#[0-9a-f]{6})/i)[1];
+  const lightSurface = lightTokens[0].match(/--surface:\s*(#[0-9a-f]{6})/i)[1];
+  assert.ok(
+    contrast(lightRunning, lightSurface) >= 3,
+    `light running indicator ${lightRunning} on ${lightSurface} is ${contrast(lightRunning, lightSurface).toFixed(2)}:1, below 3:1`,
+  );
+
+  const darkRunning = darkTokens[0].match(/--running:\s*(#[0-9a-f]{6})/i)[1];
+  const darkSurface = darkTokens[0].match(/--surface:\s*(#[0-9a-f]{6})/i)[1];
+  assert.ok(
+    contrast(darkRunning, darkSurface) >= 3,
+    `dark running indicator ${darkRunning} on ${darkSurface} is ${contrast(darkRunning, darkSurface).toFixed(2)}:1, below 3:1`,
+  );
+});
