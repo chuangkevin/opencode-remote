@@ -179,3 +179,25 @@ test("atomic file writes pass a real null backup name so PowerShell 5.1 does not
   // 目的檔不存在時 Replace 會丟 FileNotFoundException，必須有 Move-Item 的退路。
   assert.match(runtime, /catch \[IO\.FileNotFoundException\][\s\S]{0,160}Move-Item/);
 });
+
+test("every function in the Windows runtime module is actually exported", async () => {
+  const runtime = await file("deploy/windows/opencode-remote-runtime.psm1");
+
+  // 2026-09-10 kevinhome 實機：Stop-OwnedOpenCodeRemote 沒被匯出，
+  // 因為萬用字元 *-OpenCodeRemote* 比對不到（連字號後面是 Owned）。
+  // start.ps1 / stop.ps1 / restart-service.ps1 / update-opencode-remote.ps1
+  // 四支都呼叫它，全部噴 CommandNotFoundException，服務因此完全起不來。
+  const functions = [...runtime.matchAll(/^function\s+([A-Za-z0-9-]+)\s*\{/gm)].map((m) => m[1]);
+  assert.ok(functions.length > 10, "expected to find the module functions");
+
+  const exportLine = runtime.match(/^Export-ModuleMember\s+-Function\s+(.+)$/m);
+  assert.ok(exportLine, "module must export its functions");
+  const patterns = exportLine[1].split(",").map((p) => p.trim());
+  const matches = (name) =>
+    patterns.some((pattern) =>
+      new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$", "i").test(name),
+    );
+
+  const unexported = functions.filter((name) => !matches(name));
+  assert.deepEqual(unexported, [], `these functions are defined but never exported: ${unexported.join(", ")}`);
+});

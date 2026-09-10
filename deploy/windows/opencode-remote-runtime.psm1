@@ -337,4 +337,7 @@ function Wait-OpenCodeRemoteRuntime {
     return $false
 }
 
-Export-ModuleMember -Function *-OpenCodeRemote*, Resolve-ManagedOpenCodeCli, Resolve-OpenCodeCli, Get-ExactListenerPid, Get-WindowsProcessRecord, Get-CommandExecutablePath, Get-ProcessArguments, Test-ExactPath, Test-OwnedProxyProcess, Get-OwnedServiceProcesses, Test-PathWithin, Write-AtomicUtf8File, Write-AtomicJsonFile, New-ExclusiveUtf8File
+# Stop-OwnedOpenCodeRemote 必須明列：萬用字元 *-OpenCodeRemote* 比對不到它
+# （連字號後面接的是 Owned 不是 OpenCodeRemote），漏掉會讓 start/stop/restart/updater
+# 四支腳本全部噴 CommandNotFoundException。2026-09-10 kevinhome 實機踩到。
+Export-ModuleMember -Function *-OpenCodeRemote*, Stop-OwnedOpenCodeRemote, Resolve-ManagedOpenCodeCli, Resolve-OpenCodeCli, Get-ExactListenerPid, Get-WindowsProcessRecord, Get-CommandExecutablePath, Get-ProcessArguments, Test-ExactPath, Test-OwnedProxyProcess, Get-OwnedServiceProcesses, Test-PathWithin, Write-AtomicUtf8File, Write-AtomicJsonFile, New-ExclusiveUtf8File
