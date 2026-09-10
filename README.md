@@ -45,6 +45,7 @@ curl http://localhost:9223/
 | Workspace | `/Users/kevin/Documents/Projects` |
 | Runtime copy | `/Users/kevin/.local/share/opencode-remote` |
 | LaunchAgent | `/Users/kevin/Library/LaunchAgents/io.interagent.opencode-sara.plist` |
+| Updater LaunchAgent | `/Users/kevin/Library/LaunchAgents/io.interagent.opencode-sara-updater.plist` |
 | Logs | `/Users/kevin/Library/Logs/opencode-remote/` |
 
 The LaunchAgent runs `/Users/kevin/.local/share/opencode-remote/run-opencode-sara.sh` directly. That wrapper waits for the exact Tailscale IPv4, constructs a clean environment, and execs `/opt/homebrew/bin/node`; Node then starts `/opt/homebrew/bin/opencode` as its direct child.
@@ -53,13 +54,24 @@ This direct-FDA design is deployed. Repeated production installer runs verified 
 
 Prerequisites:
 
-- Full Disk Access is granted to the actual Homebrew binaries `/opt/homebrew/Cellar/node/26.8.1/bin/node` and `/opt/homebrew/Cellar/opencode/1.18.20/libexec/lib/node_modules/opencode-ai/bin/opencode.exe`.
+- Full Disk Access is granted to the actual binaries currently resolved by the stable Homebrew launchers. Discover the OpenCode binary with `node -p 'fs.realpathSync("/opt/homebrew/bin/opencode")'` instead of relying on a versioned internal path.
 - The stable launcher paths `/opt/homebrew/bin/node` and `/opt/homebrew/bin/opencode`, Tailscale, and the workspace exist at the documented paths.
 - After a Homebrew upgrade, resolve both stable paths again. A changed Cellar binary may require a new Full Disk Access grant and disposable direct LaunchAgent verification before redeployment.
 
-The direct FDA path was proven with disposable LaunchAgents before this source change: `/opt/homebrew/bin/node` read `/Users/kevin/Documents/Projects` and exited 0 with `NODE_FDA_OK`; `/opt/homebrew/bin/opencode serve` used that WorkingDirectory and returned `{"healthy":true,"version":"1.18.20"}` on temporary loopback port `4296`. The probe jobs, listener, and files were removed afterward.
+Deployment writes the fixed non-secret probe `/Users/kevin/Documents/Projects/.opencode-remote/remote-fda-probe.txt` with mode `0644` while preserving the shared `.opencode-remote` directory. The final gate requires the newly launched OpenCode API, through the Remote proxy, to return that file as the exact `{type:"text",content:"..."}` response.
 
-`deploy/macos/deploy-local.sh` runs `npm ci`, typecheck, and build; installs only runtime files plus the direct wrapper; uses exact `launchctl bootout/bootstrap/kickstart`; and refuses bootstrap if either exact listener remains after bootout. Its bounded success gate requires exact health JSON, a running launchctl PID equal to the exact `100.113.121.103:9223` Node listener PID, the exact fixed Node command, and the fixed OpenCode command as Node's direct child.
+`deploy/macos/deploy-local.sh` runs `npm ci`, typecheck, and build; installs only runtime files plus the direct wrapper; uses exact `launchctl bootout/bootstrap/kickstart`; and refuses bootstrap if either exact listener remains after bootout. Its bounded success gate requires exact health JSON, the exact FDA probe response, a running launchctl PID equal to the exact `100.113.121.103:9223` Node listener PID, the exact fixed Node command, and the fixed OpenCode command as Node's direct child. Only after that gate passes does a manual deployment remove the updater block marker.
+
+Only after that main gate passes, deployment installs the exact `io.interagent.opencode-sara-updater` LaunchAgent. It runs once at load and every hour. The updater is idle-only and uses strict session status: Remote must respond, and when a live Desktop credential exists Desktop must also respond; every available source must contain no `busy` session. A closed Desktop has no work to protect and does not prevent updating. The normal UI endpoint keeps its one-source fallback behavior. Status is checked before update detection and again after the updater atomically owns its quiesce marker and waits one second. During an actual update, new Remote prompt-creating POSTs receive `503` JSON with `Retry-After: 1`; abort, session creation, pins, and status remain available. The updater upgrades only the Homebrew `opencode` formula, preserves the old keg, restarts only the Remote LaunchAgent, never restarts Desktop, and accepts recovery only when the exact new health version and FDA probe both match. Any failure after upgrade starts writes a block marker, relinks only `/opt/homebrew/bin/opencode` to its recorded old target, restarts Remote, and verifies the old version plus FDA probe. Hourly runs defer while blocked; a successful manual `deploy-local.sh` clears the marker. A recovered update closes only its own Skynet window; rollback failure leaves that window to expire by TTL.
+
+```bash
+# Manual idle-only check/update
+/Users/kevin/.local/share/opencode-remote/update-opencode-sara.sh
+
+# Logs
+tail -n 100 /Users/kevin/Library/Logs/opencode-remote/opencode-sara-updater.log
+tail -n 100 /Users/kevin/Library/Logs/opencode-remote/opencode-sara-updater.error.log
+```
 
 ```bash
 ./deploy/macos/deploy-local.sh

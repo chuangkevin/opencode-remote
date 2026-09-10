@@ -129,6 +129,36 @@ test("status merge returns own upstream when Desktop is unavailable", async () =
   }), { ses_own: { type: "busy" } });
 });
 
+test("strict status merge requires both own and live Desktop sources", async () => {
+  await assert.rejects(mergeSessionStatuses("/Users/kevin/Documents/Projects", {
+    ownOrigin: "http://127.0.0.1:4196",
+    desktopConnection: credential,
+    strict: true,
+    fetchFn: statusFetch({
+      "http://127.0.0.1:4196": { ses_own: { type: "idle" } },
+      [credential.origin]: new Error("desktop offline"),
+    }),
+  }), /session status unavailable/);
+
+  await assert.rejects(mergeSessionStatuses("/Users/kevin/Documents/Projects", {
+    ownOrigin: "http://127.0.0.1:4196",
+    desktopConnection: credential,
+    strict: true,
+    fetchFn: statusFetch({
+      "http://127.0.0.1:4196": new Error("own offline"),
+      [credential.origin]: { ses_desktop: { type: "idle" } },
+    }),
+  }), /session status unavailable/);
+
+  assert.deepEqual(await mergeSessionStatuses("/Users/kevin/Documents/Projects", {
+    ownOrigin: "http://127.0.0.1:4196",
+    strict: true,
+    fetchFn: statusFetch({
+      "http://127.0.0.1:4196": { ses_own: { type: "idle" } },
+    }),
+  }), { ses_own: { type: "idle" } });
+});
+
 test("nine directory batches finish inside the browser budget when Desktop hangs", async () => {
   const directoryCount = 9;
   const browserConcurrency = 4;
@@ -257,6 +287,27 @@ test("merged endpoint returns 502 when both sources fail without leaking credent
   assert.deepEqual(JSON.parse(res.body), { error: "session status unavailable" });
   const observable = `${res.body}\n${logs.join("\n")}`;
   assert.doesNotMatch(observable, /desktop-user|desktop-secret/);
+});
+
+test("strict merged endpoint returns 502 instead of using a successful fallback", async () => {
+  const res = responseRecorder();
+  const directory = process.cwd();
+  await handleMergedSessionStatus(
+    { method: "GET", url: `/c/session-status?strict=1&directory=${encodeURIComponent(directory)}` },
+    res,
+    {
+      ownOrigin: "http://127.0.0.1:4196",
+      allowedRoot: directory,
+      loadDesktopConnection: async () => credential,
+      fetchFn: statusFetch({
+        "http://127.0.0.1:4196": { ses_own: { type: "idle" } },
+        [credential.origin]: new Error("desktop offline"),
+      }, directory),
+    },
+  );
+
+  assert.equal(res.status, 502);
+  assert.deepEqual(JSON.parse(res.body), { error: "session status unavailable" });
 });
 
 test("merged endpoint validates an absolute bounded directory", async () => {

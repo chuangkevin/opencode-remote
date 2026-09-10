@@ -32,3 +32,11 @@ test("macOS deploy installs one plugin wrapper and keeps its private library out
     fileURLToPath(new URL("../../../deploy/opencode-remote/opencode-remote-desktop-bridge-lib.js", import.meta.url)),
   );
 });
+
+test("macOS wrapper alone configures the fixed updater quiesce marker", async () => {
+  const wrapper = await readFile(new URL("../../../deploy/macos/run-opencode-sara.sh", import.meta.url), "utf8");
+  const plist = await readFile(new URL("../../../deploy/macos/io.interagent.opencode-sara.plist", import.meta.url), "utf8");
+
+  assert.match(wrapper, /OPENCODE_UPDATE_QUIESCE_FILE="\/Users\/kevin\/\.local\/share\/opencode-remote\/update-opencode-sara\.quiesce"/);
+  assert.doesNotMatch(plist, /OPENCODE_UPDATE_QUIESCE_FILE|EnvironmentVariables/);
+});

@@ -75,7 +75,9 @@ sidecar，再合併成功來源。Remote-owned source timeout 是 1500ms，Deskt
 先做 lexical validation，再以 `realpath` 驗證 requested directory 確實存在於 real root 內；
 不存在或透過 symlink 逃出 root 會回 `400`，不會發出 status request。
 root 外的復原 pinned session 不會發出 status request，也不顯示執行中 indicator。
-任一來源失敗不會遮蔽另一來源；兩邊都失敗才回 `502`。重複 session ID 的
+一般 UI 呼叫維持 fallback：任一來源失敗不會遮蔽另一來源；兩邊都失敗才回 `502`。updater 使用
+`strict=1`：Remote 必須成功；若存在有效的 live Desktop runtime credential，Desktop request 也必須成功。
+關閉的 Desktop 沒有工作需要保護，不會阻擋更新；已連線來源任一失敗即回 `502`。重複 session ID 的
 `busy` 優先於 `idle`、`retry` 或未知狀態，不受來源順序影響。
 
 - Runtime: `/Users/kevin/.local/share/opencode-remote`
@@ -85,6 +87,9 @@ root 外的復原 pinned session 不會發出 status request，也不顯示執�
 - OpenCode: `/opt/homebrew/bin/opencode`
 - Tailscale CLI: `/Applications/Tailscale.app/Contents/MacOS/Tailscale`
 - Runtime wrapper: `/Users/kevin/.local/share/opencode-remote/run-opencode-sara.sh`
+- Updater: `/Users/kevin/.local/share/opencode-remote/update-opencode-sara.sh`
+- Updater plist: `/Users/kevin/Library/LaunchAgents/io.interagent.opencode-sara-updater.plist`
+- Updater logs: `/Users/kevin/Library/Logs/opencode-remote/opencode-sara-updater.log` and `opencode-sara-updater.error.log`
 - Desktop bridge plugin: `/Users/kevin/.config/opencode/plugins/opencode-remote-desktop-bridge.js`
 - Desktop bridge library: `/Users/kevin/.config/opencode/opencode-remote/opencode-remote-desktop-bridge-lib.js`
 - Desktop connection runtime state: `/Users/kevin/.local/share/opencode-remote/desktop-connection.json`
@@ -105,12 +110,12 @@ log、永不 commit。父目錄固定為 `0700`。server 以 `O_NOFOLLOW` 開啟
 
 ### Full Disk Access 前置條件
 
-1. 在 System Settings > Privacy & Security > Full Disk Access 確認 actual Node binary `/opt/homebrew/Cellar/node/26.8.1/bin/node` 已允許。
-2. 同頁確認 actual OpenCode binary `/opt/homebrew/Cellar/opencode/1.18.20/libexec/lib/node_modules/opencode-ai/bin/opencode.exe` 已允許。
+1. 以 `node -p 'fs.realpathSync("/opt/homebrew/bin/node")'` 找出目前 actual Node binary，並在 System Settings > Privacy & Security > Full Disk Access 確認已允許。
+2. 以 `node -p 'fs.realpathSync("/opt/homebrew/bin/opencode")'` 找出目前 actual OpenCode binary，並在同頁確認已允許；不要依賴 Homebrew versioned internal layout。
 3. 確認 stable launcher paths `/opt/homebrew/bin/node` 與 `/opt/homebrew/bin/opencode` 仍 resolve 到上述 actual binaries。
 4. Homebrew upgrade 可能建立新的 Cellar binary。若 resolved path 改變，先對新 binary 重新授權 FDA，並用 disposable direct LaunchAgent 重驗 workspace access，再進行 service deployment。
 
-一次性 direct LaunchAgent proof 已完成：`/opt/homebrew/bin/node` 直接讀取 `/Users/kevin/Documents/Projects` 並以 `NODE_FDA_OK`、exit 0 結束；`/opt/homebrew/bin/opencode serve` 直接使用該 WorkingDirectory，temporary loopback port `4296` 回 `{"healthy":true,"version":"1.18.20"}`。probe jobs、listener 與 files 均已移除。這份 proof 證明目前 actual binaries 的 FDA 可用，不取代 production direct design 部署後的 restart 與 listener 驗收。
+部署會建立固定、非 secret、`0644` 的 `/Users/kevin/Documents/Projects/.opencode-remote/remote-fda-probe.txt`，且不會替換或刪除共用 `.opencode-remote` 目錄。每次部署與自動更新都必須透過 Remote proxy 呼叫 OpenCode 的 `GET /file/content?path=<absolute>&directory=<workspace>`，驗證回應是 exact text probe；health 成功本身不算 FDA runtime proof。
 
 ### 安裝或更新
 
@@ -126,7 +131,31 @@ cd /Users/kevin/Documents/Projects/private-codebase/opencode-remote
 Config-time plugin 安裝後必須重啟 OpenCode Desktop，未重啟前不會產生新的 Desktop
 connection runtime state。部署腳本本身不會重啟 Desktop。
 
-最後的 bounded success gate 會用固定 Node 解析 `http://100.113.121.103:9223/remote-health` JSON，要求精確的 proxy/port/upstream/healthy 值；確認 LaunchAgent state 是 running、launchctl PID 等於 exact `100.113.121.103:9223` Node listener PID、command 精確為 fixed Node + runtime entry；並確認 exact `127.0.0.1:4196` owner command 是 fixed OpenCode command且為 Node 的 direct child。它不讀 `.env`、不複製 `.env`/secret/node_modules/source，也不遞迴刪除 runtime 或服務資料。
+最後的 bounded success gate 會用固定 JSON helper 解析 `http://100.113.121.103:9223/remote-health` 與 FDA probe response，要求精確的 proxy/port/upstream/healthy/probe 值；確認 LaunchAgent state 是 running、launchctl PID 等於 exact `100.113.121.103:9223` Node listener PID、command 精確為 fixed Node + runtime entry；並確認 exact `127.0.0.1:4196` owner command 是 fixed OpenCode command且為 Node 的 direct child。它不讀 `.env`、不複製 `.env`/secret/node_modules/source，也不遞迴刪除 runtime 或服務資料。通過 main health 與 FDA probe 後才移除 `/Users/kevin/.local/share/opencode-remote/update-opencode-sara.blocked`。
+
+部署主服務通過上述 health gate 後，installer 才會安裝並 bootstrap exact updater LaunchAgent `io.interagent.opencode-sara-updater`，避免其 `RunAtLoad` 與主部署競爭。updater 每 3600 秒檢查一次，也會在載入時檢查一次；plist 不含 secret 或 application environment。
+
+### macOS OpenCode CLI 自動更新
+
+更新政策是 hourly idle-only：每輪先要求目前 CLI version、`/remote-health` 與 FDA probe 都吻合，再查 same-origin `/c/session-status?strict=1&directory=/Users/kevin/Documents/Projects`。strict mode 要求 Remote 成功，且有效 live Desktop credential 存在時 Desktop source 也必須成功；request 失敗、payload 格式未知、status type 未知或任一 session 為 `busy` 時，記錄 `DEFERRED` 並以 exit 0 結束。Desktop 已關閉、沒有有效 credential 時不阻擋；`idle` 與 `retry` 也不阻擋。`brew outdated --quiet opencode` 只接受 exit `0` 且 stdout empty 代表 current，或 exit `1` 且 stdout exact `opencode` 代表有更新；其他組合都在 `DETECT` fail。升級只執行 `HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew upgrade opencode`，不升級其他 formula。
+
+只有確認有更新後，updater 才 atomically 建立並擁有 `update-opencode-sara.quiesce`，等待一秒，再重查 strict merged status。marker 存在時，Remote proxy 只拒絕 `/session/<ses id>/message` 與 `/session/<ses id>/prompt_async` 兩種 prompt-creating POST，回 `503` JSON、`Retry-After: 1` 與 `Cache-Control: no-store`；abort、session creation、pins、health 與 status 不受影響。busy 或 status failure 會 defer 並只清掉 updater 自己擁有的 marker。
+
+更新前會記錄 old CLI version 與 `/opt/homebrew/bin/opencode` 的 exact symlink target，且要求 target resolve 到現存 Homebrew executable；再 best-effort 開 Skynet maintenance，只保存該次 POST 回傳的 numeric maintenance ID。更新後只以 `launchctl kickstart -k gui/$UID/io.interagent.opencode-sara` 重啟 Remote service，不重啟 OpenCode Desktop。成功要求 `upstreamHealth.version` 精確等於 new version，且 FDA probe exact match。brew、new-version、restart、health 或 FDA recovery 任一失敗都會先寫 `update-opencode-sara.blocked`，再以 `/bin/ln -sfn` 只還原原本的 OpenCode symlink、重啟 Remote，並要求 old health version 與 FDA probe 都恢復；成功記 `ROLLBACK restored=...` 並關閉自己的 maintenance，否則記 `ROLLBACK_FAILED` 並讓自己的 maintenance 依 10 分鐘 TTL 到期，最後皆 nonzero。block marker 存在時 hourly runs 只 defer，直到 successful manual `deploy-local.sh` 通過 main health + FDA probe 後移除。quiesce marker 會留到 new health 或 rollback 決定完成，再由 owner cleanup。
+
+手動執行已安裝的同一支 updater：
+
+```bash
+/Users/kevin/.local/share/opencode-remote/update-opencode-sara.sh
+```
+
+檢查 updater 狀態與 log：
+
+```bash
+launchctl print "gui/$(id -u)/io.interagent.opencode-sara-updater" | /usr/bin/awk '/^[[:space:]]*(state|runs|last exit code) = /'
+tail -n 100 /Users/kevin/Library/Logs/opencode-remote/opencode-sara-updater.log
+tail -n 100 /Users/kevin/Library/Logs/opencode-remote/opencode-sara-updater.error.log
+```
 
 ### 狀態
 

@@ -10,6 +10,7 @@ import { handleCompactStatic, handleCompactSession, handleCompactNewSession, han
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
 import { handleMergedSessionStatus, isMergedSessionStatusPath, isPathWithinRoot } from "./compact/session-status.js";
+import { rejectPromptWhileQuiesced } from "./update-quiesce.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -1131,6 +1132,8 @@ async function handleLatestRedirect(res: http.ServerResponse): Promise<void> {
 }
 
 const server = http.createServer((req, res) => {
+  if (rejectPromptWhileQuiesced(req, res, config.updateQuiesceFile)) return;
+
   if (req.method === "GET" && req.url === "/remote-health") {
     void handleRemoteHealth(res);
     return;

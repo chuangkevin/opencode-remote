@@ -32,6 +32,7 @@ for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do
       LANG="en_US.UTF-8" \
       OPENCODE_DIRECTORY="/Users/kevin/Documents/Projects" \
       OPENCODE_CLI_PATH="/opt/homebrew/bin/opencode" \
+      OPENCODE_UPDATE_QUIESCE_FILE="/Users/kevin/.local/share/opencode-remote/update-opencode-sara.quiesce" \
       PORT="9223" \
       OPENCODE_PORT="4196" \
       BIND_ADDRESS="$EXPECTED_TAILSCALE_IP" \

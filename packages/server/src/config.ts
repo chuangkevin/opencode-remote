@@ -16,4 +16,5 @@ export const config = {
   deadStreamWatchdogEnabled: process.env.DEAD_STREAM_WATCHDOG !== "0",
   deadStreamWatchdogIntervalMs: parseNumber(process.env.DEAD_STREAM_WATCHDOG_INTERVAL_MS, 60_000),
   deadStreamWatchdogMinAgeMs: parseNumber(process.env.DEAD_STREAM_WATCHDOG_MIN_AGE_MS, 180_000),
+  updateQuiesceFile: process.env.OPENCODE_UPDATE_QUIESCE_FILE,
 };

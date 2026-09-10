@@ -6,6 +6,7 @@ readonly EXPECTED_USER="kevin"
 readonly EXPECTED_TAILSCALE_IP="100.113.121.103"
 readonly NODE_BIN="/opt/homebrew/bin/node"
 readonly NPM_BIN="/opt/homebrew/bin/npm"
+readonly BREW_BIN="/opt/homebrew/bin/brew"
 readonly OPENCODE_BIN="/opt/homebrew/bin/opencode"
 readonly TAILSCALE_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 readonly WORKSPACE="/Users/kevin/Documents/Projects"
@@ -15,7 +16,19 @@ readonly LOG_DIR="/Users/kevin/Library/Logs/opencode-remote"
 readonly PLIST_SOURCE_NAME="io.interagent.opencode-sara.plist"
 readonly PLIST_DEST="/Users/kevin/Library/LaunchAgents/$PLIST_SOURCE_NAME"
 readonly LABEL="io.interagent.opencode-sara"
+readonly UPDATER_SOURCE_NAME="update-opencode-sara.sh"
+readonly UPDATER_HELPER_SOURCE_NAME="update-opencode-sara-json.mjs"
+readonly UPDATER_PLIST_SOURCE_NAME="io.interagent.opencode-sara-updater.plist"
+readonly UPDATER_DEST="$RUNTIME_DIR/$UPDATER_SOURCE_NAME"
+readonly UPDATER_HELPER_DEST="$RUNTIME_DIR/$UPDATER_HELPER_SOURCE_NAME"
+readonly UPDATER_PLIST_DEST="/Users/kevin/Library/LaunchAgents/$UPDATER_PLIST_SOURCE_NAME"
+readonly UPDATER_LABEL="io.interagent.opencode-sara-updater"
 readonly HEALTH_URL="http://100.113.121.103:9223/remote-health"
+readonly FILE_CONTENT_URL="http://100.113.121.103:9223/file/content"
+readonly FDA_PROBE_DIR="$WORKSPACE/.opencode-remote"
+readonly FDA_PROBE_FILE="$FDA_PROBE_DIR/remote-fda-probe.txt"
+readonly FDA_PROBE_CONTENT="opencode-remote FDA probe v1"
+readonly UPDATE_BLOCK_FILE="$RUNTIME_DIR/update-opencode-sara.blocked"
 readonly HEALTH_ATTEMPTS=30
 readonly HEALTH_WAIT_SECONDS=2
 readonly STOP_ATTEMPTS=15
@@ -35,10 +48,14 @@ readonly BRIDGE_LIB_SOURCE="$SCRIPT_DIR/../opencode-remote/$BRIDGE_LIB_SOURCE_NA
 readonly BRIDGE_LIB_PACKAGE_SOURCE="$SCRIPT_DIR/../opencode-remote/package.json"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 STAGE_ARCHIVE=""
+PROBE_TEMP=""
 
 cleanup() {
   if [[ -n "$STAGE_ARCHIVE" && -f "$STAGE_ARCHIVE" ]]; then
     /bin/rm -f -- "$STAGE_ARCHIVE"
+  fi
+  if [[ -n "$PROBE_TEMP" && -f "$PROBE_TEMP" ]]; then
+    /bin/rm -f -- "$PROBE_TEMP"
   fi
 }
 trap cleanup EXIT
@@ -58,12 +75,16 @@ require_executable() {
 [[ -f "$REPO_ROOT/package-lock.json" ]] || fail "run from the opencode-remote repository"
 [[ -f "$SCRIPT_DIR/run-opencode-sara.sh" ]] || fail "runtime wrapper is missing"
 [[ -f "$SCRIPT_DIR/$PLIST_SOURCE_NAME" ]] || fail "LaunchAgent plist is missing"
+[[ -f "$SCRIPT_DIR/$UPDATER_SOURCE_NAME" ]] || fail "updater script is missing"
+[[ -f "$SCRIPT_DIR/$UPDATER_HELPER_SOURCE_NAME" ]] || fail "updater JSON helper is missing"
+[[ -f "$SCRIPT_DIR/$UPDATER_PLIST_SOURCE_NAME" ]] || fail "updater LaunchAgent plist is missing"
 [[ -f "$SCRIPT_DIR/$PLUGIN_SOURCE_NAME" ]] || fail "Desktop status bridge plugin is missing"
 [[ -f "$BRIDGE_LIB_SOURCE" ]] || fail "Desktop status bridge library is missing"
 [[ -f "$BRIDGE_LIB_PACKAGE_SOURCE" ]] || fail "Desktop status bridge library package metadata is missing"
 
 require_executable "$NODE_BIN"
 require_executable "$NPM_BIN"
+require_executable "$BREW_BIN"
 require_executable "$OPENCODE_BIN"
 require_executable "$TAILSCALE_BIN"
 require_executable "/usr/bin/curl"
@@ -71,23 +92,14 @@ require_executable "/bin/launchctl"
 require_executable "/usr/bin/plutil"
 require_executable "/usr/bin/tar"
 require_executable "/usr/sbin/lsof"
+require_executable "/usr/bin/shlock"
 
 health_response_is_expected() {
-  /usr/bin/printf '%s' "$1" | "$NODE_BIN" -e '
-    try {
-      const health = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-      process.exit(
-        health.proxy === "opencode-remote" &&
-        health.remotePort === 9223 &&
-        health.upstream === "http://127.0.0.1:4196" &&
-        health.upstreamHealth?.healthy === true
-          ? 0
-          : 1,
-      );
-    } catch {
-      process.exit(1);
-    }
-  '
+  /usr/bin/printf '%s' "$1" | "$NODE_BIN" "$SCRIPT_DIR/$UPDATER_HELPER_SOURCE_NAME" deploy-health
+}
+
+fda_probe_response_is_expected() {
+  /usr/bin/printf '%s' "$1" | "$NODE_BIN" "$SCRIPT_DIR/$UPDATER_HELPER_SOURCE_NAME" file-content "$FDA_PROBE_CONTENT"
 }
 
 running_service_pid() {
@@ -173,7 +185,10 @@ runtime_process_tree_is_expected() {
 node_major="$("$NODE_BIN" -p 'Number(process.versions.node.split(".")[0])')"
 ((node_major >= 22)) || fail "Node.js 22 or newer is required; found $("$NODE_BIN" --version)"
 "$OPENCODE_BIN" --version >/dev/null
+/bin/bash -n "$SCRIPT_DIR/$UPDATER_SOURCE_NAME"
+"$NODE_BIN" --check "$SCRIPT_DIR/$UPDATER_HELPER_SOURCE_NAME"
 /usr/bin/plutil -lint "$SCRIPT_DIR/$PLIST_SOURCE_NAME" >/dev/null
+/usr/bin/plutil -lint "$SCRIPT_DIR/$UPDATER_PLIST_SOURCE_NAME" >/dev/null
 
 echo "Installing dependencies from package-lock.json..."
 (cd "$REPO_ROOT" && PATH="$BUILD_PATH" "$NPM_BIN" ci)
@@ -193,6 +208,7 @@ STAGE_ARCHIVE="$(/usr/bin/mktemp "$RUNTIME_PARENT/.opencode-remote-runtime.tar.X
 GUI_DOMAIN="gui/$(/usr/bin/id -u)"
 readonly GUI_DOMAIN
 readonly SERVICE_TARGET="$GUI_DOMAIN/$LABEL"
+readonly UPDATER_TARGET="$GUI_DOMAIN/$UPDATER_LABEL"
 
 echo "Staging runtime allowlist..."
 (cd "$REPO_ROOT" && /usr/bin/tar -cf "$STAGE_ARCHIVE" \
@@ -200,6 +216,7 @@ echo "Staging runtime allowlist..."
   packages/server/dist/config.js \
   packages/server/dist/index.js \
   packages/server/dist/session.js \
+  packages/server/dist/update-quiesce.js \
   packages/server/dist/compact/handlers.js \
   packages/server/dist/compact/model.js \
   packages/server/dist/compact/pins.js \
@@ -208,6 +225,11 @@ echo "Staging runtime allowlist..."
   packages/server/dist/compact/trust.js \
   packages/server/static \
   mockups/compact-mockup.html)
+
+if /bin/launchctl print "$UPDATER_TARGET" >/dev/null 2>&1; then
+  echo "Stopping exact updater LaunchAgent for deployment..."
+  /bin/launchctl bootout "$UPDATER_TARGET"
+fi
 
 if /bin/launchctl print "$SERVICE_TARGET" >/dev/null 2>&1; then
   echo "Stopping existing LaunchAgent..."
@@ -235,17 +257,35 @@ echo "Updating runtime copy without deleting service data..."
 /usr/bin/install -m 0600 "$BRIDGE_LIB_SOURCE" "$BRIDGE_LIB_DEST"
 /usr/bin/install -m 0600 "$BRIDGE_LIB_PACKAGE_SOURCE" "$BRIDGE_LIB_PACKAGE_DEST"
 
+echo "Installing fixed Full Disk Access probe without replacing shared workspace state..."
+if [[ ! -e "$FDA_PROBE_DIR" ]]; then
+  /bin/mkdir -m 0755 "$FDA_PROBE_DIR"
+fi
+[[ -d "$FDA_PROBE_DIR" && ! -L "$FDA_PROBE_DIR" ]] || fail "FDA probe parent must be an existing real directory: $FDA_PROBE_DIR"
+PROBE_TEMP="$(/usr/bin/mktemp "$FDA_PROBE_DIR/.remote-fda-probe.txt.XXXXXX")"
+/usr/bin/printf '%s' "$FDA_PROBE_CONTENT" > "$PROBE_TEMP"
+/bin/chmod 0644 "$PROBE_TEMP"
+/bin/mv -f "$PROBE_TEMP" "$FDA_PROBE_FILE"
+PROBE_TEMP=""
+
 echo "Loading LaunchAgent..."
 /bin/launchctl bootstrap "$GUI_DOMAIN" "$PLIST_DEST"
 /bin/launchctl kickstart "$SERVICE_TARGET"
 
 echo "Waiting for $HEALTH_URL..."
+healthy_service_pid=""
 for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
   health_body="$(/usr/bin/curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 2 "$HEALTH_URL" 2>/dev/null || true)"
   if health_response_is_expected "$health_body"; then
     if service_pid="$(running_service_pid)" && runtime_process_tree_is_expected "$service_pid"; then
-      echo "OpenCode Remote is healthy at $EXPECTED_TAILSCALE_IP:9223 (LaunchAgent Node PID $service_pid)."
-      exit 0
+      probe_body="$(/usr/bin/curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 2 \
+        --get --data-urlencode "path=$FDA_PROBE_FILE" --data-urlencode "directory=$WORKSPACE" \
+        "$FILE_CONTENT_URL" 2>/dev/null || true)"
+      if fda_probe_response_is_expected "$probe_body"; then
+        echo "OpenCode Remote is healthy with verified FDA access at $EXPECTED_TAILSCALE_IP:9223 (LaunchAgent Node PID $service_pid)."
+        healthy_service_pid="$service_pid"
+        break
+      fi
     fi
   fi
 
@@ -254,4 +294,13 @@ for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
   fi
 done
 
-fail "health check did not confirm the expected JSON, LaunchAgent Node PID, exact listeners, and runtime process tree after $HEALTH_ATTEMPTS attempts; inspect $LOG_DIR"
+[[ -n "$healthy_service_pid" ]] || fail "health check did not confirm the expected JSON, FDA probe, LaunchAgent Node PID, exact listeners, and runtime process tree after $HEALTH_ATTEMPTS attempts; inspect $LOG_DIR"
+
+echo "Installing idle-only OpenCode updater after the main service health gate..."
+/usr/bin/install -m 0755 "$SCRIPT_DIR/$UPDATER_SOURCE_NAME" "$UPDATER_DEST"
+/usr/bin/install -m 0644 "$SCRIPT_DIR/$UPDATER_HELPER_SOURCE_NAME" "$UPDATER_HELPER_DEST"
+/usr/bin/install -m 0644 "$SCRIPT_DIR/$UPDATER_PLIST_SOURCE_NAME" "$UPDATER_PLIST_DEST"
+/bin/rm -f -- "$UPDATE_BLOCK_FILE"
+/bin/launchctl bootstrap "$GUI_DOMAIN" "$UPDATER_PLIST_DEST"
+
+echo "OpenCode Remote deployment and updater installation completed."

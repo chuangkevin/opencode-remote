@@ -33,6 +33,7 @@ type FetchFunction = typeof globalThis.fetch;
 type MergeOptions = {
   ownOrigin: string;
   desktopConnection?: DesktopConnection;
+  strict?: boolean;
   fetchFn?: FetchFunction;
   timeoutMs?: number;
   ownTimeoutMs?: number;
@@ -187,6 +188,9 @@ export async function mergeSessionStatuses(
   }
 
   const results = await Promise.allSettled(requests);
+  if (options.strict && results.some((result) => result.status === "rejected")) {
+    throw new Error("session status unavailable");
+  }
   const fulfilled = results
     .filter((result): result is PromiseFulfilledResult<SessionStatusMap> => result.status === "fulfilled")
     .map((result) => result.value);
@@ -219,6 +223,7 @@ export async function handleMergedSessionStatus(
   options: HandlerOptions,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
+  const strict = url.searchParams.get("strict") === "1";
   const directories = url.searchParams.getAll("directory");
   const requestedDirectory = directories[0] ?? null;
   if (directories.length !== 1 || !validDirectory(requestedDirectory, options.allowedRoot)) {
@@ -246,6 +251,7 @@ export async function handleMergedSessionStatus(
     const statuses = await mergeSessionStatuses(directory, {
       ownOrigin: options.ownOrigin,
       desktopConnection,
+      strict,
       fetchFn: options.fetchFn,
       timeoutMs: options.timeoutMs,
       ownTimeoutMs: options.ownTimeoutMs,
