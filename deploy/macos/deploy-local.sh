@@ -215,6 +215,7 @@ echo "Staging runtime allowlist..."
   packages/server/package.json \
   packages/server/dist/config.js \
   packages/server/dist/index.js \
+  packages/server/dist/opencode-command.js \
   packages/server/dist/session.js \
   packages/server/dist/update-quiesce.js \
   packages/server/dist/compact/handlers.js \
@@ -225,6 +226,27 @@ echo "Staging runtime allowlist..."
   packages/server/dist/compact/trust.js \
   packages/server/static \
   mockups/compact-mockup.html)
+
+echo "Verifying runtime allowlist covers every relative import..."
+/usr/bin/python3 - "$STAGE_ARCHIVE" "$REPO_ROOT/packages/server/dist" <<'PYEOF' || fail "runtime allowlist is missing a module imported by the build; add it to the tar list above"
+import pathlib, re, subprocess, sys
+
+archive, dist_dir = sys.argv[1], pathlib.Path(sys.argv[2]).resolve()
+packed = set(subprocess.run(["/usr/bin/tar", "-tf", archive],
+                            capture_output=True, text=True, check=True).stdout.split())
+missing = []
+for js in dist_dir.rglob("*.js"):
+    body = js.read_text(encoding="utf-8", errors="replace")
+    for spec in re.findall(r'from\s+"(\.{1,2}/[^"]+)"', body):
+        target = (js.parent / spec).resolve()
+        rel = "packages/server/dist/" + target.relative_to(dist_dir).as_posix()
+        if rel not in packed:
+            missing.append("%s imports %s -> %s not packed"
+                           % (js.relative_to(dist_dir), spec, rel))
+for line in missing:
+    print("  MISSING:", line, file=sys.stderr)
+sys.exit(1 if missing else 0)
+PYEOF
 
 if /bin/launchctl print "$UPDATER_TARGET" >/dev/null 2>&1; then
   echo "Stopping exact updater LaunchAgent for deployment..."

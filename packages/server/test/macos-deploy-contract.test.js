@@ -16,6 +16,7 @@ test("macOS deploy installs one plugin wrapper and keeps its private library out
   assert.match(source, /install -m 0600 "\$SCRIPT_DIR\/\$PLUGIN_SOURCE_NAME" "\$PLUGIN_DEST"/);
   assert.match(source, /install -m 0600 "\$BRIDGE_LIB_SOURCE" "\$BRIDGE_LIB_DEST"/);
   assert.match(source, /install -m 0600 "\$BRIDGE_LIB_PACKAGE_SOURCE" "\$BRIDGE_LIB_PACKAGE_DEST"/);
+  assert.match(source, /^  packages\/server\/dist\/opencode-command\.js \\$/m);
   assert.doesNotMatch(source, /BRIDGE_LIB_DIR=.*plugins/);
   assert.doesNotMatch(source, /rm[^\n]*\.config\/opencode\/plugins/);
   assert.doesNotMatch(source, /opencode\.json/);
