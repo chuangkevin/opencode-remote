@@ -10,3 +10,19 @@ data/
 
 packages/server/data/
 packages/web/.vite/
+
+# openspec 規劃一律放 ~/Documents/Projects/_ProjectControl，repo 內不留
+openspec/
+
+# openspec 相關一律不進版控（2026-08-26 落點規則）
+openspec/
+.openspec/
+.openspec.yaml
+.openspec.yml
+**/skills/openspec-*/
+**/skills/.openspec-target
+**/skills/source-command-opsx-*/
+**/commands/opsx-*.md
+**/commands/opsx/
+**/prompts/opsx-*.md
+**/workflows/opsx-*.md
