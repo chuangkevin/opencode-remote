@@ -345,7 +345,7 @@ HTML + 單一 vanilla ES module，無 build step。
 | `GET /c/session/:id` | compact 對話 UI 主畫面 |
 | `GET /c/session/:id/latest-user-model` | server 端分頁掃描最新 user message，只回 model metadata |
 | `GET /c/session-status?directory=<absolute-path>` | 僅接受 `OPENCODE_DIRECTORY` 或其子目錄，合併 Remote-owned `:4196` 與 macOS Desktop sidecar 的 session status；一般 UI 任一來源失敗時使用另一來源，`strict=1` 則要求 Remote 與所有有效 live Desktop 來源都成功 |
-| `GET /c/static/<file>` | 服 `compact.js` / `compact.css` / `marked.min.js`（白名單檢查）|
+| `GET /c/static/<file>` | 服 `compact.js` / `compact.css` / `theme.js` / `marked.min.js`（白名單檢查）|
 | `POST /c/new-session` | 新建 session（**不帶 title** 讓 OpenCode 自動命名）+ 套 trust ruleset + 303 redirect |
 | `GET /c/pins` | 列出已釘選的 sessionID（從 `<OPENCODE_DIRECTORY>/.opencode-remote/pins.json` 讀）|
 | `POST /c/pins/:id` | 釘選（idempotent，原子寫檔）|
@@ -363,6 +363,13 @@ HTML + 單一 vanilla ES module，無 build step。
 | `packages/server/static/compact.js` | 整個 client（state / SSE / send / queue / pins / question UI ...）|
 | `packages/server/static/compact.css` | 樣式 |
 | `packages/server/static/marked.min.js` | vendored `marked@12.0.2` 渲染 markdown |
+
+### Theme contract（0.4.0）
+
+- 原生 OpenCode SPA 與所有 custom 頁面共用 same-origin `localStorage["opencode-color-scheme"]`，值只使用 `light`、`dark`、`system`。
+- `/remote-sessions`、`/c/session/:id`、`/remote-debug`、`/c-mockup` 都在 CSS 載入前套用偏好，並載入 `/c/static/theme.js` 處理即時切換、跨 tab storage 同步、system 模式的 OS 變更與 `theme-color`。
+- Custom 頁面的 CSS 以 `html[data-theme]` 為 palette hook；native SPA 保留上游自己的 theme control，不注入另一顆按鈕。
+- 驗證：`npm test`、`npm run typecheck`、`npm run build`、`git diff --check`。
 
 ### Phase 2 已實作的功能
 
