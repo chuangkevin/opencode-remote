@@ -107,7 +107,11 @@ function Write-AtomicUtf8File {
     $temporary = Join-Path $parent (".{0}.{1}.{2}.tmp" -f ([IO.Path]::GetFileName($Path)), $PID, [guid]::NewGuid().ToString("N"))
     try {
         [IO.File]::WriteAllText($temporary, $Content, [Text.UTF8Encoding]::new($false))
-        [IO.File]::Replace($temporary, $Path, $null, $true)
+        # Windows PowerShell 5.1 binds $null to an empty string for .NET String
+        # parameters, and File.Replace normalizes all three paths, so an empty
+        # backup name throws ArgumentException instead of writing the file.
+        # [NullString]::Value passes a real null. Verified on PS 5.1.26100.8115.
+        [IO.File]::Replace($temporary, $Path, [NullString]::Value, $true)
     } catch [IO.FileNotFoundException] {
         Move-Item -LiteralPath $temporary -Destination $Path -Force
     } finally {

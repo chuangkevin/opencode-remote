@@ -165,3 +165,17 @@ test("Windows updater installer preserves plugins, applies private ACL, and regi
   assert.match(watchdog, /schtasks\.exe \/Create[\s\S]*\$LASTEXITCODE/);
   assert.match(watchdog, /schtasks\.exe \/Run[\s\S]*\$LASTEXITCODE/);
 });
+
+test("atomic file writes pass a real null backup name so PowerShell 5.1 does not break the watchdog", async () => {
+  const runtime = await file("deploy/windows/opencode-remote-runtime.psm1");
+
+  // 2026-09-10 kevinhome 實機：watchdog 每 5 分鐘失敗，錯誤是
+  // 「以 4 引數呼叫 Replace 時發生例外狀況：不合法的路徑格式」。
+  // Windows PowerShell 5.1 把 $null 綁成空字串，File.Replace 會正規化全部三個路徑，
+  // 空字串的備份檔名就丟 ArgumentException。PowerShell 7 不會，所以在 pwsh 測不出來。
+  assert.match(runtime, /\[IO\.File\]::Replace\(\$temporary, \$Path, \[NullString\]::Value, \$true\)/);
+  assert.doesNotMatch(runtime, /\[IO\.File\]::Replace\([^)]*\$null[^)]*\)/);
+
+  // 目的檔不存在時 Replace 會丟 FileNotFoundException，必須有 Move-Item 的退路。
+  assert.match(runtime, /catch \[IO\.FileNotFoundException\][\s\S]{0,160}Move-Item/);
+});
