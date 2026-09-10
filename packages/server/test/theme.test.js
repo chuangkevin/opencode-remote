@@ -306,3 +306,18 @@ test("running indicator uses themed tokens and passes contrast in light mode", a
     `dark running indicator ${darkRunning} on ${darkSurface} is ${contrast(darkRunning, darkSurface).toFixed(2)}:1, below 3:1`,
   );
 });
+
+test("mockup keeps the same touch targets as the shipped stylesheet", async () => {
+  const css = await readFile(new URL("../static/compact.css", import.meta.url), "utf8");
+  const mockup = await readFile(new URL("../../../mockups/compact-mockup.html", import.meta.url), "utf8");
+
+  // mockup 是設計參考，之前少了這兩條，畫出來的按鈕比實際產品小。
+  // compact.css 把 .model-chip 放在 max-width:767px 裡；mockup 固定手機寬度，所以直接寫。
+  const headerControls = /\.theme-toggle,\s*\.header-more,\s*\.header-fs-btn\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s;
+  assert.match(css, headerControls);
+  assert.match(mockup, headerControls);
+
+  const modelChip = /\.model-chip\s*\{[^}]*min-height:\s*44px/s;
+  assert.match(css, modelChip);
+  assert.match(mockup, modelChip);
+});

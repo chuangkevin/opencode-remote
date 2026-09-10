@@ -284,6 +284,25 @@
       border-radius: 50%;
       background: var(--accent-ai);
     }
+    /* 與 static/compact.css 同步：手機上這幾顆是實際會點到的控制項，
+       最小 44px 才符合觸控目標要求。mockup 固定在手機寬度，所以不包 media query。 */
+    .theme-toggle,
+    .header-more,
+    .header-fs-btn {
+      min-width: 44px;
+      min-height: 44px;
+    }
+    .model-chip {
+      max-width: 31vw;
+      min-height: 44px;
+      padding-inline: 8px;
+      overflow: hidden;
+    }
+    .model-chip span:not(.dot) {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .header-more {
       background: none;
       border: none;
