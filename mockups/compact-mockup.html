@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f0f10" />
+  <script>(()=>{let p="system";try{const s=localStorage.getItem("opencode-color-scheme");if(["light","dark","system"].includes(s))p=s}catch{}try{const t=p==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):p;const r=document.documentElement;r.dataset.themePreference=p;r.dataset.theme=t;r.style.colorScheme=t;const m=document.querySelector('meta[name="theme-color"]');if(m)m.content=t==="light"?"#f7f7f5":"#0f0f10"}catch{}})()</script>
   <title>OpenCode Compact — Mockup</title>
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
   <style>
@@ -22,6 +24,67 @@
       --danger: #f87171;        /* red-400, for Stop */
       --send: #6366f1;          /* indigo-500, for Send */
       --code-bg: #1a1a1d;
+      --preview-bg: #050505;
+      --header-bg: rgba(15,15,16,.94);
+      --switcher-bg: #15151a;
+      --keyboard-bg: #0a0a0c;
+      --strong: #fff;
+      --button-text: #fff;
+      --inline-code: #fbbf24;
+      --link: #93c5fd;
+      --shadow: rgba(0,0,0,.6);
+      --divider-glow: rgba(255,255,255,.08);
+      --attachment-remove-bg: rgba(0,0,0,.7);
+      --attachment-remove-text: #fff;
+      --stop-text: #1a0a0a;
+      --toggle-knob: #fff;
+      --model-divider: #1a1a1d;
+      --variant-active-text: #082f1d;
+      --queued-text: #a1a1aa;
+      --disabled-bg: #3a3a40;
+      --disabled-text: #d4d4d8;
+      --send-disabled-bg: #34343a;
+      --send-disabled-text: #d4d4d8;
+      --send-disabled-border: #52525b;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f7f7f5;
+      --surface: #fff;
+      --surface-hi: #f0f0ed;
+      --border: #d7d7d2;
+      --border-hi: #b8b8b1;
+      --text: #202023;
+      --muted: #5f6068;
+      --dim: #767780;
+      --accent-user: #4f46e5;
+      --accent-ai: #047857;
+      --accent-tool: #a16207;
+      --danger: #b91c1c;
+      --send: #4f46e5;
+      --code-bg: #eeeee9;
+      --preview-bg: #e8e8e4;
+      --header-bg: rgba(247,247,245,.94);
+      --switcher-bg: #fff;
+      --keyboard-bg: #e5e5df;
+      --strong: #111113;
+      --button-text: #fff;
+      --inline-code: #854d0e;
+      --link: #1d4ed8;
+      --shadow: rgba(39,39,42,.2);
+      --divider-glow: rgba(32,32,35,.12);
+      --attachment-remove-bg: rgba(255,255,255,.9);
+      --attachment-remove-text: #202023;
+      --stop-text: #fff;
+      --toggle-knob: #fff;
+      --model-divider: #deded8;
+      --variant-active-text: #fff;
+      --queued-text: #52525b;
+      --disabled-bg: #d7d7d2;
+      --disabled-text: #3f3f46;
+      --send-disabled-bg: #d7d7d2;
+      --send-disabled-text: #3f3f46;
+      --send-disabled-border: #a1a1aa;
     }
 
     * { box-sizing: border-box; }
@@ -29,12 +92,13 @@
     html, body {
       margin: 0;
       padding: 0;
-      background: #050505;
+      background: var(--preview-bg);
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
       font-size: 14px;
       line-height: 1.5;
       min-height: 100vh;
+      overflow-x: hidden;
     }
 
     /* Default (small screens): switcher strip on top, frame fills the rest. */
@@ -61,7 +125,7 @@
 
     /* Big desktop only: show the 640x960 device-frame preview centered. */
     @media (min-width: 760px) and (min-height: 1020px) {
-      body { background: #050505; }
+      body { background: var(--preview-bg); }
       .frame-wrap {
         display: flex;
         flex-direction: column;
@@ -85,7 +149,7 @@
         background: var(--bg);
         border: 1px solid var(--border-hi);
         border-radius: 14px;
-        box-shadow: 0 24px 60px -20px rgba(0,0,0,.6);
+        box-shadow: 0 24px 60px -20px var(--shadow);
       }
       /* Dual-screen divider hint (only shown in the framed preview) */
       .frame::before {
@@ -96,7 +160,7 @@
         right: 0;
         top: 480px;
         height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
+        background: linear-gradient(90deg, transparent, var(--divider-glow), transparent);
         pointer-events: none;
         z-index: 100;
       }
@@ -110,7 +174,7 @@
       align-items: center;
       gap: 4px;
       padding: 4px 6px;
-      background: #15151a;
+      background: var(--switcher-bg);
       border-bottom: 1px solid var(--border);
       overflow-x: auto;
       white-space: nowrap;
@@ -135,11 +199,20 @@
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
+      min-height: 44px;
     }
     .switcher button.active {
       background: var(--surface-hi);
       color: var(--text);
       border-color: var(--border-hi);
+    }
+    .switcher .theme-toggle {
+      min-width: 44px;
+      min-height: 44px;
+      margin-left: auto;
+      padding: 0;
+      border-radius: 50%;
+      color: var(--text);
     }
 
     /* On big preview, switcher goes above frame, centered, slightly larger. */
@@ -175,7 +248,7 @@
       gap: 8px;
       padding: 0 12px;
       border-bottom: 1px solid var(--border);
-      background: rgba(15,15,16,.94);
+      background: var(--header-bg);
       backdrop-filter: blur(12px);
       flex-shrink: 0;
     }
@@ -210,6 +283,25 @@
       width: 6px; height: 6px;
       border-radius: 50%;
       background: var(--accent-ai);
+    }
+    /* 與 static/compact.css 同步：手機上這幾顆是實際會點到的控制項，
+       最小 44px 才符合觸控目標要求。mockup 固定在手機寬度，所以不包 media query。 */
+    .theme-toggle,
+    .header-more,
+    .header-fs-btn {
+      min-width: 44px;
+      min-height: 44px;
+    }
+    .model-chip {
+      max-width: 31vw;
+      min-height: 44px;
+      padding-inline: 8px;
+      overflow: hidden;
+    }
+    .model-chip span:not(.dot) {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .header-more {
       background: none;
@@ -270,7 +362,7 @@
     .msg-body p:last-child { margin-bottom: 0; }
     .msg-body ul, .msg-body ol { margin: 4px 0 8px; padding-left: 20px; }
     .msg-body li { margin-bottom: 2px; }
-    .msg-body strong { color: #fff; font-weight: 600; }
+    .msg-body strong { color: var(--strong); font-weight: 600; }
     .msg-body code {
       background: var(--code-bg);
       border: 1px solid var(--border);
@@ -278,7 +370,7 @@
       padding: 1px 5px;
       font-family: ui-monospace, Menlo, Consolas, monospace;
       font-size: 12.5px;
-      color: #fbbf24;
+      color: var(--inline-code);
     }
     .msg-body pre {
       background: var(--code-bg);
@@ -300,9 +392,9 @@
     .msg-body h1, .msg-body h2, .msg-body h3 {
       font-size: 14px;
       margin: 12px 0 6px;
-      color: #fff;
+      color: var(--strong);
     }
-    .msg-body a { color: #93c5fd; }
+    .msg-body a { color: var(--link); }
     .msg-body blockquote {
       border-left: 3px solid var(--border-hi);
       padding-left: 10px;
@@ -360,7 +452,7 @@
       padding: 6px 12px;
       font-size: 12px;
       color: var(--text);
-      box-shadow: 0 6px 20px -6px rgba(0,0,0,.5);
+      box-shadow: 0 6px 20px -6px var(--shadow);
       cursor: pointer;
       z-index: 5;
     }
@@ -389,14 +481,22 @@
     }
     .attach-thumb .x {
       position: absolute;
-      top: 2px; right: 2px;
-      width: 16px; height: 16px;
-      border-radius: 50%;
-      background: rgba(0,0,0,.7);
-      color: #fff;
-      font-size: 11px;
+      top: 0; right: 0;
+      width: 44px; height: 44px;
+      padding: 0;
+      border: 0;
+      background: transparent;
       display: flex; align-items: center; justify-content: center;
       cursor: pointer;
+    }
+    .attach-thumb .x span {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      background: var(--attachment-remove-bg);
+      color: var(--attachment-remove-text);
+      font-size: 13px;
+      line-height: 20px;
+      text-align: center;
     }
 
     /* Input bar */
@@ -410,7 +510,7 @@
       flex-shrink: 0;
     }
     .icon-btn {
-      width: 38px; height: 38px;
+      width: 44px; height: 44px;
       border-radius: 50%;
       background: var(--surface);
       border: 1px solid var(--border);
@@ -426,18 +526,25 @@
     .send-btn {
       background: var(--send);
       border-color: var(--send);
-      color: #fff;
+      color: var(--button-text);
+    }
+    .send-btn:disabled {
+      opacity: 1;
+      background: var(--send-disabled-bg);
+      border-color: var(--send-disabled-border);
+      color: var(--send-disabled-text);
+      cursor: not-allowed;
     }
     .stop-btn {
       background: var(--danger);
       border-color: var(--danger);
-      color: #1a0a0a;
+      color: var(--stop-text);
     }
     .compose {
       flex: 1;
-      min-height: 38px;
+      min-height: 44px;
       max-height: 140px;
-      border-radius: 19px;
+      border-radius: 22px;
       background: var(--surface);
       border: 1px solid var(--border);
       padding: 9px 14px;
@@ -459,7 +566,7 @@
       left: 0; right: 0;
       bottom: 0;
       height: min(480px, 50vh);
-      background: #0a0a0c;
+      background: var(--keyboard-bg);
       border-top: 1px solid var(--border-hi);
       display: flex;
       align-items: center;
@@ -543,7 +650,7 @@
       left: 22px;
       width: 20px; height: 20px;
       border-radius: 50%;
-      background: #fff;
+      background: var(--toggle-knob);
       transition: left .12s;
     }
     .toggle.off::after { left: 2px; }
@@ -563,7 +670,7 @@
       align-items: center;
       gap: 10px;
       padding: 9px 0;
-      border-bottom: 1px solid #1a1a1d;
+      border-bottom: 1px solid var(--model-divider);
     }
     .model-name {
       flex: 1;
@@ -576,9 +683,17 @@
     .variants {
       display: flex;
       gap: 4px;
-      flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      min-width: 0;
+      max-width: 65%;
     }
     .variant-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 44px;
+      min-height: 44px;
       font-size: 11px;
       padding: 4px 9px;
       border-radius: 999px;
@@ -589,7 +704,7 @@
     }
     .variant-pill.active {
       background: var(--accent-ai);
-      color: #082f1d;
+      color: var(--variant-active-text);
       border-color: var(--accent-ai);
       font-weight: 600;
     }
@@ -598,6 +713,40 @@
       color: var(--dim);
       padding: 4px 9px;
     }
+
+    .msg.queued .msg-body {
+      border-left: 2px solid var(--dim);
+      padding-left: 8px;
+      color: var(--queued-text);
+    }
+    .msg.queued .msg-role,
+    .msg.queued .msg-time { color: var(--queued-text); }
+    .msg.queued .queue-remove {
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 44px;
+    }
+    .qcard.answered { border-color: var(--accent-ai); }
+    .qcard.rejected { border-color: var(--dim); }
+    .qcard.submitting { border-color: var(--disabled-bg); pointer-events: none; }
+    .qopt:disabled {
+      opacity: 1;
+      background: var(--disabled-bg);
+      border-color: var(--border-hi);
+    }
+    .qopt:disabled .qopt-label,
+    .qopt:disabled .qopt-desc,
+    .qcard-submit:disabled,
+    .qcard-skip:disabled,
+    .add-provider-save:disabled { color: var(--disabled-text); }
+    .qcard-submit:disabled,
+    .qcard-skip:disabled,
+    .add-provider-save:disabled { background: var(--disabled-bg); opacity: 1; }
   </style>
 </head>
 <body>
@@ -610,6 +759,7 @@
       <button data-state="typing">Typing</button>
       <button data-state="attached">Attached</button>
       <button data-state="picker">Picker</button>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
     </div>
 
     <div class="frame" id="frame">
@@ -630,11 +780,11 @@
         <div class="attach-row" id="attachRow" style="display:none;">
           <div class="attach-thumb">
             <img src="https://placehold.co/96x96/3f3f46/a1a1aa?text=img1" alt="" />
-            <span class="x">×</span>
+            <button class="x" type="button" aria-label="移除附件"><span aria-hidden="true">×</span></button>
           </div>
           <div class="attach-thumb">
             <img src="https://placehold.co/96x96/3f3f46/a1a1aa?text=img2" alt="" />
-            <span class="x">×</span>
+            <button class="x" type="button" aria-label="移除附件"><span aria-hidden="true">×</span></button>
           </div>
         </div>
 
@@ -857,9 +1007,9 @@
       });
     }
 
-    document.querySelectorAll(".switcher button").forEach((b) => {
+    document.querySelectorAll(".switcher button[data-state]").forEach((b) => {
       b.addEventListener("click", () => {
-        document.querySelectorAll(".switcher button").forEach((x) => x.classList.remove("active"));
+        document.querySelectorAll(".switcher button[data-state]").forEach((x) => x.classList.remove("active"));
         b.classList.add("active");
         applyState(b.dataset.state);
       });
@@ -880,5 +1030,6 @@
     // initial render
     applyState("idle");
   </script>
+  <script type="module" src="/c/static/theme.js"></script>
 </body>
 </html>

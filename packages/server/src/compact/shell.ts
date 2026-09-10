@@ -13,6 +13,7 @@ export function renderCompactShell(sessionID: string, directory: string): string
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#0f0f10" />
+  <script>(()=>{let p="system";try{const s=localStorage.getItem("opencode-color-scheme");if(["light","dark","system"].includes(s))p=s}catch{}try{const t=p==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):p;const r=document.documentElement;r.dataset.themePreference=p;r.dataset.theme=t;r.style.colorScheme=t;const m=document.querySelector('meta[name="theme-color"]');if(m)m.content=t==="light"?"#f7f7f5":"#0f0f10"}catch{}})()</script>
   <title>OpenCode</title>
   <link rel="stylesheet" href="/c/static/compact.css" />
   <script src="/c/static/marked.min.js"></script>
@@ -20,7 +21,7 @@ export function renderCompactShell(sessionID: string, directory: string): string
 <body data-session-id="${id}" data-directory="${dir}">
   <div class="app">
     <header class="app-header">
-      <a class="header-back" href="/remote-sessions">← Sessions</a>
+      <a class="header-back" href="/remote-sessions" aria-label="返回工作階段">← <span>Sessions</span></a>
       <button class="header-title" id="titleBtn" type="button" title="點擊重新命名">
         <span id="titleText">…</span>
       </button>
@@ -31,6 +32,7 @@ export function renderCompactShell(sessionID: string, directory: string): string
         <span id="modelName">…</span>
         <span class="variant" id="modelVariant"></span>
       </button>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
       <button class="header-fs-btn" id="fsBtn" type="button" aria-label="全螢幕">⛶</button>
       <button class="header-more" id="moreBtn" type="button" aria-label="more">⋯</button>
     </header>
@@ -52,6 +54,7 @@ export function renderCompactShell(sessionID: string, directory: string): string
     <div class="picker" id="picker" hidden></div>
     <div class="toast" id="toast" hidden></div>
   </div>
+  <script type="module" src="/c/static/theme.js"></script>
   <script type="module" src="/c/static/compact.js"></script>
 </body>
 </html>`;

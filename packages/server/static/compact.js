@@ -1410,7 +1410,7 @@ function renderAttachments() {
   pendingAttachments.forEach((a, i) => {
     const thumb = document.createElement("div");
     thumb.className = "attach-thumb";
-    thumb.innerHTML = `<img src="${a.dataUrl}" alt="" /><span class="x" data-i="${i}">×</span>`;
+    thumb.innerHTML = `<img src="${a.dataUrl}" alt="" /><button class="x" type="button" data-i="${i}" aria-label="移除附件"><span aria-hidden="true">×</span></button>`;
     els.attachRow.appendChild(thumb);
   });
 }
