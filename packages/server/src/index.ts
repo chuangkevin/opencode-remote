@@ -16,6 +16,14 @@ import { resolveOpenCodeCommand } from "./opencode-command.js";
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
 const remoteResetScript = `(() => {})();\n`;
+const nativeMobileStyle = `<style data-remote-mobile>
+@media (max-width: 767px) {
+  [data-component="prompt-input-v2"] [data-component="tooltip-v2-trigger"] { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+  [data-component="prompt-input-v2"] [data-action="prompt-model"] { max-width: 100% !important; width: 100%; }
+  [data-component="prompt-input-v2"] [data-action="prompt-submit"] { flex-shrink: 0; }
+}
+</style>`;
+
 const nativePreferencesScript = `<script>(() => {
   const key = "settings.v3";
   const fallback = { general: { newLayoutDesigns: false }, permissions: { autoApprove: true } };
@@ -318,14 +326,14 @@ async function preserveCurrentSessionInList(
   }
 }
 
-function injectRemoteReset(html: string): string {
+export function injectRemoteReset(html: string): string {
   if (html.includes(nativePreferencesScript)) return html;
   if (html.includes('<script type="module"')) {
-    return html.replace('<script type="module"', `${nativePreferencesScript}<script type="module"`);
+    return html.replace('<script type="module"', `${nativeMobileStyle}${nativePreferencesScript}<script type="module"`);
   }
   return html.includes("</head>")
-    ? html.replace("</head>", `${nativePreferencesScript}</head>`)
-    : `${nativePreferencesScript}${html}`;
+    ? html.replace("</head>", `${nativeMobileStyle}${nativePreferencesScript}</head>`)
+    : `${nativeMobileStyle}${nativePreferencesScript}${html}`;
 }
 
 function allowInlineScripts(headers: http.OutgoingHttpHeaders, html: string): void {
@@ -1033,7 +1041,7 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
               <button class="new-btn" type="submit">+ 新</button>
             </form>
           </header>
-          ${items || "<div class='empty'>目前沒有工作階段</div>"}
+          <div id="sessionList">${items || "<div class='empty'>目前沒有工作階段</div>"}</div>
           <script>
             document.addEventListener("click", async function (e) {
               const btn = e.target.closest("[data-pin-toggle]");

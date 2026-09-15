@@ -6,6 +6,7 @@ import {
   bindStatusPollerLifecycle,
   busySessionIds,
   createStatusPoller,
+  findMissingBusySessions,
   loadSessionStatuses,
 } from "../static/remote-sessions.js";
 
@@ -121,7 +122,7 @@ test("stops a fulfilled poll before its result can update state", async () => {
   assert.deepEqual(applied, []);
 });
 
-test("starts immediately, repeats every five seconds, and aborts after three seconds", async () => {
+test("starts immediately, repeats every two seconds, and aborts after three seconds", async () => {
   let calls = 0;
   let intervalDelay;
   let timeoutDelay;
@@ -151,7 +152,7 @@ test("starts immediately, repeats every five seconds, and aborts after three sec
 
   poller.start();
   assert.equal(calls, 1);
-  assert.equal(intervalDelay, 5_000);
+  assert.equal(intervalDelay, 2_000);
   assert.equal(timeoutDelay, 3_000);
 
   abortRequest();
@@ -184,8 +185,18 @@ test("pauses status polling while hidden and polls immediately when visible", ()
   listeners.get("document:visibilitychange")();
   listeners.get("window:pagehide")();
   listeners.get("window:pageshow")();
+  listeners.get("window:focus")();
 
-  assert.deepEqual(calls, ["start", "stop", "start", "stop", "start"]);
+  assert.deepEqual(calls, ["start", "stop", "start", "stop", "start", "start"]);
+});
+
+test("finds busy sessions that have no card on the list yet", () => {
+  assert.deepEqual(
+    findMissingBusySessions({ a: { type: "busy" }, b: { type: "idle" }, c: { type: "busy" } }, ["a"]),
+    ["c"],
+  );
+  assert.deepEqual(findMissingBusySessions({}, []), []);
+  assert.deepEqual(findMissingBusySessions({ a: { type: "busy" } }, undefined), ["a"]);
 });
 
 test("remote sessions HTML wires an accessible reduced-motion-safe indicator", async () => {

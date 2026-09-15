@@ -881,8 +881,10 @@ header.app-header {
   header.app-header { gap: 2px; padding-inline: 4px; }
   .header-back { min-width: 44px; min-height: 44px; justify-content: center; padding: 0; }
   .header-back span { display: none; }
-  .header-title { max-width: 22vw; margin-inline: 0; padding-inline: 4px; }
-  .model-chip { max-width: 31vw; min-height: 44px; padding-inline: 8px; overflow: hidden; }
+  .header-title { flex: 1 1 auto; max-width: none; min-width: 0; margin-inline: 0; padding-inline: 4px; }
+  .header-title-input { flex: 1 1 auto; max-width: none; min-width: 0; }
+  .header-spacer { flex: 0 0 0; }
+  .model-chip { max-width: 34vw; min-height: 44px; padding-inline: 8px; overflow: hidden; }
   .model-chip span:not(.dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .messages { padding-inline: 10px; }
   .input-bar { gap: 5px; padding-inline: 8px; }
@@ -895,8 +897,7 @@ header.app-header {
 }
 
 @media (max-width: 420px) {
-  .header-title,
-  .header-title-input,
-  .header-fs-btn { display: none; }
+  .header-fs-btn,
+  .theme-toggle { display: none; }
   .model-chip { max-width: 40vw; }
 }

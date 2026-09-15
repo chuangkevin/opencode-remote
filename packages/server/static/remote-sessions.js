@@ -5,6 +5,11 @@ export function busySessionIds(statuses) {
     .map(([sessionID]) => sessionID);
 }
 
+export function findMissingBusySessions(statuses, cardIds) {
+  const existing = new Set(Array.isArray(cardIds) ? cardIds : []);
+  return busySessionIds(statuses).filter((id) => !existing.has(id));
+}
+
 export async function loadSessionStatuses(directories, signal, fetchFn = globalThis.fetch) {
   const uniqueDirectories = [...new Set(directories)];
   const statusMaps = new Array(uniqueDirectories.length);
@@ -38,7 +43,7 @@ export async function loadSessionStatuses(directories, signal, fetchFn = globalT
 export function createStatusPoller({
   load,
   apply,
-  intervalMs = 5_000,
+  intervalMs = 2_000,
   timeoutMs = 3_000,
   setIntervalFn = globalThis.setInterval.bind(globalThis),
   clearIntervalFn = globalThis.clearInterval.bind(globalThis),
@@ -99,23 +104,63 @@ export function bindStatusPollerLifecycle(poller, documentTarget, windowTarget) 
   };
   const handlePageHide = () => poller.stop();
   const handlePageShow = () => handleVisibilityChange();
+  const handleFocus = () => handleVisibilityChange();
 
   documentTarget.addEventListener("visibilitychange", handleVisibilityChange);
   windowTarget.addEventListener("pagehide", handlePageHide);
   windowTarget.addEventListener("pageshow", handlePageShow);
+  windowTarget.addEventListener("focus", handleFocus);
   handleVisibilityChange();
 }
 
 if (typeof document !== "undefined") {
-  const cards = [...document.querySelectorAll(".session[data-session-id][data-session-directory]")];
-  const directories = [...new Set(cards.map((card) => card.dataset.sessionDirectory))];
+  let cards = [...document.querySelectorAll(".session[data-session-id][data-session-directory]")];
+  let directories = [...new Set(cards.map((card) => card.dataset.sessionDirectory))];
+  let lastRefreshTime = 0;
+  let isRefreshing = false;
+
+  function refreshCards() {
+    cards = [...document.querySelectorAll(".session[data-session-id][data-session-directory]")];
+    directories = [...new Set(cards.map((card) => card.dataset.sessionDirectory))];
+  }
+
+  function applyStatuses(statuses) {
+    const busy = new Set(busySessionIds(statuses));
+    for (const card of cards) {
+      const indicator = card.querySelector(".running-indicator");
+      if (indicator) indicator.hidden = !busy.has(card.dataset.sessionId);
+    }
+  }
+
   const poller = createStatusPoller({
     load: (signal) => loadSessionStatuses(directories, signal),
-    apply: (statuses) => {
-      const busy = new Set(busySessionIds(statuses));
-      for (const card of cards) {
-        const indicator = card.querySelector(".running-indicator");
-        if (indicator) indicator.hidden = !busy.has(card.dataset.sessionId);
+    apply: async (statuses) => {
+      applyStatuses(statuses);
+      const cardIds = cards.map((card) => card.dataset.sessionId).filter(Boolean);
+      const missing = findMissingBusySessions(statuses, cardIds);
+      const now = Date.now();
+      if (missing.length > 0 && now - lastRefreshTime > 15_000) {
+        if (isRefreshing) return;
+        isRefreshing = true;
+        try {
+          const response = await fetch("/remote-sessions");
+          if (!response.ok) return;
+          const html = await response.text();
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, "text/html");
+          const nextList = doc.querySelector("#sessionList");
+          const currentList = document.querySelector("#sessionList");
+          if (nextList && currentList) {
+            currentList.innerHTML = nextList.innerHTML;
+            lastRefreshTime = Date.now();
+            refreshCards();
+            applyStatuses(statuses);
+          }
+        } catch {
+          // 失敗就靜默略過，下一輪再試
+        } finally {
+          isRefreshing = false;
+        }
       }
     },
   });

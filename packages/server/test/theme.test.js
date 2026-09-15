@@ -321,3 +321,40 @@ test("mockup keeps the same touch targets as the shipped stylesheet", async () =
   assert.match(css, modelChip);
   assert.match(mockup, modelChip);
 });
+
+test("injects the mobile prompt style once alongside the native preferences", async () => {
+  // dist/index.js starts the proxy on import, so assert on the built source text instead.
+  const built = await readFile(new URL("../dist/index.js", import.meta.url), "utf8");
+  const style = built.indexOf("const nativeMobileStyle");
+  const inject = built.indexOf("function injectRemoteReset");
+  assert.ok(style >= 0 && inject >= 0 && style < inject);
+  assert.match(built, /<style data-remote-mobile>/);
+  assert.match(built, /\[data-component="prompt-input-v2"\] \[data-action="prompt-model"\]/);
+  assert.match(built, /\[data-component="prompt-input-v2"\] \[data-action="prompt-submit"\]/);
+  assert.equal(built.match(/\$\{nativeMobileStyle\}\$\{nativePreferencesScript\}/g)?.length, 3);
+  assert.match(built, /if \(html\.includes\(nativePreferencesScript\)\)\s*return html;/);
+  assert.match(built, /<div id="sessionList">/);
+});
+
+test("keeps the compact session title visible below 420px", async () => {
+  const css = await readFile(new URL("../static/compact.css", import.meta.url), "utf8");
+  const start = css.indexOf("@media (max-width: 420px)");
+  assert.ok(start >= 0);
+  let depth = 0;
+  let end = -1;
+  for (let i = css.indexOf("{", start); i < css.length; i += 1) {
+    if (css[i] === "{") depth += 1;
+    if (css[i] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  const block = css.slice(start, end + 1);
+  assert.doesNotMatch(block, /\.header-title/);
+  assert.match(block, /\.header-fs-btn/);
+  const mobile = css.slice(css.indexOf("@media (max-width: 767px)"), css.indexOf("@media (min-width: 768px)"));
+  assert.match(mobile, /\.header-title \{[^}]*flex: 1 1 auto[^}]*max-width: none/);
+});
