@@ -130,6 +130,12 @@ OPENCODE_CLI_PATH=                              # 可選：非標準 opencode-cl
 
 缺本機設定時可直接跑 `./start-hidden.ps1`；啟動流程會自動建立/補齊 `.env`。需要手動輸入 GitHub token 時再跑 `./setup-capabilities.ps1`。
 
+## apiKey 改了會自動重啟
+
+Proxy 會定時比對 `~/.config/opencode/opencode.jsonc` 與子行程 `GET /config` 已載入的 provider `apiKey`；同一 provider 兩邊不同時會重啟自己啟動的 `opencode serve`。
+`OPENCODE_KEY_DRIFT_INTERVAL_MS` 控制檢查間隔，預設 `300000`，設 `0` 停用；`OPENCODE_KEY_DRIFT_COOLDOWN_MS` 控制重啟防抖，預設 `600000`。
+看到 `[opencode-remote] provider apiKey changed on disk ...` 表示已偵測到變更並開始重啟。
+
 ## 架構
 
 ```

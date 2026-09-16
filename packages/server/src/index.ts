@@ -1,10 +1,18 @@
 import http from "node:http";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
+import {
+  GLOBAL_CONFIG_PATH,
+  detectKeyDrift,
+  expectedProviderKeys,
+  loadedProviderKeys,
+  nodeKeyDriftDeps,
+} from "./key-drift.js";
 import { encodeDirSlug, listSessionPickerSessions, mergePinnedSessions, resolveActiveSessionPath } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
@@ -1432,6 +1440,27 @@ function startKeepAlive(): void {
 
 // ─── Startup ─────────────────────────────────────────────────────────────────
 
+const startupTerminationGraceMs = 3_000;
+const startupKillWaitMs = 2_000;
+
+function spawnOpenCode(): ChildProcess {
+  console.log(`[opencode-remote] spawning opencode serve in ${config.opencodeDirectory}`);
+  const opencodeCmd = resolveOpenCodeCommand({
+    explicitPath: process.env.OPENCODE_CLI_PATH,
+    localAppData: process.env.LOCALAPPDATA ?? "",
+  });
+  return spawn(
+    opencodeCmd,
+    ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],
+    {
+      cwd: config.opencodeDirectory,
+      stdio: "inherit",
+      shell: false,
+      env: { ...process.env, OPENCODE_SERVER_PASSWORD: "" },
+    },
+  );
+}
+
 async function waitForOpenCode(): Promise<void> {
   for (let i = 0; i < 60; i++) {
     try {
@@ -1446,6 +1475,48 @@ async function waitForOpenCode(): Promise<void> {
   throw new Error("OpenCode did not become healthy within 60 seconds");
 }
 
+function childHasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function terminateOpenCodeChild(child: ChildProcess, context: string): Promise<void> {
+  if (childHasExited(child)) return;
+
+  await new Promise<void>((resolve) => {
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    let killWaitTimer: NodeJS.Timeout | undefined;
+    let finished = false;
+    const finish = (): void => {
+      if (finished) return;
+      finished = true;
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (killWaitTimer) clearTimeout(killWaitTimer);
+      child.off("exit", finish);
+      resolve();
+    };
+
+    child.once("exit", finish);
+    if (childHasExited(child)) {
+      finish();
+      return;
+    }
+
+    child.kill("SIGTERM");
+    forceKillTimer = setTimeout(() => {
+      if (!childHasExited(child)) {
+        console.error(`[opencode-remote] OpenCode did not stop after ${context}; sending SIGKILL`);
+        child.kill("SIGKILL");
+      }
+      killWaitTimer = setTimeout(() => {
+        if (!childHasExited(child)) {
+          console.error(`[opencode-remote] OpenCode is still running after ${context} SIGKILL`);
+        }
+        finish();
+      }, startupKillWaitMs);
+    }, startupTerminationGraceMs);
+  });
+}
+
 async function refreshSessionPath(): Promise<void> {
   try {
     activeSessionPath = await resolveActiveSessionPath();
@@ -1457,78 +1528,126 @@ async function refreshSessionPath(): Promise<void> {
 
 async function main(): Promise<void> {
   // 1. Spawn OpenCode headless server
-  console.log(`[opencode-remote] spawning opencode serve in ${config.opencodeDirectory}`);
-  const opencodeCmd = resolveOpenCodeCommand({
-    explicitPath: process.env.OPENCODE_CLI_PATH,
-    localAppData: process.env.LOCALAPPDATA ?? "",
-  });
-  const oc = spawn(
-    opencodeCmd,
-    ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],
-    {
-      cwd: config.opencodeDirectory,
-      stdio: "inherit",
-      shell: false,
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: "" },
-    },
-  );
+  let oc = spawnOpenCode();
   let shuttingDown = false;
-  const startupTerminationGraceMs = 3_000;
-  const startupKillWaitMs = 2_000;
+  let restartingForDrift = false;
+  let driftRestartChild: ChildProcess | undefined;
+  let ownsOpenCodeProcess = true;
+
   const cleanupOpenCodeAfterStartupFailure = async (): Promise<void> => {
     if (process.platform === "win32") return;
 
     shuttingDown = true;
-    if (oc.exitCode !== null || oc.signalCode !== null) return;
+    await terminateOpenCodeChild(oc, "startup failure");
+  };
 
-    await new Promise<void>((resolve) => {
-      let forceKillTimer: NodeJS.Timeout | undefined;
-      let killWaitTimer: NodeJS.Timeout | undefined;
-      let finished = false;
-      const finish = (): void => {
-        if (finished) return;
-        finished = true;
-        if (forceKillTimer) clearTimeout(forceKillTimer);
-        if (killWaitTimer) clearTimeout(killWaitTimer);
-        oc.off("exit", finish);
-        resolve();
-      };
-
-      oc.once("exit", finish);
-      if (oc.exitCode !== null || oc.signalCode !== null) {
-        finish();
-        return;
-      }
-
-      oc.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => {
-        if (oc.exitCode === null && oc.signalCode === null) {
-          console.error("[opencode-remote] OpenCode did not stop after startup failure; sending SIGKILL");
-          oc.kill("SIGKILL");
+  const attachOpenCodeExitHandler = (child: ChildProcess): void => {
+    child.on("exit", async (code) => {
+      if (shuttingDown) return;
+      if (restartingForDrift && child === driftRestartChild) return;
+      if (child !== oc) return;
+      console.error(`[opencode-remote] opencode exited with code ${code}`);
+      // If another OpenCode is already healthy on this port, don't crash.
+      try {
+        const r = await fetch(`${config.opencodeUrl}/global/health`);
+        const j = (await r.json()) as { healthy?: boolean };
+        if (j.healthy) {
+          ownsOpenCodeProcess = false;
+          console.log("[opencode-remote] existing OpenCode instance is healthy; continuing");
+          return;
         }
-        killWaitTimer = setTimeout(() => {
-          if (oc.exitCode === null && oc.signalCode === null) {
-            console.error("[opencode-remote] OpenCode is still running after startup SIGKILL");
-          }
-          finish();
-        }, startupKillWaitMs);
-      }, startupTerminationGraceMs);
+      } catch { /* fall through */ }
+      process.exit(1);
     });
   };
-  oc.on("exit", async (code) => {
-    if (shuttingDown) return;
-    console.error(`[opencode-remote] opencode exited with code ${code}`);
-    // If another OpenCode is already healthy on this port, don't crash
+  attachOpenCodeExitHandler(oc);
+
+  const fetchLoadedProviderKeys = async (): Promise<Map<string, string>> => {
+    const res = await fetch(`${config.opencodeUrl}/config`);
+    if (!res.ok) throw new Error(`GET /config returned ${res.status}`);
+    return loadedProviderKeys(await res.json());
+  };
+
+  const currentKeyDrift = async (): Promise<string[]> => {
+    const expected = expectedProviderKeys(readFileSync(GLOBAL_CONFIG_PATH, "utf8"), nodeKeyDriftDeps);
+    return detectKeyDrift(expected, await fetchLoadedProviderKeys());
+  };
+
+  const restartOpenCodeForDrift = async (): Promise<void> => {
+    restartingForDrift = true;
+    const previous = oc;
+    driftRestartChild = previous;
     try {
-      const r = await fetch(`${config.opencodeUrl}/global/health`);
-      const j = (await r.json()) as { healthy?: boolean };
-      if (j.healthy) {
-        console.log("[opencode-remote] existing OpenCode instance is healthy; continuing");
-        return;
+      await terminateOpenCodeChild(previous, "key drift restart");
+    } finally {
+      restartingForDrift = false;
+      driftRestartChild = undefined;
+    }
+
+    oc = spawnOpenCode();
+    attachOpenCodeExitHandler(oc);
+
+    try {
+      await waitForOpenCode();
+    } catch (err) {
+      await terminateOpenCodeChild(oc, "failed key drift restart");
+      console.error("[opencode-remote] fatal:", err);
+      process.exit(1);
+    }
+
+    const drift = await currentKeyDrift();
+    if (drift.length > 0) {
+      throw new Error(`provider keys still differ after restart: ${drift.join(", ")}`);
+    }
+    console.log("[opencode-remote] opencode serve restarted; provider keys now match");
+  };
+
+  function startKeyDriftWatchdog(): void {
+    if (config.keyDriftIntervalMs <= 0) {
+      console.log("[opencode-remote] key drift watchdog disabled");
+      return;
+    }
+
+    let running = false;
+    let lastDriftRestartAt = 0;
+    const tick = async (): Promise<void> => {
+      if (running) return;
+      running = true;
+      try {
+        const drift = await currentKeyDrift();
+        if (drift.length === 0) return;
+
+        if (!ownsOpenCodeProcess) {
+          console.warn("[opencode-remote] provider apiKey drift detected but this proxy does not own the opencode process");
+          return;
+        }
+
+        const now = Date.now();
+        const elapsed = now - lastDriftRestartAt;
+        if (lastDriftRestartAt > 0 && elapsed < config.keyDriftRestartCooldownMs) {
+          const waitSeconds = Math.ceil((config.keyDriftRestartCooldownMs - elapsed) / 1_000);
+          console.warn(`[opencode-remote] provider apiKey drift detected; restart cooldown active for ${waitSeconds}s`);
+          return;
+        }
+
+        lastDriftRestartAt = now;
+        console.warn(
+          `[opencode-remote] provider apiKey changed on disk (ids: ${drift.join(", ")}); restarting opencode serve`,
+        );
+        await restartOpenCodeForDrift();
+      } catch (err) {
+        console.warn("[opencode-remote] key drift watchdog failed:", err);
+      } finally {
+        running = false;
       }
-    } catch { /* fall through */ }
-    process.exit(1);
-  });
+    };
+
+    setTimeout(() => { void tick(); }, 15_000);
+    setInterval(() => { void tick(); }, config.keyDriftIntervalMs);
+    console.log(
+      `[opencode-remote] key drift watchdog enabled: interval=${config.keyDriftIntervalMs}ms cooldown=${config.keyDriftRestartCooldownMs}ms`,
+    );
+  }
 
   if (process.platform !== "win32") {
     const shutdown = (signal: NodeJS.Signals): void => {
@@ -1536,11 +1655,11 @@ async function main(): Promise<void> {
       shuttingDown = true;
       console.log(`[opencode-remote] received ${signal}; stopping proxy and OpenCode`);
 
-      let childExited = oc.exitCode !== null;
+      let childExited = childHasExited(oc);
       let serverClosed = !server.listening;
       const forceExit = setTimeout(() => {
         console.error("[opencode-remote] shutdown timed out after 5 seconds");
-        if (oc.exitCode === null) oc.kill("SIGKILL");
+        if (!childHasExited(oc)) oc.kill("SIGKILL");
         process.exit(1);
       }, 5_000);
       forceExit.unref();
@@ -1591,7 +1710,10 @@ async function main(): Promise<void> {
     // 6. Auto-clear OpenCode streams that produced no output and never completed.
     startDeadStreamWatchdog();
 
-    // 7. Start HTTP proxy server
+    // 7. Restart owned OpenCode child when provider apiKey values change on disk.
+    startKeyDriftWatchdog();
+
+    // 8. Start HTTP proxy server
     await new Promise<void>((resolve, reject) => {
       const onStartupError = (err: Error): void => reject(err);
       server.once("error", onStartupError);
