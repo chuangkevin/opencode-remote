@@ -26,6 +26,7 @@ import { resolveOpenCodeCommand } from "./opencode-command.js";
 const remoteResetScript = `(() => {})();\n`;
 const nativeMobileStyle = `<style data-remote-mobile>
 @media (max-width: 767px) {
+  html { zoom: 1.1; }
   [data-component="prompt-input-v2"] [data-component="tooltip-v2-trigger"] { min-width: 0; flex: 0 1 auto; overflow: hidden; }
   [data-component="prompt-input-v2"] [data-action="prompt-model"] { max-width: 100% !important; width: 100%; }
   [data-component="prompt-input-v2"] [data-action="prompt-submit"] { flex-shrink: 0; }
@@ -1009,17 +1010,18 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
           <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
           <meta name="theme-color" content="#0f0f10" />
           <script>(()=>{let p="system";try{const s=localStorage.getItem("opencode-color-scheme");if(["light","dark","system"].includes(s))p=s}catch{}try{const t=p==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):p;const r=document.documentElement;r.dataset.themePreference=p;r.dataset.theme=t;r.style.colorScheme=t;const m=document.querySelector('meta[name="theme-color"]');if(m)m.content=t==="light"?"#f7f7f5":"#0f0f10"}catch{}})()</script>
+          <script>(()=>{let v;try{const s=localStorage.getItem("opencode-font-scale");v=["1","1.15","1.3"].includes(s)?s:(matchMedia("(max-width: 767px)").matches?"1.15":"1")}catch{v="1"}try{document.documentElement.style.setProperty("--font-scale",v)}catch{}})()</script>
           <title>OpenCode Sessions</title>
           <style>
-            :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --bg: #0f0f10; --surface: #18181b; --surface-hi: #1f1f23; --header-bg: rgba(15,15,16,.94); --border: #27272a; --text: #f4f4f5; --muted: #71717a; --accent: #6366f1; --accent-active: #4f46e5; --pinned-bg: #1a1827; --pinned-border: #4338ca; --pill-bg: #312e81; --pill-text: #c7d2fe; --running: #22c55e; --running-glow: rgba(34,197,94,.16); --running-glow-wide: rgba(34,197,94,.1); }
+            :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --bg: #0f0f10; --surface: #18181b; --surface-hi: #1f1f23; --header-bg: rgba(15,15,16,.94); --border: #27272a; --text: #f4f4f5; --muted: #71717a; --accent: #6366f1; --accent-active: #4f46e5; --pinned-bg: #1a1827; --pinned-border: #4338ca; --pill-bg: #312e81; --pill-text: #c7d2fe; --running: #22c55e; --running-glow: rgba(34,197,94,.16); --running-glow-wide: rgba(34,197,94,.1); --font-scale: 1; }
             :root[data-theme="light"] { color-scheme: light; --bg: #f7f7f5; --surface: #ffffff; --surface-hi: #f0f0ed; --header-bg: rgba(247,247,245,.94); --border: #d7d7d2; --text: #202023; --muted: #686970; --accent: #4f46e5; --accent-active: #4338ca; --pinned-bg: #eeecff; --pinned-border: #8179e7; --pill-bg: #e8e7ff; --pill-text: #3730a3; --running: #15803d; --running-glow: rgba(21,128,61,.18); --running-glow-wide: rgba(21,128,61,.12); }
             * { box-sizing: border-box; }
-            body { margin: 0; background: var(--bg); color: var(--text); padding: max(8px, env(safe-area-inset-top)) 10px max(14px, env(safe-area-inset-bottom)); font-size: 14px; line-height: 1.4; overflow-x: hidden; }
+            body { margin: 0; background: var(--bg); color: var(--text); padding: max(8px, env(safe-area-inset-top)) 10px max(14px, env(safe-area-inset-bottom)); font-size: calc(14px * var(--font-scale)); line-height: 1.4; overflow-x: hidden; }
             header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 6px 12px; min-height: 52px; background: var(--header-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
             h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
             .new-btn { min-height: 44px; background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; text-decoration: none; line-height: 1; }
             .new-btn:active { background: var(--accent-active); }
-            .theme-toggle { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-size: 17px; cursor: pointer; }
+            .theme-toggle, .font-scale-toggle { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-size: 17px; cursor: pointer; }
             .session { position: relative; padding: 8px 10px 8px 46px; min-height: 52px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
             .session:active { background: var(--surface-hi); }
             .session.is-pinned { border-color: var(--pinned-border); background: var(--pinned-bg); }
@@ -1027,16 +1029,16 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
             .pin-btn.pinned { opacity: 1; filter: none; }
             .pin-btn:active { transform: translateY(-50%) scale(0.92); }
             .session-link { display: flex; align-items: baseline; gap: 8px; color: inherit; text-decoration: none; padding-right: 76px; min-width: 0; }
-            .session-link strong { display: flex; align-items: center; gap: 7px; flex: 1; font-size: 13.5px; font-weight: 500; line-height: 1.3; min-width: 0; color: var(--text); }
+            .session-link strong { display: flex; align-items: center; gap: 7px; flex: 1; font-size: calc(13.5px * var(--font-scale)); font-weight: 500; line-height: 1.3; min-width: 0; color: var(--text); }
             .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
             .running-indicator { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--running); box-shadow: 0 0 0 2px var(--running-glow); animation: running-pulse 1.8s ease-in-out infinite; }
             .running-indicator[hidden] { display: none; }
             @keyframes running-pulse { 0%, 100% { opacity: .65; } 50% { opacity: 1; box-shadow: 0 0 0 4px var(--running-glow-wide); } }
             @media (prefers-reduced-motion: reduce) { .running-indicator { animation: none; } }
-            .session-link small { flex-shrink: 0; font-size: 11px; color: var(--muted); font-weight: normal; }
+            .session-link small { flex-shrink: 0; font-size: calc(11px * var(--font-scale)); color: var(--muted); font-weight: normal; }
             .compact-btn { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); display: inline-flex; align-items: center; min-height: 44px; font-size: 11px; font-weight: 500; padding: 4px 10px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-text); border: 1px solid var(--pinned-border); text-decoration: none; line-height: 1; }
             .compact-btn:active { background: var(--accent-active); color: #fff; }
-            .empty { padding: 24px 12px; color: var(--muted); font-size: 13px; text-align: center; }
+            .empty { padding: 24px 12px; color: var(--muted); font-size: calc(13px * var(--font-scale)); text-align: center; }
             @media (max-width: 767px) { header { gap: 4px; } .session-link { gap: 5px; padding-right: 82px; } .session-link small { display: none; } }
             @media (min-width: 768px) and (max-width: 1023px) { body { padding-inline: 16px; } header { margin-inline: -16px; } }
           </style>
@@ -1044,6 +1046,7 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
         <body>
           <header>
             <h1>工作階段</h1>
+            <button class="font-scale-toggle" type="button" data-font-scale-cycle aria-label="切換字級">Aa</button>
             <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
             <form method="post" action="/c/new-session" style="margin:0;">
               <button class="new-btn" type="submit">+ 新</button>
@@ -1072,6 +1075,7 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
               }
             });
           </script>
+          <script type="module" src="/c/static/font-scale.js"></script>
           <script type="module" src="/c/static/theme.js"></script>
           <script type="module" src="/c/static/remote-sessions.js"></script>
         </body>

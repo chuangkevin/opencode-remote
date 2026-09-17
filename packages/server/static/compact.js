@@ -10,6 +10,7 @@
   normalizePromptModel,
   reconcileModelAfterInitialization,
 } from "./compact-model.js";
+import { getFontScale, setFontScale } from "./font-scale.js";
 
 // ─── State ─────────────────────────────────────────────────
 const sessionID = document.body.dataset.sessionId;
@@ -1824,6 +1825,9 @@ function buildMoreMenu() {
   menu.className = "header-menu";
   menu.hidden = true;
   menu.innerHTML = `
+    <button type="button" data-action="font-small" data-font-scale="1">字級：小</button>
+    <button type="button" data-action="font-medium" data-font-scale="1.15">字級：中</button>
+    <button type="button" data-action="font-large" data-font-scale="1.3">字級：大</button>
     <button type="button" data-action="pin" data-pinned="0">📌 釘選此 session</button>
     <button type="button" data-action="new">+ 新 session</button>
     <button type="button" data-action="native">在 OpenCode 原生介面打開</button>
@@ -1835,12 +1839,26 @@ function buildMoreMenu() {
     if (!btn) return;
     const action = btn.dataset.action;
     closeMoreMenu();
-    if (action === "pin") doTogglePin();
+    if (action?.startsWith("font-")) {
+      setFontScale(btn.dataset.fontScale);
+      refreshFontScaleMenuLabel();
+    } else if (action === "pin") doTogglePin();
     else if (action === "new") doNewSession();
     else if (action === "native") doOpenNative();
     else if (action === "delete") doDeleteSession();
   });
   return menu;
+}
+
+function refreshFontScaleMenuLabel() {
+  if (!moreMenu) return;
+  const current = getFontScale();
+  for (const btn of moreMenu.querySelectorAll("[data-font-scale]")) {
+    const active = btn.dataset.fontScale === current;
+    const label = btn.dataset.action === "font-small" ? "小" : btn.dataset.action === "font-medium" ? "中" : "大";
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+    btn.textContent = `${active ? "✓ " : ""}字級：${label}`;
+  }
 }
 
 async function refreshPinMenuLabel() {
@@ -1873,6 +1891,7 @@ async function doTogglePin() {
 
 function openMoreMenu() {
   if (!moreMenu) moreMenu = buildMoreMenu();
+  refreshFontScaleMenuLabel();
   const r = moreBtn.getBoundingClientRect();
   moreMenu.style.top = `${r.bottom + 4}px`;
   moreMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;

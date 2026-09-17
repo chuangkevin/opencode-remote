@@ -22,6 +22,7 @@ const ALLOWED: Record<string, string> = {
   "marked.min.js": "application/javascript; charset=utf-8",
   "remote-sessions.js": "application/javascript; charset=utf-8",
   "theme.js": "application/javascript; charset=utf-8",
+  "font-scale.js": "application/javascript; charset=utf-8",
 };
 
 export function handleCompactStatic(req: http.IncomingMessage, res: http.ServerResponse): void {

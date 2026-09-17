@@ -329,6 +329,7 @@ test("injects the mobile prompt style once alongside the native preferences", as
   const inject = built.indexOf("function injectRemoteReset");
   assert.ok(style >= 0 && inject >= 0 && style < inject);
   assert.match(built, /<style data-remote-mobile>/);
+  assert.match(built, /html \{ zoom: 1\.1; \}/);
   assert.match(built, /\[data-component="prompt-input-v2"\] \[data-action="prompt-model"\]/);
   assert.match(built, /\[data-component="prompt-input-v2"\] \[data-action="prompt-submit"\]/);
   assert.equal(built.match(/\$\{nativeMobileStyle\}\$\{nativePreferencesScript\}/g)?.length, 3);
