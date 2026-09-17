@@ -43,13 +43,14 @@ function fixture(storedScale, mobile = false) {
 }
 
 test("chooses the expected default font scale", () => {
-  assert.equal(defaultFontScale({ window: fixture(undefined, true).window }), "1.15");
+  assert.equal(defaultFontScale({ window: fixture(undefined, true).window }), "1.3");
   assert.equal(defaultFontScale({ window: fixture(undefined, false).window }), "1");
 });
 
 test("reads stored font scale and falls back from invalid storage", () => {
   assert.equal(getFontScale({ window: fixture("1.3", true).window }), "1.3");
-  assert.equal(getFontScale({ window: fixture("2", true).window }), "1.15");
+  assert.equal(getFontScale({ window: fixture("1.45", true).window }), "1.45");
+  assert.equal(getFontScale({ window: fixture("2", true).window }), "1.3");
   assert.equal(getFontScale({ window: fixture("2", false).window }), "1");
 });
 

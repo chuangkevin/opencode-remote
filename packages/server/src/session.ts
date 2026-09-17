@@ -11,16 +11,23 @@ export type OpenCodeSession = {
   time: { created: number; updated: number };
 };
 
+export const RECENT_SESSION_WINDOW_MS = 3 * 24 * 3600 * 1000;
+
 export async function listSessions(): Promise<OpenCodeSession[]> {
-  const res = await fetch(`${config.opencodeUrl}/session`);
+  const url = new URL(`${config.opencodeUrl}/session`);
+  url.searchParams.set("limit", "20");
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`OpenCode /session returned ${res.status}`);
   return res.json() as Promise<OpenCodeSession[]>;
 }
 
-export async function listSessionPickerSessions(): Promise<OpenCodeSession[]> {
+export async function listSessionPickerSessions(
+  options: { sinceMs?: number; limit?: number } = {},
+): Promise<OpenCodeSession[]> {
   const url = new URL(`${config.opencodeUrl}/session`);
   url.searchParams.set("roots", "true");
-  url.searchParams.set("limit", "1000");
+  url.searchParams.set("limit", String(options.limit ?? 200));
+  if (options.sinceMs !== undefined) url.searchParams.set("start", String(options.sinceMs));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`OpenCode /session returned ${res.status}`);
   return res.json() as Promise<OpenCodeSession[]>;
@@ -67,7 +74,7 @@ export async function mergePinnedSessions(
 ): Promise<OpenCodeSession[]> {
   const pinnedSet = new Set(pinnedIds);
   const byId = new Map(sessions.filter(isUserSession).map((session) => [session.id, session]));
-  const missingPinnedIds = [...pinnedSet].filter((id) => !byId.has(id));
+  const missingPinnedIds = [...pinnedSet].filter((id) => !byId.has(id)).slice(0, 20);
   const recovered = await Promise.all(missingPinnedIds.map(loadSession));
 
   for (const session of recovered) {

@@ -1828,6 +1828,7 @@ function buildMoreMenu() {
     <button type="button" data-action="font-small" data-font-scale="1">字級：小</button>
     <button type="button" data-action="font-medium" data-font-scale="1.15">字級：中</button>
     <button type="button" data-action="font-large" data-font-scale="1.3">字級：大</button>
+    <button type="button" data-action="font-xlarge" data-font-scale="1.45">字級：特大</button>
     <button type="button" data-action="pin" data-pinned="0">📌 釘選此 session</button>
     <button type="button" data-action="new">+ 新 session</button>
     <button type="button" data-action="native">在 OpenCode 原生介面打開</button>
@@ -1855,7 +1856,13 @@ function refreshFontScaleMenuLabel() {
   const current = getFontScale();
   for (const btn of moreMenu.querySelectorAll("[data-font-scale]")) {
     const active = btn.dataset.fontScale === current;
-    const label = btn.dataset.action === "font-small" ? "小" : btn.dataset.action === "font-medium" ? "中" : "大";
+    const label = btn.dataset.action === "font-small"
+      ? "小"
+      : btn.dataset.action === "font-medium"
+        ? "中"
+        : btn.dataset.action === "font-large"
+          ? "大"
+          : "特大";
     btn.setAttribute("aria-pressed", active ? "true" : "false");
     btn.textContent = `${active ? "✓ " : ""}字級：${label}`;
   }

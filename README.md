@@ -135,6 +135,9 @@ OPENCODE_CLI_PATH=                              # 可選：非標準 opencode-cl
 Proxy 會定時比對 `~/.config/opencode/opencode.jsonc` 與子行程 `GET /config` 已載入的 provider `apiKey`；同一 provider 兩邊不同時會重啟自己啟動的 `opencode serve`。
 `OPENCODE_KEY_DRIFT_INTERVAL_MS` 控制檢查間隔，預設 `300000`，設 `0` 停用；`OPENCODE_KEY_DRIFT_COOLDOWN_MS` 控制重啟防抖，預設 `600000`。
 看到 `[opencode-remote] provider apiKey changed on disk ...` 表示已偵測到變更並開始重啟。
+Proxy 也會對 `GET /global/health` 做健康探針；連續 3 次約 60 秒沒回應就重啟自己啟動的 `opencode serve`。
+可調整 `OPENCODE_HEALTH_WATCHDOG_INTERVAL_MS`、`OPENCODE_HEALTH_WATCHDOG_TIMEOUT_MS`、`OPENCODE_HEALTH_WATCHDOG_FAILURES`、`OPENCODE_HEALTH_WATCHDOG_COOLDOWN_MS`。
+看到 `[opencode-remote] opencode serve unresponsive ...; restarting` 表示 health watchdog 已開始重啟。
 
 ## 架構
 

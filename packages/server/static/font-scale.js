@@ -1,10 +1,11 @@
 export const FONT_SCALE_STORAGE_KEY = "opencode-font-scale";
 
-const scales = ["1", "1.15", "1.3"];
+const scales = ["1", "1.15", "1.3", "1.45"];
 const labels = {
   "1": "小",
   "1.15": "中",
   "1.3": "大",
+  "1.45": "特大",
 };
 
 export function normalizeFontScale(value) {
@@ -13,7 +14,7 @@ export function normalizeFontScale(value) {
 
 export function defaultFontScale({ window } = globalThis) {
   try {
-    return window.matchMedia("(max-width: 767px)").matches ? "1.15" : "1";
+    return window.matchMedia("(max-width: 767px)").matches ? "1.3" : "1";
   } catch {
     return "1";
   }

@@ -13,7 +13,12 @@ import {
   loadedProviderKeys,
   nodeKeyDriftDeps,
 } from "./key-drift.js";
-import { encodeDirSlug, listSessionPickerSessions, mergePinnedSessions, resolveActiveSessionPath } from "./session.js";
+import {
+  healthRestartCooldownRemainingMs,
+  initialHealthWatchdogState,
+  nextHealthState,
+} from "./health-watchdog.js";
+import { RECENT_SESSION_WINDOW_MS, encodeDirSlug, listSessionPickerSessions, mergePinnedSessions, resolveActiveSessionPath } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
@@ -26,7 +31,7 @@ import { resolveOpenCodeCommand } from "./opencode-command.js";
 const remoteResetScript = `(() => {})();\n`;
 const nativeMobileStyle = `<style data-remote-mobile>
 @media (max-width: 767px) {
-  html { zoom: 1.1; }
+  html { zoom: 1.2; }
   [data-component="prompt-input-v2"] [data-component="tooltip-v2-trigger"] { min-width: 0; flex: 0 1 auto; overflow: hidden; }
   [data-component="prompt-input-v2"] [data-action="prompt-model"] { max-width: 100% !important; width: 100%; }
   [data-component="prompt-input-v2"] [data-action="prompt-submit"] { flex-shrink: 0; }
@@ -969,14 +974,59 @@ function formatTime(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
-async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
+type RemoteSessionsWindow = "3d" | "30d" | "all";
+
+function parseRemoteSessionsWindow(req: http.IncomingMessage): RemoteSessionsWindow {
   try {
+    const window = new URL(req.url ?? "/remote-sessions", "http://opencode-remote.local").searchParams.get("window");
+    return window === "30d" || window === "all" ? window : "3d";
+  } catch {
+    return "3d";
+  }
+}
+
+function remoteSessionsWindowLabel(window: RemoteSessionsWindow): string {
+  if (window === "30d") return "30 天內";
+  if (window === "all") return "全部";
+  return "3 天內";
+}
+
+function remoteSessionsEmptyMessage(window: RemoteSessionsWindow): string {
+  if (window === "30d") return "30 天內沒有工作階段";
+  if (window === "all") return "沒有工作階段";
+  return "3 天內沒有工作階段";
+}
+
+function remoteSessionsNextWindow(window: RemoteSessionsWindow): RemoteSessionsWindow | undefined {
+  if (window === "3d") return "30d";
+  if (window === "30d") return "all";
+  return undefined;
+}
+
+function remoteSessionsLoadMoreLabel(nextWindow: RemoteSessionsWindow | undefined): string {
+  if (nextWindow === "30d") return "載入更多（30 天）";
+  if (nextWindow === "all") return "載入全部";
+  return "已載入全部";
+}
+
+async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  try {
+    const windowKey = parseRemoteSessionsWindow(req);
+    const now = Date.now();
+    const sessionOptions = windowKey === "all"
+      ? { limit: 1000 }
+      : {
+          sinceMs: now - (windowKey === "30d" ? 10 * RECENT_SESSION_WINDOW_MS : RECENT_SESSION_WINDOW_MS),
+        };
     const [allSessions, pinnedIds] = await Promise.all([
-      listSessionPickerSessions(),
+      listSessionPickerSessions(sessionOptions),
       listPins(),
     ]);
     const pinnedSet = new Set(pinnedIds);
     const ordered = await mergePinnedSessions(allSessions, pinnedIds);
+    const windowLabel = remoteSessionsWindowLabel(windowKey);
+    const nextWindow = remoteSessionsNextWindow(windowKey);
+    const loadMoreLabel = remoteSessionsLoadMoreLabel(nextWindow);
 
     const items = ordered.map((session) => {
       const nativePath = `/${encodeDirSlug(session.directory)}/session/${session.id}`;
@@ -1010,7 +1060,7 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
           <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
           <meta name="theme-color" content="#0f0f10" />
           <script>(()=>{let p="system";try{const s=localStorage.getItem("opencode-color-scheme");if(["light","dark","system"].includes(s))p=s}catch{}try{const t=p==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):p;const r=document.documentElement;r.dataset.themePreference=p;r.dataset.theme=t;r.style.colorScheme=t;const m=document.querySelector('meta[name="theme-color"]');if(m)m.content=t==="light"?"#f7f7f5":"#0f0f10"}catch{}})()</script>
-          <script>(()=>{let v;try{const s=localStorage.getItem("opencode-font-scale");v=["1","1.15","1.3"].includes(s)?s:(matchMedia("(max-width: 767px)").matches?"1.15":"1")}catch{v="1"}try{document.documentElement.style.setProperty("--font-scale",v)}catch{}})()</script>
+          <script>(()=>{let v;try{const s=localStorage.getItem("opencode-font-scale");v=["1","1.15","1.3","1.45"].includes(s)?s:(matchMedia("(max-width: 767px)").matches?"1.3":"1")}catch{v="1"}try{document.documentElement.style.setProperty("--font-scale",v)}catch{}})()</script>
           <title>OpenCode Sessions</title>
           <style>
             :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --bg: #0f0f10; --surface: #18181b; --surface-hi: #1f1f23; --header-bg: rgba(15,15,16,.94); --border: #27272a; --text: #f4f4f5; --muted: #71717a; --accent: #6366f1; --accent-active: #4f46e5; --pinned-bg: #1a1827; --pinned-border: #4338ca; --pill-bg: #312e81; --pill-text: #c7d2fe; --running: #22c55e; --running-glow: rgba(34,197,94,.16); --running-glow-wide: rgba(34,197,94,.1); --font-scale: 1; }
@@ -1019,8 +1069,13 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
             body { margin: 0; background: var(--bg); color: var(--text); padding: max(8px, env(safe-area-inset-top)) 10px max(14px, env(safe-area-inset-bottom)); font-size: calc(14px * var(--font-scale)); line-height: 1.4; overflow-x: hidden; }
             header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 6px 12px; min-height: 52px; background: var(--header-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
             h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
+            .window-label { color: var(--muted); font-size: 12px; font-weight: 500; margin-left: 3px; }
             .new-btn { min-height: 44px; background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; text-decoration: none; line-height: 1; }
             .new-btn:active { background: var(--accent-active); }
+            .load-more-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; margin-top: 8px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+            .load-more-btn:active { background: var(--surface-hi); }
+            .load-more-btn:disabled { cursor: default; opacity: .65; }
+            .load-more-btn[hidden] { display: none; }
             .theme-toggle, .font-scale-toggle { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-size: 17px; cursor: pointer; }
             .session { position: relative; padding: 8px 10px 8px 46px; min-height: 52px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
             .session:active { background: var(--surface-hi); }
@@ -1043,16 +1098,17 @@ async function handleRemoteSessions(res: http.ServerResponse): Promise<void> {
             @media (min-width: 768px) and (max-width: 1023px) { body { padding-inline: 16px; } header { margin-inline: -16px; } }
           </style>
         </head>
-        <body>
+        <body data-window="${windowKey}">
           <header>
-            <h1>工作階段</h1>
+            <h1>工作階段<span class="window-label">（${windowLabel}）</span></h1>
             <button class="font-scale-toggle" type="button" data-font-scale-cycle aria-label="切換字級">Aa</button>
             <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
             <form method="post" action="/c/new-session" style="margin:0;">
               <button class="new-btn" type="submit">+ 新</button>
             </form>
           </header>
-          <div id="sessionList">${items || "<div class='empty'>目前沒有工作階段</div>"}</div>
+          <div id="sessionList">${items || `<div class="empty">${remoteSessionsEmptyMessage(windowKey)}</div>`}</div>
+          <button class="load-more-btn" type="button" data-next-window="${nextWindow ?? ""}"${nextWindow ? "" : " hidden disabled"}>${loadMoreLabel}</button>
           <script>
             document.addEventListener("click", async function (e) {
               const btn = e.target.closest("[data-pin-toggle]");
@@ -1201,8 +1257,8 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.method === "GET" && req.url === "/remote-sessions") {
-    void handleRemoteSessions(res);
+  if (req.method === "GET" && req.url && new URL(req.url, "http://opencode-remote.local").pathname === "/remote-sessions") {
+    void handleRemoteSessions(req, res);
     return;
   }
 
@@ -1479,6 +1535,21 @@ async function waitForOpenCode(): Promise<void> {
   throw new Error("OpenCode did not become healthy within 60 seconds");
 }
 
+async function probeOpenCodeHealth(timeoutMs: number): Promise<boolean> {
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), Math.max(1, timeoutMs));
+  try {
+    const res = await fetch(`${config.opencodeUrl}/global/health`, { signal: abort.signal });
+    if (res.status !== 200) return false;
+    const json = (await res.json()) as { healthy?: boolean };
+    return json.healthy === true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function childHasExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
@@ -1534,8 +1605,8 @@ async function main(): Promise<void> {
   // 1. Spawn OpenCode headless server
   let oc = spawnOpenCode();
   let shuttingDown = false;
-  let restartingForDrift = false;
-  let driftRestartChild: ChildProcess | undefined;
+  let restartingChild = false;
+  let restartingChildRef: ChildProcess | undefined;
   let ownsOpenCodeProcess = true;
 
   const cleanupOpenCodeAfterStartupFailure = async (): Promise<void> => {
@@ -1548,7 +1619,7 @@ async function main(): Promise<void> {
   const attachOpenCodeExitHandler = (child: ChildProcess): void => {
     child.on("exit", async (code) => {
       if (shuttingDown) return;
-      if (restartingForDrift && child === driftRestartChild) return;
+      if (restartingChildRef && child === restartingChildRef) return;
       if (child !== oc) return;
       console.error(`[opencode-remote] opencode exited with code ${code}`);
       // If another OpenCode is already healthy on this port, don't crash.
@@ -1577,33 +1648,27 @@ async function main(): Promise<void> {
     return detectKeyDrift(expected, await fetchLoadedProviderKeys());
   };
 
-  const restartOpenCodeForDrift = async (): Promise<void> => {
-    restartingForDrift = true;
+  const restartOpenCodeChild = async (reason: string): Promise<void> => {
+    if (restartingChild) throw new Error("opencode restart already in progress");
+    restartingChild = true;
     const previous = oc;
-    driftRestartChild = previous;
+    restartingChildRef = previous;
     try {
-      await terminateOpenCodeChild(previous, "key drift restart");
+      await terminateOpenCodeChild(previous, `${reason} restart`);
+      oc = spawnOpenCode();
+      attachOpenCodeExitHandler(oc);
+
+      try {
+        await waitForOpenCode();
+      } catch (err) {
+        await terminateOpenCodeChild(oc, `failed ${reason} restart`);
+        console.error("[opencode-remote] fatal:", err);
+        process.exit(1);
+      }
     } finally {
-      restartingForDrift = false;
-      driftRestartChild = undefined;
+      restartingChild = false;
+      restartingChildRef = undefined;
     }
-
-    oc = spawnOpenCode();
-    attachOpenCodeExitHandler(oc);
-
-    try {
-      await waitForOpenCode();
-    } catch (err) {
-      await terminateOpenCodeChild(oc, "failed key drift restart");
-      console.error("[opencode-remote] fatal:", err);
-      process.exit(1);
-    }
-
-    const drift = await currentKeyDrift();
-    if (drift.length > 0) {
-      throw new Error(`provider keys still differ after restart: ${drift.join(", ")}`);
-    }
-    console.log("[opencode-remote] opencode serve restarted; provider keys now match");
   };
 
   function startKeyDriftWatchdog(): void {
@@ -1615,7 +1680,7 @@ async function main(): Promise<void> {
     let running = false;
     let lastDriftRestartAt = 0;
     const tick = async (): Promise<void> => {
-      if (running) return;
+      if (running || restartingChild) return;
       running = true;
       try {
         const drift = await currentKeyDrift();
@@ -1638,7 +1703,12 @@ async function main(): Promise<void> {
         console.warn(
           `[opencode-remote] provider apiKey changed on disk (ids: ${drift.join(", ")}); restarting opencode serve`,
         );
-        await restartOpenCodeForDrift();
+        await restartOpenCodeChild("key drift");
+        const remainingDrift = await currentKeyDrift();
+        if (remainingDrift.length > 0) {
+          throw new Error(`provider keys still differ after restart: ${remainingDrift.join(", ")}`);
+        }
+        console.log("[opencode-remote] opencode serve restarted; provider keys now match");
       } catch (err) {
         console.warn("[opencode-remote] key drift watchdog failed:", err);
       } finally {
@@ -1650,6 +1720,67 @@ async function main(): Promise<void> {
     setInterval(() => { void tick(); }, config.keyDriftIntervalMs);
     console.log(
       `[opencode-remote] key drift watchdog enabled: interval=${config.keyDriftIntervalMs}ms cooldown=${config.keyDriftRestartCooldownMs}ms`,
+    );
+  }
+
+  function startHealthWatchdog(): void {
+    if (config.healthWatchdogIntervalMs <= 0) {
+      console.log("[opencode-remote] health watchdog disabled");
+      return;
+    }
+
+    let running = false;
+    let state = initialHealthWatchdogState();
+    const opts = {
+      failures: config.healthWatchdogFailures,
+      restartCooldownMs: config.healthWatchdogRestartCooldownMs,
+    };
+
+    const tick = async (): Promise<void> => {
+      if (running || restartingChild) return;
+      running = true;
+      try {
+        const probeOk = await probeOpenCodeHealth(config.healthWatchdogTimeoutMs);
+        const result = nextHealthState(state, probeOk, Date.now(), opts);
+        state = result.state;
+
+        if (result.action === "recovered") {
+          console.warn("[opencode-remote] opencode serve health recovered");
+          return;
+        }
+
+        if (result.action === "cooldown") {
+          const waitSeconds = Math.ceil(healthRestartCooldownRemainingMs(state, Date.now(), opts) / 1_000);
+          console.warn(`[opencode-remote] opencode serve unresponsive; restart cooldown active for ${waitSeconds}s`);
+          return;
+        }
+
+        if (result.action !== "restart") return;
+
+        const failures = Math.max(1, config.healthWatchdogFailures);
+        if (!ownsOpenCodeProcess) {
+          console.warn(
+            `[opencode-remote] opencode serve unresponsive (${failures} consecutive health probe failures) but this proxy does not own the opencode process`,
+          );
+          state = initialHealthWatchdogState();
+          return;
+        }
+
+        console.warn(
+          `[opencode-remote] opencode serve unresponsive (${failures} consecutive health probe failures); restarting`,
+        );
+        await restartOpenCodeChild("health watchdog");
+        console.warn("[opencode-remote] opencode serve restarted by health watchdog");
+      } catch (err) {
+        console.warn("[opencode-remote] health watchdog failed:", err);
+      } finally {
+        running = false;
+      }
+    };
+
+    setInterval(() => { void tick(); }, config.healthWatchdogIntervalMs);
+    console.log(
+      `[opencode-remote] health watchdog enabled: interval=${config.healthWatchdogIntervalMs}ms timeout=${config.healthWatchdogTimeoutMs}ms failures=${config.healthWatchdogFailures} cooldown=${config.healthWatchdogRestartCooldownMs}ms`,
     );
   }
 
@@ -1717,7 +1848,10 @@ async function main(): Promise<void> {
     // 7. Restart owned OpenCode child when provider apiKey values change on disk.
     startKeyDriftWatchdog();
 
-    // 8. Start HTTP proxy server
+    // 8. Restart owned OpenCode child when health probes stop responding.
+    startHealthWatchdog();
+
+    // 9. Start HTTP proxy server
     await new Promise<void>((resolve, reject) => {
       const onStartupError = (err: Error): void => reject(err);
       server.once("error", onStartupError);

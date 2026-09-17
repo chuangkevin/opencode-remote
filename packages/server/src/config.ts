@@ -24,5 +24,9 @@ export const config = {
   deadStreamWatchdogMinAgeMs: parseNumber(process.env.DEAD_STREAM_WATCHDOG_MIN_AGE_MS, 180_000),
   keyDriftIntervalMs: parseNumber(process.env.OPENCODE_KEY_DRIFT_INTERVAL_MS, 300_000),
   keyDriftRestartCooldownMs: parseNumber(process.env.OPENCODE_KEY_DRIFT_COOLDOWN_MS, 600_000),
+  healthWatchdogIntervalMs: parseNumber(process.env.OPENCODE_HEALTH_WATCHDOG_INTERVAL_MS, 20_000),
+  healthWatchdogTimeoutMs: parseNumber(process.env.OPENCODE_HEALTH_WATCHDOG_TIMEOUT_MS, 5_000),
+  healthWatchdogFailures: parseNumber(process.env.OPENCODE_HEALTH_WATCHDOG_FAILURES, 3),
+  healthWatchdogRestartCooldownMs: parseNumber(process.env.OPENCODE_HEALTH_WATCHDOG_COOLDOWN_MS, 120_000),
   updateQuiesceFile: process.env.OPENCODE_UPDATE_QUIESCE_FILE ?? defaultUpdateQuiesceFile,
 };

@@ -206,11 +206,17 @@ test("remote sessions HTML wires an accessible reduced-motion-safe indicator", a
   assert.match(source, /isPathWithinRoot\(session\.directory, config\.opencodeDirectory\)/);
   assert.match(source, /directoryAttribute/);
   assert.match(source, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(source, /<body data-window="\$\{windowKey\}">/);
+  assert.match(source, /class="load-more-btn"/);
+  assert.match(source, /remoteSessionsWindowLabel\(windowKey\)/);
+  assert.match(source, /"30 天內"/);
   assert.match(source, /<script type="module" src="\/c\/static\/remote-sessions\.js"><\/script>/);
 
   const client = await readFile(new URL("../static/remote-sessions.js", import.meta.url), "utf8");
   assert.match(client, /`\/c\/session-status\?directory=/);
   assert.doesNotMatch(client, /`\/session\/status\?directory=/);
+  assert.match(client, /document\.body\?\.dataset\.window/);
+  assert.match(client, /fetch\(remoteSessionsUrl\(\)\)/);
   assert.match(client, /addEventListener\("visibilitychange", handleVisibilityChange\)/);
   assert.match(client, /addEventListener\("pagehide", handlePageHide\)/);
   assert.match(client, /addEventListener\("pageshow", handlePageShow\)/);

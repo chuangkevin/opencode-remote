@@ -215,6 +215,7 @@ echo "Staging runtime allowlist..."
   packages/server/package.json \
   packages/server/dist/config.js \
   packages/server/dist/index.js \
+  packages/server/dist/health-watchdog.js \
   packages/server/dist/key-drift.js \
   packages/server/dist/opencode-command.js \
   packages/server/dist/session.js \

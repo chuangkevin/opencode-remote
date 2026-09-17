@@ -119,9 +119,54 @@ if (typeof document !== "undefined") {
   let lastRefreshTime = 0;
   let isRefreshing = false;
 
+  function currentSessionWindow() {
+    const value = document.body?.dataset.window;
+    return value === "30d" || value === "all" ? value : "3d";
+  }
+
+  function remoteSessionsUrl(windowKey = currentSessionWindow()) {
+    return `/remote-sessions?window=${encodeURIComponent(windowKey)}`;
+  }
+
   function refreshCards() {
     cards = [...document.querySelectorAll(".session[data-session-id][data-session-directory]")];
     directories = [...new Set(cards.map((card) => card.dataset.sessionDirectory))];
+  }
+
+  function applyRemoteSessionsHtml(html) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    const nextList = doc.querySelector("#sessionList");
+    const currentList = document.querySelector("#sessionList");
+    if (!nextList || !currentList) return false;
+
+    currentList.innerHTML = nextList.innerHTML;
+    const nextWindow = doc.body?.dataset.window;
+    if (nextWindow === "3d" || nextWindow === "30d" || nextWindow === "all") {
+      document.body.dataset.window = nextWindow;
+    }
+
+    const nextLabel = doc.querySelector(".window-label");
+    const currentLabel = document.querySelector(".window-label");
+    if (nextLabel && currentLabel) currentLabel.textContent = nextLabel.textContent;
+
+    const nextButton = doc.querySelector(".load-more-btn");
+    const currentButton = document.querySelector(".load-more-btn");
+    if (currentButton) {
+      if (nextButton) {
+        currentButton.textContent = nextButton.textContent;
+        currentButton.dataset.nextWindow = nextButton.dataset.nextWindow || "";
+        currentButton.hidden = nextButton.hidden;
+        currentButton.disabled = nextButton.disabled;
+      } else {
+        currentButton.hidden = true;
+        currentButton.disabled = true;
+        currentButton.dataset.nextWindow = "";
+      }
+    }
+
+    refreshCards();
+    return true;
   }
 
   function applyStatuses(statuses) {
@@ -143,17 +188,11 @@ if (typeof document !== "undefined") {
         if (isRefreshing) return;
         isRefreshing = true;
         try {
-          const response = await fetch("/remote-sessions");
+          const response = await fetch(remoteSessionsUrl());
           if (!response.ok) return;
           const html = await response.text();
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(html, "text/html");
-          const nextList = doc.querySelector("#sessionList");
-          const currentList = document.querySelector("#sessionList");
-          if (nextList && currentList) {
-            currentList.innerHTML = nextList.innerHTML;
+          if (applyRemoteSessionsHtml(html)) {
             lastRefreshTime = Date.now();
-            refreshCards();
             applyStatuses(statuses);
           }
         } catch {
@@ -163,6 +202,29 @@ if (typeof document !== "undefined") {
         }
       }
     },
+  });
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest(".load-more-btn");
+    if (!button) return;
+    event.preventDefault();
+    const nextWindow = button.dataset.nextWindow;
+    if (nextWindow !== "30d" && nextWindow !== "all") return;
+
+    const previousText = button.textContent;
+    button.disabled = true;
+    button.textContent = "載入中…";
+    try {
+      const response = await fetch(remoteSessionsUrl(nextWindow));
+      if (!response.ok) throw new Error(`GET ${remoteSessionsUrl(nextWindow)} returned ${response.status}`);
+      const html = await response.text();
+      if (!applyRemoteSessionsHtml(html)) throw new Error("session list not found");
+      lastRefreshTime = Date.now();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = previousText;
+      console.error(error);
+    }
   });
 
   bindStatusPollerLifecycle(poller, document, window);

@@ -20,7 +20,7 @@ function session(id, updated, parentID) {
   };
 }
 
-test("session picker requests bounded root sessions without changing the active-session fetch", async () => {
+test("session APIs request bounded sessions and optional picker windows", async () => {
   const originalFetch = globalThis.fetch;
   const urls = [];
   globalThis.fetch = async (url) => {
@@ -31,16 +31,22 @@ test("session picker requests bounded root sessions without changing the active-
   try {
     await listSessions();
     await listSessionPickerSessions();
+    await listSessionPickerSessions({ sinceMs: 123456789 });
   } finally {
     globalThis.fetch = originalFetch;
   }
 
-  assert.equal(urls.length, 2);
+  assert.equal(urls.length, 3);
   assert.equal(urls[0].pathname, "/session");
-  assert.equal(urls[0].search, "");
+  assert.equal(urls[0].searchParams.get("limit"), "20");
   assert.equal(urls[1].pathname, "/session");
   assert.equal(urls[1].searchParams.get("roots"), "true");
-  assert.equal(urls[1].searchParams.get("limit"), "1000");
+  assert.equal(urls[1].searchParams.get("limit"), "200");
+  assert.equal(urls[1].searchParams.has("start"), false);
+  assert.equal(urls[2].pathname, "/session");
+  assert.equal(urls[2].searchParams.get("roots"), "true");
+  assert.equal(urls[2].searchParams.get("limit"), "200");
+  assert.equal(urls[2].searchParams.get("start"), "123456789");
 });
 
 test("recovers missing pins, deduplicates present pins, and orders pins first", async () => {
@@ -64,6 +70,20 @@ test("recovers missing pins, deduplicates present pins, and orders pins first", 
     "ses_present",
     "ses_recent",
   ]);
+});
+
+test("recovers at most twenty missing pinned sessions", async () => {
+  const requested = [];
+  const pinnedIds = Array.from({ length: 25 }, (_, index) => `ses_pin_${index}`);
+
+  const merged = await mergePinnedSessions([], pinnedIds, async (id) => {
+    requested.push(id);
+    return session(id, requested.length);
+  });
+
+  assert.equal(requested.length, 20);
+  assert.deepEqual(requested, pinnedIds.slice(0, 20));
+  assert.equal(merged.length, 20);
 });
 
 test("single-session lookup treats only 404 as absent", async () => {
