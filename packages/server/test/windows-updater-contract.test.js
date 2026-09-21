@@ -214,3 +214,10 @@ test("Windows start exports the workspace with forward slashes so OpenCode file 
   assert.ok(line.includes("-replace"), `workspace must be normalised before export: ${line.trim()}`);
   assert.ok(line.includes("'/'"), `workspace must be exported with forward slashes: ${line.trim()}`);
 });
+
+test("Windows runtime splits process command lines as UTF-16 (CommandLineToArgvW needs CharSet.Unicode)", async () => {
+  const runtime = await readFile(new URL("../../../deploy/windows/opencode-remote-runtime.psm1", import.meta.url), "utf8");
+  // 少了 CharSet.Unicode 時整條命令列會被當 ANSI 丟給 W 版 API，切出來是亂碼，
+  // 擁有權檢查永遠 false，stop/restart/update 全部拒絕（2026-09-21 kevinhome）。
+  assert.match(runtime, /\[DllImport\("shell32\.dll", SetLastError = true, CharSet = CharSet\.Unicode\)\]\s*\n\s*private static extern IntPtr CommandLineToArgvW\(/);
+});

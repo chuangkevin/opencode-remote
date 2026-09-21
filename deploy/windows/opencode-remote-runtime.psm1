@@ -14,7 +14,9 @@ using System.Runtime.InteropServices;
 
 namespace OpenCodeRemote {
     public static class NativeCommandLine {
-        [DllImport("shell32.dll", SetLastError = true)]
+        // CharSet.Unicode 必加：CommandLineToArgvW 吃 UTF-16，預設 ANSI marshal 會把整條命令列變亂碼，
+        // 導致 Test-OwnedProxyProcess 永遠 false、stop/restart 全部丟「port is held by a process not owned」（2026-09-21 kevinhome 實測）。
+        [DllImport("shell32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
 
         [DllImport("kernel32.dll")]
