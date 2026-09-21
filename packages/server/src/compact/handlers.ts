@@ -130,49 +130,25 @@ export function handleCompactSession(sessionID: string, res: http.ServerResponse
 // "OpenCode model-picker filter standard"): exclude providerID opencode-go and
 // openai, keep only models with cost.input === 0 && cost.output === 0. Missing
 // cost is treated as free so local/custom providers (e.g. local-llm) survive.
-const PICKER_EXCLUDE_PROVIDERS = new Set(["opencode-go", "openai"]);
-
-function isFreeModel(m: { cost?: { input?: number; output?: number } }): boolean {
-  return (m?.cost?.input ?? 0) === 0 && (m?.cost?.output ?? 0) === 0;
-}
-
 export async function handleCompactProviders(res: http.ServerResponse): Promise<void> {
   try {
-    const [provResp, cfgResp] = await Promise.all([
-      fetch(`${appConfig.opencodeUrl}/provider`),
-      fetch(`${appConfig.opencodeUrl}/config`).catch(() => null),
-    ]);
+    // 2026-09-21 Kevin：「我不想要每次 remote 跟 desktop 都不同步」。
+    // compact 的選模型清單不再自己訂規則（allowlist／免費過濾／排除清單全部拿掉），
+    // 直接照 OpenCode /provider 的 connected 清單列，跟 desktop、原生頁看到的一模一樣。
+    // 要少一個 provider，就在 OpenCode 那邊登出或從 opencode.jsonc 拿掉，三邊一起變。
+    const provResp = await fetch(`${appConfig.opencodeUrl}/provider`);
     if (!provResp.ok) throw new Error(`upstream /provider ${provResp.status}`);
-    const data = (await provResp.json()) as { all?: unknown };
+    const data = (await provResp.json()) as { all?: unknown; connected?: unknown };
     const all: any[] = Array.isArray(data?.all) ? (data.all as any[]) : Array.isArray(data) ? (data as any) : [];
-    // Allowlist = only the providers the desktop config actually defines, plus
-    // the built-in free "opencode" (Zen) provider. This keeps the picker to the
-    // same short list the desktop shows (e.g. local-llm + opencode) instead of
-    // every provider that merely happens to offer a free tier. A provider the
-    // user adds to the config later appears automatically (no cache).
-    const allow = new Set<string>(["opencode"]);
-    // Providers the user wrote into opencode.jsonc themselves (newapi, local-llm…):
-    // every model there is already paid for by Kevin's subscriptions, so the
-    // cost field is informational and must not hide models. The free-only
-    // filter stays for the built-in "opencode" (Zen) provider only.
-    // (2026-09-21: newapi entries gained models.dev cost data and the picker
-    // silently dropped 66 of 87 models — desktop still showed them all.)
-    const configured = new Set<string>();
-    if (cfgResp && cfgResp.ok) {
-      const cfg = (await cfgResp.json().catch(() => ({}))) as { provider?: Record<string, unknown> };
-      for (const id of Object.keys(cfg?.provider ?? {})) {
-        allow.add(id);
-        configured.add(id);
-      }
-    }
+    const connected = new Set<string>(Array.isArray(data?.connected) ? (data.connected as string[]) : []);
     const providers = all
-      .filter((p: any) => p && allow.has(p.id) && !PICKER_EXCLUDE_PROVIDERS.has(p.id))
+      .filter((p: any) => p && (connected.size === 0 || connected.has(p.id)))
       .map((p: any) => ({
         id: p.id,
         name: p.name ?? p.id,
         models: Object.entries(p.models ?? {})
           .map(([key, m]: [string, any]) => ({ ...(m ?? {}), id: m?.id ?? key }))
-          .filter((m: any) => (m.status ? m.status === "active" : true) && (configured.has(p.id) || isFreeModel(m)))
+          .filter((m: any) => (m.status ? m.status === "active" : true))
           .map((m: any) => ({ id: m.id, variants: m.variants ?? null })),
       }))
       .filter((p: any) => p.models.length > 0);
