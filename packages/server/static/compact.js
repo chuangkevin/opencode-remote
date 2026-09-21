@@ -305,6 +305,22 @@ function scrollToBottom() {
   });
 }
 
+function pendingQuestionCard() {
+  for (const card of questionNodes.values()) {
+    if (card.isConnected && !card.classList.contains("answered") && !card.classList.contains("rejected")) return card;
+  }
+  return null;
+}
+
+function scrollQuestionIntoView(card) {
+  requestAnimationFrame(() => {
+    try { card.scrollIntoView({ block: "end", behavior: "smooth" }); }
+    catch { els.messages.scrollTop = els.messages.scrollHeight; }
+    scrollPendingCount = 0;
+    els.scrollChip.hidden = true;
+  });
+}
+
 // ─── Boot ──────────────────────────────────────────────────
 (async function boot() {
   await refreshBusyStatus();
@@ -648,6 +664,7 @@ function renderQuestionRequest(req) {
 
   // If a card already exists (re-broadcast / reconnect), refresh it in place.
   let card = questionNodes.get(id);
+  let isNewCard = false;
   if (card) {
     card.querySelector(".qcard-status")?.replaceChildren();
     card.classList.remove("answered", "rejected");
@@ -657,6 +674,7 @@ function renderQuestionRequest(req) {
     card.dataset.questionId = id;
     els.messages.appendChild(card);
     questionNodes.set(id, card);
+    isNewCard = true;
   }
 
   // Per-question selection state. For single-select we submit on first click;
@@ -748,6 +766,10 @@ function renderQuestionRequest(req) {
   status.className = "qcard-status";
   footer.appendChild(status);
   card.appendChild(footer);
+  // 2026-09-21：AI 在等答案時整個 session 是卡住的，卡片一定要讓人看到。
+  // 新卡片不管使用者捲到哪都捲過去；重繪（re-broadcast／reconnect）不搶捲動。
+  if (isNewCard) scrollQuestionIntoView(card);
+
 }
 
 function maybeSubmitQuestion(id, questions, selections, card) {
@@ -996,12 +1018,21 @@ function connectSSE() {
       refreshBusyStatus()
         .then(() => loadHistory())
         .then(() => drainQueueIfIdle())
+        .then(() => drainPendingInteractive())
         .catch(() => {});
     }, 1500);
   });
   return es;
 }
 let sse = connectSSE();
+
+// 2026-09-21：手機瀏覽器的 EventSource 會無聲斷線（不觸發 error），question.asked 就丟了。
+// 畫面在前景時每 15 秒直接問一次 /question，有漏的就補畫卡片（renderQuestionRequest 對已存在的卡片是 no-op 重繪）。
+const PENDING_QUESTION_POLL_MS = 15_000;
+setInterval(() => {
+  if (document.visibilityState !== "visible") return;
+  drainPendingInteractive().catch((err) => console.warn("drainPendingInteractive (poll):", err));
+}, PENDING_QUESTION_POLL_MS);
 
 // ─── Sticky scroll ─────────────────────────────────────────
 let scrollPendingCount = 0;
@@ -1017,6 +1048,7 @@ function maybeScrollOrShowChip() {
   } else {
     scrollPendingCount += 1;
     els.scrollChipCount.textContent = String(scrollPendingCount);
+    els.scrollChip.classList.toggle("question", Boolean(pendingQuestionCard()));
     els.scrollChip.hidden = false;
   }
 }
@@ -1029,7 +1061,9 @@ els.messages.addEventListener("scroll", () => {
 els.scrollChip.addEventListener("click", () => {
   scrollPendingCount = 0;
   els.scrollChip.hidden = true;
-  scrollToBottom();
+  const card = pendingQuestionCard();
+  if (card) scrollQuestionIntoView(card);
+  else scrollToBottom();
 });
 
 // ─── Session meta (title + rename) ─────────────────────────

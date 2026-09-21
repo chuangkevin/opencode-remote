@@ -32,6 +32,9 @@ const remoteResetScript = `(() => {})();\n`;
 const nativeMobileStyle = `<style data-remote-mobile>
 @media (max-width: 767px) {
   html { zoom: 1.2; }
+  /* 2026-09-21：zoom 1.2 讓 #root 的 100dvh 也被放大 1.2 倍（812px 視窗 → 974px），
+     底部輸入列被推到畫面外，要點到輸入框觸發重排才會出現。把高度除回去。 */
+  body, #root { height: calc(100dvh / 1.2) !important; }
   [data-component="prompt-input-v2"] [data-component="tooltip-v2-trigger"] { min-width: 0; flex: 0 1 auto; overflow: hidden; }
   [data-component="prompt-input-v2"] [data-action="prompt-model"] { max-width: 100% !important; width: 100%; }
   [data-component="prompt-input-v2"] [data-action="prompt-submit"] { flex-shrink: 0; }

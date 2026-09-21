@@ -351,6 +351,19 @@ header.app-header {
   cursor: pointer;
   z-index: 5;
 }
+/* 2026-09-21：有待回答的 question 時，chip 改成醒目樣式並換文字，按下去直接跳到卡片 */
+.scroll-chip.question {
+  background: var(--accent-ai);
+  color: #0f172a;
+  border-color: var(--accent-ai);
+  font-weight: 600;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.scroll-chip.question .chip-default { display: none; }
+.scroll-chip.question::after { content: "AI 在問你問題 ↓"; }
+
 
 /* Attachment thumbnails (above input bar) */
 .attach-row {

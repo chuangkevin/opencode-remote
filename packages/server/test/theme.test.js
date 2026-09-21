@@ -330,6 +330,8 @@ test("injects the mobile prompt style once alongside the native preferences", as
   assert.ok(style >= 0 && inject >= 0 && style < inject);
   assert.match(built, /<style data-remote-mobile>/);
   assert.match(built, /html \{ zoom: 1\.2; \}/);
+  // zoom 1.2 會讓 #root 的 100dvh 溢出視窗 20%，底部輸入列被推出畫面（2026-09-21 手機實測）
+  assert.match(built, /body, #root \{ height: calc\(100dvh \/ 1\.2\) !important; \}/);
   assert.match(built, /\[data-component="prompt-input-v2"\] \[data-action="prompt-model"\]/);
   assert.match(built, /\[data-component="prompt-input-v2"\] \[data-action="prompt-submit"\]/);
   assert.equal(built.match(/\$\{nativeMobileStyle\}\$\{nativePreferencesScript\}/g)?.length, 3);
@@ -358,4 +360,13 @@ test("keeps the compact session title visible below 420px", async () => {
   assert.match(block, /\.header-fs-btn/);
   const mobile = css.slice(css.indexOf("@media (max-width: 767px)"), css.indexOf("@media (min-width: 768px)"));
   assert.match(mobile, /\.header-title \{[^}]*flex: 1 1 auto[^}]*max-width: none/);
+});
+
+test("compact question card is always brought into view and the chip points at it", async () => {
+  const client = await readFile(new URL("../static/compact.js", import.meta.url), "utf8");
+  const css = await readFile(new URL("../static/compact.css", import.meta.url), "utf8");
+  assert.match(client, /if \(isNewCard\) scrollQuestionIntoView\(card\);/);
+  assert.match(client, /els\.scrollChip\.classList\.toggle\("question", Boolean\(pendingQuestionCard\(\)\)\)/);
+  assert.match(client, /const PENDING_QUESTION_POLL_MS = 15_000;/);
+  assert.match(css, /\.scroll-chip\.question::after \{ content: "AI 在問你問題 ↓"; \}/);
 });

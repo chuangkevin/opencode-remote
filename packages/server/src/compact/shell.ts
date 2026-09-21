@@ -40,7 +40,7 @@ export function renderCompactShell(sessionID: string, directory: string): string
 
     <div class="messages" id="messages"></div>
 
-    <div class="scroll-chip" id="scrollChip" hidden>↓ <span id="scrollChipCount">0</span> 則新訊息</div>
+    <div class="scroll-chip" id="scrollChip" hidden><span class="chip-default">↓ <span id="scrollChipCount">0</span> 則新訊息</span></div>
 
     <div class="attach-row" id="attachRow" hidden></div>
 
