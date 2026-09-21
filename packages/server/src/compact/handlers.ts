@@ -151,9 +151,19 @@ export async function handleCompactProviders(res: http.ServerResponse): Promise<
     // every provider that merely happens to offer a free tier. A provider the
     // user adds to the config later appears automatically (no cache).
     const allow = new Set<string>(["opencode"]);
+    // Providers the user wrote into opencode.jsonc themselves (newapi, local-llm…):
+    // every model there is already paid for by Kevin's subscriptions, so the
+    // cost field is informational and must not hide models. The free-only
+    // filter stays for the built-in "opencode" (Zen) provider only.
+    // (2026-09-21: newapi entries gained models.dev cost data and the picker
+    // silently dropped 66 of 87 models — desktop still showed them all.)
+    const configured = new Set<string>();
     if (cfgResp && cfgResp.ok) {
       const cfg = (await cfgResp.json().catch(() => ({}))) as { provider?: Record<string, unknown> };
-      for (const id of Object.keys(cfg?.provider ?? {})) allow.add(id);
+      for (const id of Object.keys(cfg?.provider ?? {})) {
+        allow.add(id);
+        configured.add(id);
+      }
     }
     const providers = all
       .filter((p: any) => p && allow.has(p.id) && !PICKER_EXCLUDE_PROVIDERS.has(p.id))
@@ -162,7 +172,7 @@ export async function handleCompactProviders(res: http.ServerResponse): Promise<
         name: p.name ?? p.id,
         models: Object.entries(p.models ?? {})
           .map(([key, m]: [string, any]) => ({ ...(m ?? {}), id: m?.id ?? key }))
-          .filter((m: any) => (m.status ? m.status === "active" : true) && isFreeModel(m))
+          .filter((m: any) => (m.status ? m.status === "active" : true) && (configured.has(p.id) || isFreeModel(m)))
           .map((m: any) => ({ id: m.id, variants: m.variants ?? null })),
       }))
       .filter((p: any) => p.models.length > 0);
