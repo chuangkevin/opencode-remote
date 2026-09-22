@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#f5f4fb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>OpenCode Hub</title>
+<style>
+  :root {
+    --bg: #f5f4fb; --panel: #ffffff; --line: #dcd9ec; --text: #1c1b2b; --muted: #6f6c85;
+    --accent: #5b5bd6; --accent-bg: #ecebff; --ok: #1f9d55; --bad: #d64545; --idle: #b8b6c9;
+    --tab-h: 46px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121218; --panel: #1b1b24; --line: #2c2c3a; --text: #ecebf5; --muted: #9a98b0;
+      --accent: #8c8cff; --accent-bg: #26264a; --idle: #4a4860; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif; }
+  body { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+  header { flex: 0 0 auto; display: flex; align-items: stretch; gap: 4px; padding: 6px 8px 0;
+    padding-top: calc(6px + env(safe-area-inset-top)); border-bottom: 1px solid var(--line); background: var(--panel); }
+  #tabs { flex: 1 1 auto; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  #tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; height: var(--tab-h); padding: 0 14px;
+    border: 1px solid transparent; border-bottom: none; border-radius: 10px 10px 0 0; background: transparent;
+    color: var(--muted); font-size: 15px; cursor: pointer; white-space: nowrap; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .tab.active { background: var(--accent-bg); color: var(--accent); border-color: var(--line); font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); flex: 0 0 auto; }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.busy { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+  .iconbtn { flex: 0 0 auto; width: var(--tab-h); height: var(--tab-h); border: none; background: transparent; color: var(--muted);
+    font-size: 20px; cursor: pointer; border-radius: 10px; -webkit-tap-highlight-color: transparent; }
+  .iconbtn:active { background: var(--accent-bg); }
+  main { flex: 1 1 auto; position: relative; min-height: 0; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); display: none; }
+  iframe.active { display: block; }
+  #empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 12px; color: var(--muted); padding: 24px; text-align: center; }
+  #empty.show { display: flex; }
+  .btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 10px; padding: 9px 14px; font-size: 15px; cursor: pointer; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.danger { color: var(--bad); }
+  /* settings sheet */
+  #settings { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; z-index: 10; }
+  #settings.show { display: block; }
+  .sheet { position: absolute; right: 0; top: 0; bottom: 0; width: min(480px, 100%); background: var(--panel); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); }
+  .sheet h2 { margin: 0; padding: 14px 16px; font-size: 17px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+  .sheet .body { flex: 1 1 auto; overflow-y: auto; padding: 12px 16px 24px; }
+  .row { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .row input[type=text], .row input[type=url] { width: 100%; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 15px; }
+  .row .fields { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .row .ops { display: flex; flex-direction: column; gap: 4px; }
+  .row .ops button { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 6px; width: 34px; height: 28px; cursor: pointer; }
+  .row input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+  .hint { color: var(--muted); font-size: 13px; margin: 12px 0 0; }
+  .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<header>
+  <div id="tabs" role="tablist"></div>
+  <button class="iconbtn" id="reloadBtn" title="重新載入這個分頁" aria-label="重新載入">↻</button>
+  <button class="iconbtn" id="settingsBtn" title="設定" aria-label="設定">⚙</button>
+</header>
+<main>
+  <div id="empty"><div>沒有開啟任何 OpenCode Remote</div><button class="btn primary" id="emptySettings">打開設定</button></div>
+</main>
+
+<div id="settings" role="dialog" aria-modal="true">
+  <div class="sheet">
+    <h2>顯示哪些 Remote <button class="iconbtn" id="closeSettings" aria-label="關閉">✕</button></h2>
+    <div class="body">
+      <div id="list"></div>
+      <div class="actions">
+        <button class="btn" id="addBtn">＋ 新增</button>
+        <button class="btn" id="resetBtn">還原預設</button>
+        <button class="btn primary" id="saveBtn">儲存</button>
+      </div>
+      <p class="hint">勾選 = 顯示成一個分頁。上下箭頭調順序。設定存在這個瀏覽器裡（localStorage），換裝置要再設一次。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const DEFAULTS = [
+    { id: "mac",  name: "Mac",  url: "https://opencode-sara.sisihome.org", enabled: true },
+    { id: "l390", name: "L390", url: "https://opencode-l390.sisihome.org", enabled: true },
+    { id: "home", name: "Home", url: "https://opencode-home.sisihome.org", enabled: true },
+  ];
+  const KEY_REMOTES = "opencode-hub:remotes";
+  const KEY_ACTIVE = "opencode-hub:active";
+  const $ = (s) => document.querySelector(s);
+  const tabsEl = $("#tabs"), mainEl = $("main"), emptyEl = $("#empty");
+
+  const load = (k, fb) => { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? fb; } catch { return fb; } };
+  const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+  const normalizeUrl = (u) => String(u || "").trim().replace(/\/+$/, "");
+
+  let remotes = load(KEY_REMOTES, null);
+  if (!Array.isArray(remotes) || remotes.length === 0) remotes = DEFAULTS.map((r) => ({ ...r }));
+  let active = load(KEY_ACTIVE, null);
+  const frames = new Map(); // id → iframe
+
+  function enabledRemotes() { return remotes.filter((r) => r.enabled && normalizeUrl(r.url)); }
+
+  function frameFor(r) {
+    let f = frames.get(r.id);
+    if (f) return f;
+    f = document.createElement("iframe");
+    f.dataset.id = r.id;
+    f.title = r.name;
+    f.src = normalizeUrl(r.url) + "/remote-sessions";
+    f.setAttribute("allow", "clipboard-read; clipboard-write");
+    mainEl.appendChild(f);
+    frames.set(r.id, f);
+    return f;
+  }
+
+  function render() {
+    const list = enabledRemotes();
+    if (!list.some((r) => r.id === active)) active = list[0]?.id ?? null;
+    save(KEY_ACTIVE, active);
+    tabsEl.innerHTML = "";
+    for (const r of list) {
+      const b = document.createElement("button");
+      b.className = "tab" + (r.id === active ? " active" : "");
+      b.setAttribute("role", "tab");
+      b.dataset.id = r.id;
+      b.innerHTML = `<span class="dot" data-dot="${r.id}"></span><span>${escapeHtml(r.name)}</span>`;
+      b.addEventListener("click", () => { active = r.id; render(); });
+      tabsEl.appendChild(b);
+    }
+    // frames: keep alive, only toggle visibility; drop frames of removed/disabled remotes
+    for (const [id, f] of frames) { if (!list.some((r) => r.id === id)) { f.remove(); frames.delete(id); } }
+    for (const r of list) frameFor(r).classList.toggle("active", r.id === active);
+    emptyEl.classList.toggle("show", list.length === 0);
+    document.title = active ? `${list.find((r) => r.id === active).name} · OpenCode Hub` : "OpenCode Hub";
+    tabsEl.querySelector(".tab.active")?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }
+
+  function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+  // ── status dots: /remote-health (each remote sends Access-Control-Allow-Origin: *) ──
+  async function refreshStatus() {
+    for (const r of enabledRemotes()) {
+      const dot = tabsEl.querySelector(`[data-dot="${r.id}"]`);
+      if (!dot) continue;
+      try {
+        const res = await fetch(normalizeUrl(r.url) + "/remote-health", { cache: "no-store" });
+        const j = await res.json();
+        const ok = res.ok && j?.upstreamHealth?.healthy === true;
+        let busy = false;
+        if (ok) {
+          try {
+            const a = await fetch(normalizeUrl(r.url) + "/api/session/active", { cache: "no-store" });
+            const aj = await a.json();
+            busy = Object.keys(aj?.data ?? {}).length > 0;
+          } catch {}
+        }
+        dot.className = "dot " + (ok ? (busy ? "busy" : "ok") : "bad");
+        dot.title = ok ? (busy ? "有 session 在跑" : "正常") : "連不上";
+      } catch {
+        dot.className = "dot bad"; dot.title = "連不上";
+      }
+    }
+  }
+  setInterval(refreshStatus, 20_000);
+
+  // ── settings ──
+  const settingsEl = $("#settings"), listEl = $("#list");
+  let draft = null;
+  function openSettings() {
+    draft = remotes.map((r) => ({ ...r }));
+    renderList();
+    settingsEl.classList.add("show");
+  }
+  function closeSettings() { settingsEl.classList.remove("show"); draft = null; }
+  function renderList() {
+    listEl.innerHTML = "";
+    draft.forEach((r, i) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = `
+        <input type="checkbox" ${r.enabled ? "checked" : ""} aria-label="顯示 ${escapeHtml(r.name)}">
+        <div class="fields">
+          <input type="text" value="${escapeHtml(r.name)}" placeholder="名稱" aria-label="名稱">
+          <input type="url" value="${escapeHtml(r.url)}" placeholder="https://…" aria-label="網址" inputmode="url" autocapitalize="none">
+        </div>
+        <div class="ops">
+          <button type="button" data-op="up" aria-label="上移" ${i === 0 ? "disabled" : ""}>↑</button>
+          <button type="button" data-op="down" aria-label="下移" ${i === draft.length - 1 ? "disabled" : ""}>↓</button>
+          <button type="button" data-op="del" aria-label="刪除" class="danger">🗑</button>
+        </div>`;
+      const [chk, name, url] = row.querySelectorAll("input");
+      chk.addEventListener("change", () => { r.enabled = chk.checked; });
+      name.addEventListener("input", () => { r.name = name.value; });
+      url.addEventListener("input", () => { r.url = url.value; });
+      row.querySelectorAll("[data-op]").forEach((b) => b.addEventListener("click", () => {
+        const op = b.dataset.op;
+        if (op === "del") draft.splice(i, 1);
+        else if (op === "up" && i > 0) [draft[i - 1], draft[i]] = [draft[i], draft[i - 1]];
+        else if (op === "down" && i < draft.length - 1) [draft[i + 1], draft[i]] = [draft[i], draft[i + 1]];
+        renderList();
+      }));
+      listEl.appendChild(row);
+    });
+  }
+  $("#addBtn").addEventListener("click", () => {
+    draft.push({ id: "r" + Date.now().toString(36), name: "新 Remote", url: "https://", enabled: true });
+    renderList();
+    listEl.lastElementChild?.querySelector('input[type=text]')?.focus();
+  });
+  $("#resetBtn").addEventListener("click", () => { draft = DEFAULTS.map((r) => ({ ...r })); renderList(); });
+  $("#saveBtn").addEventListener("click", () => {
+    remotes = draft.filter((r) => r.name.trim() && /^https?:\/\/.+/.test(r.url.trim()))
+      .map((r) => ({ id: r.id, name: r.name.trim(), url: normalizeUrl(r.url), enabled: !!r.enabled }));
+    save(KEY_REMOTES, remotes);
+    closeSettings();
+    render();
+    refreshStatus();
+  });
+  $("#closeSettings").addEventListener("click", closeSettings);
+  settingsEl.addEventListener("click", (e) => { if (e.target === settingsEl) closeSettings(); });
+  $("#settingsBtn").addEventListener("click", openSettings);
+  $("#emptySettings").addEventListener("click", openSettings);
+  $("#reloadBtn").addEventListener("click", () => {
+    const f = frames.get(active);
+    if (f) f.src = f.src; // reload just this tab
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && settingsEl.classList.contains("show")) closeSettings(); });
+
+  render();
+  refreshStatus();
+})();
+</script>
+</body>
+</html>

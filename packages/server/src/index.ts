@@ -512,6 +512,8 @@ function proxy(
       });
 
       const headers = sanitizeResponseHeaders(upstreamRes.headers);
+      // Read-only, cross-origin readable for the hub's status dots.
+      if (upstreamPath === "/api/session/active") headers["access-control-allow-origin"] = "*";
       if (isHead && headers["content-length"] === "0") {
         delete headers["content-length"];
       }
@@ -864,6 +866,7 @@ async function handleRemoteHealth(res: http.ServerResponse): Promise<void> {
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
       "X-OpenCode-Remote": "true",
     });
     res.end(JSON.stringify({
@@ -1160,6 +1163,25 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "GET" && req.url === "/remote-health") {
     void handleRemoteHealth(res);
+    return;
+  }
+
+  // The hub page (one tab per opencode-remote) reads /remote-health and
+  // /api/session/active on every remote from another origin; answer its CORS
+  // preflight and mark those two read-only endpoints as cross-origin readable.
+  if (req.method === "OPTIONS" && (req.url === "/remote-health" || req.url === "/api/session/active")) {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Headers": "content-type",
+      "Access-Control-Max-Age": "600",
+    });
+    res.end();
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && (req.url === "/hub" || req.url === "/hub/")) {
+    handleCompactStatic(Object.assign(req, { url: "/c/static/hub.html" }), res);
     return;
   }
 

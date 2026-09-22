@@ -22,6 +22,7 @@ const ALLOWED: Record<string, string> = {
   "compact.css": "text/css; charset=utf-8",
   "marked.min.js": "application/javascript; charset=utf-8",
   "remote-sessions.js": "application/javascript; charset=utf-8",
+  "hub.html": "text/html; charset=utf-8",
   "theme.js": "application/javascript; charset=utf-8",
   "font-scale.js": "application/javascript; charset=utf-8",
 };
