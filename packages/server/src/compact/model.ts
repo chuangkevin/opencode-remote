@@ -13,7 +13,7 @@ export type LatestUserModel = {
 export class LatestUserModelBudgetError extends Error {}
 export class LatestUserModelUpstreamError extends Error {}
 
-function latestUserModelInPage(messages: unknown[]): LatestUserModel | null {
+export function latestUserModelInPage(messages: unknown[]): LatestUserModel | null {
   let latest: LatestUserModel | null = null;
   for (const message of messages as any[]) {
     const info = message?.info ?? {};
@@ -41,56 +41,41 @@ function latestUserModelInPage(messages: unknown[]): LatestUserModel | null {
 type FindLatestUserModelOptions = {
   fetch?: typeof fetch;
   signal?: AbortSignal;
-  maxPages?: number;
-  pageSize?: number;
+  headers?: Record<string, string>;
 };
 
+// OpenCode 2.x keeps the session's current model on the session itself
+// (GET /api/session/:id → data.model = { id, providerID, variant }), so there
+// is no message-history scan any more.
 export async function findLatestUserModel(
   upstream: string,
   sessionID: string,
   options: FindLatestUserModelOptions = {},
 ): Promise<LatestUserModel | { model: null }> {
   const fetchPage = options.fetch ?? fetch;
-  const maxPages = options.maxPages ?? 100;
-  const pageSize = options.pageSize ?? 30;
-  const seenCursors = new Set<string>();
-  let before: string | null = null;
-
-  for (let page = 0; page < maxPages; page += 1) {
-    const url = new URL(`${upstream}/session/${sessionID}/message`);
-    url.searchParams.set("limit", String(pageSize));
-    if (before) url.searchParams.set("before", before);
-
-    let response: Response;
-    try {
-      response = await fetchPage(url, { signal: options.signal });
-    } catch (err) {
-      if (options.signal?.aborted) throw err;
-      throw new LatestUserModelUpstreamError(err instanceof Error ? err.message : "upstream request failed");
-    }
-    if (!response.ok) throw new LatestUserModelUpstreamError(`upstream messages ${response.status}`);
-
-    let messages: unknown;
-    try {
-      messages = await response.json();
-    } catch {
-      throw new LatestUserModelUpstreamError("upstream messages response is not JSON");
-    }
-    if (!Array.isArray(messages)) {
-      throw new LatestUserModelUpstreamError("upstream messages response is not an array");
-    }
-
-    const latest = latestUserModelInPage(messages);
-    if (latest) return latest;
-
-    const nextCursor = response.headers.get("x-next-cursor");
-    if (!nextCursor) return { model: null };
-    if (seenCursors.has(nextCursor)) {
-      throw new LatestUserModelBudgetError("upstream repeated the model-history cursor");
-    }
-    seenCursors.add(nextCursor);
-    before = nextCursor;
+  let response: Response;
+  try {
+    response = await fetchPage(`${upstream}/api/session/${sessionID}`, { signal: options.signal, headers: options.headers });
+  } catch (err) {
+    if (options.signal?.aborted) throw err;
+    throw new LatestUserModelUpstreamError(err instanceof Error ? err.message : "upstream request failed");
   }
-
-  throw new LatestUserModelBudgetError(`model-history scan exceeded ${maxPages} pages`);
+  if (!response.ok) throw new LatestUserModelUpstreamError(`upstream session ${response.status}`);
+  let payload: any;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new LatestUserModelUpstreamError("upstream session response is not JSON");
+  }
+  const session = payload && typeof payload === "object" && "data" in payload ? payload.data : payload;
+  const model = session?.model;
+  const providerID = typeof model?.providerID === "string" ? model.providerID : "";
+  const modelID = typeof model?.id === "string" ? model.id : typeof model?.modelID === "string" ? model.modelID : "";
+  if (!providerID || !modelID) return { model: null };
+  const variant = typeof model?.variant === "string" && model.variant && model.variant !== "default" ? model.variant : null;
+  return {
+    model: { providerID, modelID, variant },
+    created: Number(session?.time?.updated ?? 0),
+    messageID: null,
+  };
 }

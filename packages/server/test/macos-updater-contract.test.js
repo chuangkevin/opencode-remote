@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
-  classifyBrewOutdated,
+  newestDesktopCliVersion,
   deploymentHealthIsExpected,
   fileContentMatches,
   healthMatchesVersion,
@@ -36,20 +36,18 @@ test("health parsing requires healthy true and exact upgraded CLI version", () =
   assert.equal(healthMatchesVersion("not-json", "1.18.30"), false);
 });
 
-test("brew outdated parser accepts only Homebrew's exact current and outdated contracts", () => {
-  assert.equal(classifyBrewOutdated(0, ""), "current");
-  assert.equal(classifyBrewOutdated(1, "opencode"), "outdated");
-  for (const [status, stdout] of [
-    [0, "opencode"],
-    [1, ""],
-    [1, "opencode\nother"],
-    [2, ""],
-  ]) {
-    assert.equal(classifyBrewOutdated(status, stdout), undefined, `${status}:${stdout}`);
-  }
+test("Desktop CLI version picker returns the newest semver and whether it beats the current one", () => {
+  assert.deepEqual(newestDesktopCliVersion("2.0.11\n2.0.12\n.DS_Store\n", "2.0.11"), { status: "outdated", newest: "2.0.12" });
+  assert.deepEqual(newestDesktopCliVersion("2.0.11\n2.0.9\n", "2.0.11"), { status: "current", newest: "2.0.11" });
+  assert.deepEqual(newestDesktopCliVersion("2.0.11\n", "missing"), { status: "outdated", newest: "2.0.11" }, "unparseable current forces the newest");
+  assert.deepEqual(newestDesktopCliVersion("", "2.0.11"), { status: "invalid" });
+  assert.deepEqual(newestDesktopCliVersion("junk\n", "2.0.11"), { status: "invalid" });
 });
 
-test("FDA probe parser requires the exact text response contract", () => {
+test("FDA probe parser accepts the 2.x raw body and the legacy JSON contract", () => {
+  const raw = "opencode-remote FDA probe v1";
+  assert.equal(fileContentMatches(`${raw}\n`, raw), true, "2.x /api/fs/read returns the body as-is");
+  assert.equal(fileContentMatches("something else", raw), false);
   const content = "opencode-remote FDA probe v1";
   assert.equal(fileContentMatches(JSON.stringify({ type: "text", content }), content), true);
   assert.equal(fileContentMatches(JSON.stringify({ type: "text", content: `${content}\n` }), content), false);
@@ -76,33 +74,33 @@ test("maintenance ID parsing accepts only a positive integer ID", () => {
   assert.equal(parseMaintenanceId("not-json"), undefined);
 });
 
-test("updater is formula-scoped, version-gated, and closes only its own maintenance window", async () => {
+test("updater follows the Desktop-bundled CLI, is version-gated, and closes only its own maintenance window", async () => {
   const source = await readFile(updaterUrl, "utf8");
 
-  assert.match(source, /BREW_BIN" outdated --quiet opencode/);
-  assert.match(source, /BREW_BIN" upgrade opencode/);
-  assert.doesNotMatch(source, /BREW_BIN" upgrade[;"\n]/);
-  assert.match(source, /HOMEBREW_NO_INSTALL_CLEANUP=1/);
-  assert.match(source, /HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1/);
+  assert.doesNotMatch(source, /brew (outdated|upgrade)|BREW_BIN/, "Homebrew is no longer the CLI source");
+  assert.match(source, /DESKTOP_CLI_ROOT=.*ai\.opencode\.desktop\/cli/);
+  assert.match(source, /desktop-cli-newest "\$current_version"/);
+  assert.match(source, /point_run_script_at "\$NEW_VERSION"/);
+  assert.match(source, /RUN_SCRIPT_BACKUP/);
+  assert.match(source, /forcing update/, "a pruned current version skips the gates");
   assert.match(source, /strict=1/);
   assert.match(source, /QUIESCE_FILE=.*update-opencode-sara\.quiesce/);
   assert.match(source, /\/bin\/sleep 1/);
   assert.match(source, /DEFERRED/);
   assert.match(source, /gui\/\$UID_VALUE\/io\.interagent\.opencode-sara/);
-  assert.doesNotMatch(source, /Desktop|killall|pkill/);
+  assert.doesNotMatch(source, /killall|pkill/);
   assert.match(source, /poll_runtime "\$new_version"/);
-  assert.match(source, /health-version "\$expected_version"/);
+  assert.match(source, /health-current/, "service mode: healthy upstream, not an exact version match");
   assert.match(source, /file-content "\$FDA_PROBE_CONTENT"/);
-  assert.match(source, /\/usr\/bin\/readlink "\$OPENCODE_BIN"/);
-  assert.match(source, /\/bin\/ln -sfn "\$OLD_SYMLINK_TARGET" "\$OPENCODE_BIN"/);
+  assert.match(source, /FILE_CONTENT_URL=.*\/api\/fs\/read\//);
+  assert.match(source, /\/bin\/cp -f "\$RUN_SCRIPT_BACKUP" "\$RUN_SCRIPT"/);
   assert.match(source, /ROLLBACK restored=/);
   assert.match(source, /ROLLBACK_FAILED/);
   assert.match(source, /KEEP_MAINTENANCE=1/);
   assert.match(source, /left to expire after rollback failure/);
   assert.match(source, /UPDATE_BLOCK_FILE/);
-  assert.ok(source.indexOf("if ! strict_status_is_idle; then") < source.indexOf('outdated="$('));
-  assert.ok(source.indexOf('outdated="$(') < source.indexOf('> "$QUIESCE_FILE"'));
-  assert.ok(source.lastIndexOf("strict_status_is_idle") < source.indexOf('upgrade opencode; then'));
+  assert.ok(source.indexOf("if ! strict_status_is_idle; then") < source.indexOf('> "$QUIESCE_FILE"'));
+  assert.ok(source.lastIndexOf("strict_status_is_idle") < source.indexOf('point_run_script_at "$NEW_VERSION"'));
   assert.match(source, /SKYNET_MAINTENANCE_URL\/\$MAINTENANCE_ID/);
   assert.match(source, /trap cleanup EXIT/);
   assert.match(source, /close_maintenance/);

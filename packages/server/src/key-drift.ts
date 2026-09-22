@@ -159,6 +159,23 @@ export function loadedProviderKeys(upstreamConfig: unknown): Map<string, string>
   return keys;
 }
 
+// OpenCode 2.x: GET /api/provider → { data: [{ id, settings: { apiKey } }] }
+// (the raw 1.x /config { provider: { id: { options: { apiKey } } } } shape is
+// still accepted by loadedProviderKeys above).
+export function loadedProviderKeysV2(upstreamProviders: unknown): Map<string, string> {
+  const list = isRecord(upstreamProviders) && Array.isArray(upstreamProviders.data)
+    ? upstreamProviders.data
+    : Array.isArray(upstreamProviders) ? upstreamProviders : [];
+  const keys = new Map<string, string>();
+  for (const provider of list) {
+    if (!isRecord(provider) || typeof provider.id !== "string") continue;
+    const settings = isRecord(provider.settings) ? provider.settings : isRecord(provider.options) ? provider.options : undefined;
+    const apiKey = settings?.apiKey;
+    if (typeof apiKey === "string") keys.set(provider.id, apiKey);
+  }
+  return keys;
+}
+
 export function detectKeyDrift(expected: Map<string, string>, loaded: Map<string, string>): string[] {
   return [...expected.entries()]
     .filter(([id, expectedKey]) => loaded.has(id) && loaded.get(id) !== expectedKey)

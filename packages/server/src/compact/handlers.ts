@@ -7,6 +7,7 @@ import { config as appConfig } from "../config.js";
 import { renderCompactShell } from "./shell.js";
 import { ensureSessionTrust } from "./trust.js";
 import { LatestUserModelBudgetError, findLatestUserModel } from "./model.js";
+import { upstreamAuthHeaders, upstreamJson } from "../upstream.js";
 
 const __filename = fileURLToPath(import.meta.url);
 // tsconfig has rootDir=src outDir=dist, so this file ends up at
@@ -84,6 +85,7 @@ export async function handleLatestUserModel(
   try {
     const selection = await findLatestUserModel(appConfig.opencodeUrl, sessionID, {
       signal: controller.signal,
+      headers: upstreamAuthHeaders(),
     });
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
@@ -136,22 +138,24 @@ export async function handleCompactProviders(res: http.ServerResponse): Promise<
     // compact 的選模型清單不再自己訂規則（allowlist／免費過濾／排除清單全部拿掉），
     // 直接照 OpenCode /provider 的 connected 清單列，跟 desktop、原生頁看到的一模一樣。
     // 要少一個 provider，就在 OpenCode 那邊登出或從 opencode.jsonc 拿掉，三邊一起變。
-    const provResp = await fetch(`${appConfig.opencodeUrl}/provider`);
-    if (!provResp.ok) throw new Error(`upstream /provider ${provResp.status}`);
-    const data = (await provResp.json()) as { all?: unknown; connected?: unknown };
-    const all: any[] = Array.isArray(data?.all) ? (data.all as any[]) : Array.isArray(data) ? (data as any) : [];
-    const connected = new Set<string>(Array.isArray(data?.connected) ? (data.connected as string[]) : []);
-    const providers = all
-      .filter((p: any) => p && (connected.size === 0 || connected.has(p.id)))
-      .map((p: any) => ({
-        id: p.id,
-        name: p.name ?? p.id,
-        models: Object.entries(p.models ?? {})
-          .map(([key, m]: [string, any]) => ({ ...(m ?? {}), id: m?.id ?? key }))
-          .filter((m: any) => (m.status ? m.status === "active" : true))
-          .map((m: any) => ({ id: m.id, variants: m.variants ?? null })),
-      }))
-      .filter((p: any) => p.models.length > 0);
+    // 2.x: GET /api/model?location[directory]=… lists every usable model flat
+    // ({ id, providerID, name, variants? }); group by provider for the picker.
+    const directory = encodeURIComponent(appConfig.opencodeDirectory);
+    const models = await upstreamJson<any[]>(`/model?location[directory]=${directory}`);
+    type PickerModel = { id: string; name: string; variants: string[] | null };
+    type PickerProvider = { id: string; name: string; models: PickerModel[] };
+    const byProvider = new Map<string, PickerProvider>();
+    for (const m of Array.isArray(models) ? models : []) {
+      if (!m?.providerID || !m?.id) continue;
+      const entry: PickerProvider = byProvider.get(m.providerID) ?? { id: m.providerID, name: m.providerID, models: [] };
+      // variants: [{ id: "low", settings }] (2.x) or { low: {...} } — keep the names only.
+      const variants: string[] | null = Array.isArray(m.variants)
+        ? m.variants.map((v: any) => (typeof v === "string" ? v : v?.id)).filter((v: unknown): v is string => typeof v === "string")
+        : m.variants && typeof m.variants === "object" ? Object.keys(m.variants) : null;
+      entry.models.push({ id: m.modelID ?? m.id, name: m.name ?? m.id, variants: variants && variants.length ? variants : null });
+      byProvider.set(m.providerID, entry);
+    }
+    const providers = [...byProvider.values()].filter((p) => p.models.length > 0);
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
@@ -252,16 +256,11 @@ export async function handleCompactNewSession(res: http.ServerResponse): Promise
     // default pattern "New session - <timestamp>" (see session.ts
     // isDefaultTitle). Setting any custom value disables auto-titling
     // for the lifetime of the session.
-    const r = await fetch(`${appConfig.opencodeUrl}/session`, {
+    const session = await upstreamJson<{ id?: string }>("/session", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ location: { directory: appConfig.opencodeDirectory } }),
     });
-    if (!r.ok) {
-      const body = await r.text().catch(() => "");
-      throw new Error(`OpenCode POST /session returned ${r.status}: ${body.slice(0, 200)}`);
-    }
-    const session = await r.json() as { id?: string };
     if (!session.id) throw new Error("OpenCode response missing session id");
     // Apply trust ruleset before redirecting so the session is ready for
     // fire-and-forget from the very first prompt. Best-effort — if it

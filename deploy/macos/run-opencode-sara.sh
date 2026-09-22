@@ -31,7 +31,9 @@ for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do
       TMPDIR="/tmp" \
       LANG="en_US.UTF-8" \
       OPENCODE_DIRECTORY="/Users/kevin/Documents/Projects" \
-      OPENCODE_CLI_PATH="/opt/homebrew/bin/opencode" \
+      OPENCODE_CLI_PATH="/Users/kevin/Library/Application Support/ai.opencode.desktop/cli/2.0.11/opencode-cli" \
+      OPENCODE_SERVICE_MODE="1" \
+      OPENCODE_HEALTH_WATCHDOG_INTERVAL_MS="5000" \
       OPENCODE_UPDATE_QUIESCE_FILE="/Users/kevin/.local/share/opencode-remote/update-opencode-sara.quiesce" \
       PORT="9223" \
       OPENCODE_PORT="4196" \

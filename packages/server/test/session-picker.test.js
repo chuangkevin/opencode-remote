@@ -20,33 +20,42 @@ function session(id, updated, parentID) {
   };
 }
 
-test("session APIs request bounded sessions and optional picker windows", async () => {
+test("session APIs use the 2.x /api/session list with Basic auth and unwrap { data }", async () => {
   const originalFetch = globalThis.fetch;
   const urls = [];
-  globalThis.fetch = async (url) => {
+  const auth = [];
+  globalThis.fetch = async (url, init) => {
     urls.push(new URL(String(url)));
-    return Response.json([]);
+    auth.push(new Headers(init?.headers).get("authorization"));
+    return Response.json({ data: [
+      { id: "ses_new", projectID: "p", title: "new", location: { directory: "/w" }, time: { created: 1, updated: 200 } },
+      { id: "ses_old", projectID: "p", title: "old", location: { directory: "/w" }, time: { created: 1, updated: 100 } },
+    ] });
   };
 
+  let all;
+  let windowed;
   try {
     await listSessions();
-    await listSessionPickerSessions();
-    await listSessionPickerSessions({ sinceMs: 123456789 });
+    all = await listSessionPickerSessions();
+    windowed = await listSessionPickerSessions({ sinceMs: 150 });
   } finally {
     globalThis.fetch = originalFetch;
   }
 
   assert.equal(urls.length, 3);
-  assert.equal(urls[0].pathname, "/session");
+  assert.equal(urls[0].pathname, "/api/session");
   assert.equal(urls[0].searchParams.get("limit"), "20");
-  assert.equal(urls[1].pathname, "/session");
-  assert.equal(urls[1].searchParams.get("roots"), "true");
+  assert.equal(urls[0].searchParams.get("parentID"), "null");
+  assert.equal(urls[1].pathname, "/api/session");
   assert.equal(urls[1].searchParams.get("limit"), "200");
-  assert.equal(urls[1].searchParams.has("start"), false);
-  assert.equal(urls[2].pathname, "/session");
-  assert.equal(urls[2].searchParams.get("roots"), "true");
-  assert.equal(urls[2].searchParams.get("limit"), "200");
-  assert.equal(urls[2].searchParams.get("start"), "123456789");
+  assert.equal(urls[1].searchParams.get("order"), "desc");
+  assert.ok(auth.every((value) => typeof value === "string" && value.startsWith("Basic ")));
+  // 2.x has no `start` filter: the window is applied locally on time.updated.
+  assert.deepEqual(all.map((s) => s.id), ["ses_new", "ses_old"]);
+  assert.deepEqual(windowed.map((s) => s.id), ["ses_new"]);
+  // location.directory is surfaced as the 1.x-style `directory` field.
+  assert.equal(all[0].directory, "/w");
 });
 
 test("recovers missing pins, deduplicates present pins, and orders pins first", async () => {

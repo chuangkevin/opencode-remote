@@ -81,7 +81,12 @@ function Get-OpenCodeRemoteConfiguration {
     if (-not [int]::TryParse((Get-OpenCodeRemoteEnvValue "OPENCODE_PORT" "4096" $RepoRoot), [ref]$opencodePort) -or $opencodePort -lt 1 -or $opencodePort -gt 65535) { throw "OPENCODE_PORT must be an integer from 1 to 65535." }
     $workspace = Get-OpenCodeRemoteEnvValue "OPENCODE_DIRECTORY" $RepoRoot $RepoRoot
     if (-not [IO.Path]::IsPathRooted($workspace)) { throw "OPENCODE_DIRECTORY must be absolute." }
-    [pscustomobject]@{ RemotePort = $remotePort; OpenCodePort = $opencodePort; Workspace = [IO.Path]::GetFullPath($workspace) }
+    # OPENCODE_SERVICE_MODE=1: the proxy rides OpenCode 2.x's shared background
+    # service (`opencode serve --service`, the same one OpenCode Desktop uses), so
+    # there is no fixed OpenCode port to own; the upstream comes from
+    # %USERPROFILE%\.local\state\opencode\service.json.
+    $serviceMode = (Get-OpenCodeRemoteEnvValue "OPENCODE_SERVICE_MODE" "0" $RepoRoot) -eq "1"
+    [pscustomobject]@{ RemotePort = $remotePort; OpenCodePort = $opencodePort; Workspace = [IO.Path]::GetFullPath($workspace); ServiceMode = $serviceMode }
 }
 
 function Enter-OpenCodeRemoteMutex {
@@ -206,10 +211,33 @@ function Resolve-ManagedOpenCodeCli {
     } catch { return $null }
 }
 
+# OpenCode Desktop keeps its CLI under %APPDATA%\ai.opencode.desktop\cli\<version>\
+# and prunes old folders when it updates itself. When OPENCODE_CLI_PATH points into
+# that tree, resolve to the newest version folder that actually exists so the
+# proxy keeps starting after a Desktop update without editing .env.
+function Resolve-DesktopBundledOpenCodeCli {
+    param([string]$Explicit)
+    if ([string]::IsNullOrWhiteSpace($Explicit)) { return $null }
+    $match = [regex]::Match($Explicit, '^(?<root>.*[\\/]ai\.opencode\.desktop[\\/]cli)[\\/][^\\/]+[\\/](?<exe>opencode-cli(\.exe)?)$', 'IgnoreCase')
+    if (-not $match.Success) { return $null }
+    $root = $match.Groups["root"].Value
+    $exe = $match.Groups["exe"].Value
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
+    $candidates = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match $script:ExactVersionPattern -and (Test-Path -LiteralPath (Join-Path $_.FullName $exe) -PathType Leaf) } |
+        Sort-Object { [Version](($_.Name -split '-')[0]) } -Descending)
+    if ($candidates.Count -eq 0) { return $null }
+    return Join-Path $candidates[0].FullName $exe
+}
+
 function Resolve-OpenCodeCli {
     param([string]$RepoRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)))
     $explicit = Get-OpenCodeRemoteEnvValue "OPENCODE_CLI_PATH" "" $RepoRoot
-    if (-not [string]::IsNullOrWhiteSpace($explicit)) { return $explicit }
+    if (-not [string]::IsNullOrWhiteSpace($explicit)) {
+        $bundled = Resolve-DesktopBundledOpenCodeCli $explicit
+        if ($bundled) { return $bundled }
+        return $explicit
+    }
     $paths = Get-OpenCodeRemotePaths $RepoRoot
     $managed = Resolve-ManagedOpenCodeCli $paths
     if ($managed) { return $managed }
@@ -270,6 +298,14 @@ function Get-OwnedServiceProcesses {
     $proxyPid = Get-ExactListenerPid -Port $Configuration.RemotePort
     if (-not $proxyPid) { return [pscustomobject]@{ ProxyPid = $null; ChildPid = $null } }
     if (-not (Test-OwnedProxyProcess $proxyPid $Paths)) { throw "Configured proxy port is held by a process not owned by this repository." }
+    if ($Configuration.ServiceMode) {
+        # The engine is the shared background service; only a `serve --service`
+        # child spawned by this proxy (if any) is ours to stop.
+        $serviceChild = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $proxyPid" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ieq "opencode-cli.exe" -or $_.Name -ieq "opencode.exe" } | Select-Object -First 1)
+        $childPid = if ($serviceChild.Count -gt 0) { [int]$serviceChild[0].ProcessId } else { $null }
+        return [pscustomobject]@{ ProxyPid = $proxyPid; ChildPid = $childPid }
+    }
     $childPid = Get-ExactListenerPid -Port $Configuration.OpenCodePort -Address "127.0.0.1"
     if ($childPid) {
         $child = Get-WindowsProcessRecord $childPid
@@ -293,7 +329,7 @@ function Stop-OwnedOpenCodeRemote {
         if (Get-NetTCPConnection -LocalPort $Configuration.RemotePort -State Listen -ErrorAction SilentlyContinue) {
             throw "Configured proxy port is occupied by an unmanaged listener."
         }
-        if (Get-NetTCPConnection -LocalPort $Configuration.OpenCodePort -State Listen -ErrorAction SilentlyContinue) {
+        if (-not $Configuration.ServiceMode -and (Get-NetTCPConnection -LocalPort $Configuration.OpenCodePort -State Listen -ErrorAction SilentlyContinue)) {
             throw "Configured OpenCode port is occupied without the owned proxy parent."
         }
         return
@@ -302,7 +338,7 @@ function Stop-OwnedOpenCodeRemote {
     if ($owned.ProxyPid) { Stop-Process -Id $owned.ProxyPid -Force -ErrorAction Stop }
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
         if (-not (Get-NetTCPConnection -LocalPort $Configuration.RemotePort -State Listen -ErrorAction SilentlyContinue) -and
-            -not (Get-NetTCPConnection -LocalPort $Configuration.OpenCodePort -State Listen -ErrorAction SilentlyContinue)) { return }
+            ($Configuration.ServiceMode -or -not (Get-NetTCPConnection -LocalPort $Configuration.OpenCodePort -State Listen -ErrorAction SilentlyContinue))) { return }
         Start-Sleep -Milliseconds 250
     }
     throw "Owned service listeners did not stop within five seconds."
@@ -321,12 +357,16 @@ function Test-OpenCodeRemoteRuntime {
     param([pscustomobject]$Configuration, [string]$ExpectedVersion, [string]$ProbeFile)
     try {
         $health = Invoke-RestMethod -UseBasicParsing -Uri "http://127.0.0.1:$($Configuration.RemotePort)/remote-health" -TimeoutSec 3
-        if ($health.proxy -ne "opencode-remote" -or [int]$health.remotePort -ne $Configuration.RemotePort -or
-            $health.upstream -ne "http://127.0.0.1:$($Configuration.OpenCodePort)" -or $health.upstreamHealth.healthy -ne $true) { return $false }
-        if ($ExpectedVersion -and $health.upstreamHealth.version -ne $ExpectedVersion) { return $false }
-        $query = "path=$([Uri]::EscapeDataString($ProbeFile))&directory=$([Uri]::EscapeDataString($Configuration.Workspace))"
-        $probe = Invoke-RestMethod -UseBasicParsing -Uri "http://127.0.0.1:$($Configuration.RemotePort)/file/content?$query" -TimeoutSec 3
-        return $probe.type -eq "text" -and $probe.content -ceq $script:ProbeContent
+        if ($health.proxy -ne "opencode-remote" -or [int]$health.remotePort -ne $Configuration.RemotePort -or $health.upstreamHealth.healthy -ne $true) { return $false }
+        # Service mode: the upstream port is whatever the shared service picked.
+        if (-not $Configuration.ServiceMode -and $health.upstream -ne "http://127.0.0.1:$($Configuration.OpenCodePort)") { return $false }
+        if ($ExpectedVersion -and -not $Configuration.ServiceMode -and $health.upstreamHealth.version -ne $ExpectedVersion) { return $false }
+        # OpenCode 2.x: GET /api/fs/read/<relative path>?location[directory]=<workspace> answers with the raw file body.
+        $relative = ".opencode-remote/remote-fda-probe.txt"
+        $query = "location%5Bdirectory%5D=$([Uri]::EscapeDataString(($Configuration.Workspace -replace '\\', '/')))"
+        # ${relative}? — a bare `$relative?` is parsed as the variable named "relative?" (PS 5.1 + StrictMode).
+        $probe = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$($Configuration.RemotePort)/api/fs/read/${relative}?${query}" -TimeoutSec 3
+        return ([string]$probe.Content).Trim() -ceq $script:ProbeContent
     } catch { return $false }
 }
 
@@ -342,4 +382,4 @@ function Wait-OpenCodeRemoteRuntime {
 # Stop-OwnedOpenCodeRemote 必須明列：萬用字元 *-OpenCodeRemote* 比對不到它
 # （連字號後面接的是 Owned 不是 OpenCodeRemote），漏掉會讓 start/stop/restart/updater
 # 四支腳本全部噴 CommandNotFoundException。2026-09-10 kevinhome 實機踩到。
-Export-ModuleMember -Function *-OpenCodeRemote*, Stop-OwnedOpenCodeRemote, Resolve-ManagedOpenCodeCli, Resolve-OpenCodeCli, Get-ExactListenerPid, Get-WindowsProcessRecord, Get-CommandExecutablePath, Get-ProcessArguments, Test-ExactPath, Test-OwnedProxyProcess, Get-OwnedServiceProcesses, Test-PathWithin, Write-AtomicUtf8File, Write-AtomicJsonFile, New-ExclusiveUtf8File
+Export-ModuleMember -Function *-OpenCodeRemote*, Stop-OwnedOpenCodeRemote, Resolve-ManagedOpenCodeCli, Resolve-OpenCodeCli, Resolve-DesktopBundledOpenCodeCli, Get-ExactListenerPid, Get-WindowsProcessRecord, Get-CommandExecutablePath, Get-ProcessArguments, Test-ExactPath, Test-OwnedProxyProcess, Get-OwnedServiceProcesses, Test-PathWithin, Write-AtomicUtf8File, Write-AtomicJsonFile, New-ExclusiveUtf8File

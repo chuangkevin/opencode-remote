@@ -30,8 +30,8 @@ test("quiesce marker rejects only prompt-creating session POST routes", async (t
   await writeFile(marker, "owner");
 
   for (const url of [
-    "/session/ses_abc123/message",
-    "/session/ses_abc123/prompt_async?directory=%2Fworkspace",
+    "/api/session/ses_abc123/prompt",
+    "/api/session/ses_abc123/command?directory=%2Fworkspace",
   ]) {
     const res = responseRecorder();
     assert.equal(rejectPromptWhileQuiesced({ method: "POST", url }, res, marker), true, url);
@@ -43,25 +43,25 @@ test("quiesce marker rejects only prompt-creating session POST routes", async (t
 
   for (const [method, url] of [
     ["POST", "/session"],
-    ["POST", "/session/ses_abc123/abort"],
+    ["POST", "/api/session/ses_abc123/interrupt"],
     ["POST", "/c/pins/ses_abc123"],
     ["GET", "/c/session-status?directory=%2Fworkspace"],
-    ["GET", "/session/ses_abc123/message"],
+    ["GET", "/api/session/ses_abc123/message"],
   ]) {
     assert.equal(rejectPromptWhileQuiesced({ method, url }, responseRecorder(), marker), false, `${method} ${url}`);
   }
 });
 
 test("quiesce guard is disabled without a configured or existing marker", () => {
-  const request = { method: "POST", url: "/session/ses_abc123/prompt_async" };
+  const request = { method: "POST", url: "/api/session/ses_abc123/prompt" };
   assert.equal(rejectPromptWhileQuiesced(request, responseRecorder(), undefined), false);
   assert.equal(rejectPromptWhileQuiesced(request, responseRecorder(), "/definitely/missing/quiesce"), false);
 });
 
-test("server applies quiesce before prompt rewriting and general proxying", async () => {
+test("server applies quiesce before general proxying", async () => {
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
   const guard = source.indexOf("rejectPromptWhileQuiesced(req, res, config.updateQuiesceFile)");
-  const rewrite = source.indexOf("nativePromptAsyncPath(req.url)");
-  const fallbackProxy = source.indexOf("proxy(req, res);", rewrite);
-  assert.ok(guard >= 0 && guard < rewrite && guard < fallbackProxy);
+  const serverStart = source.indexOf("const server = http.createServer(");
+  const fallbackProxy = source.indexOf("\n  proxy(req, res);", serverStart);
+  assert.ok(guard >= 0 && serverStart >= 0 && guard > serverStart && guard < fallbackProxy);
 });

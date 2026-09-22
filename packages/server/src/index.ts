@@ -10,7 +10,7 @@ import {
   GLOBAL_CONFIG_PATH,
   detectKeyDrift,
   expectedProviderKeys,
-  loadedProviderKeys,
+  loadedProviderKeysV2,
   nodeKeyDriftDeps,
 } from "./key-drift.js";
 import {
@@ -23,6 +23,7 @@ import { handleCompactStatic, handleCompactSession, handleCompactNewSession, han
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
 import { handleMergedSessionStatus, isMergedSessionStatusPath, isPathWithinRoot } from "./compact/session-status.js";
+import { unwrap, upstreamAuthHeaders, upstreamFetch, upstreamHealthy, upstreamInfo } from "./upstream.js";
 import { rejectPromptWhileQuiesced } from "./update-quiesce.js";
 import { resolveOpenCodeCommand } from "./opencode-command.js";
 
@@ -115,10 +116,6 @@ function trimDebugValue(value: unknown, maxLength = 800): string | undefined {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
-function normalizeDirectory(value: string): string {
-  return value.replace(/\\/g, "/");
-}
-
 function addRemoteDebugEntry(entry: Omit<RemoteDebugEntry, "id" | "time">): void {
   remoteDebugEntries.push({
     id: nextRemoteDebugID++,
@@ -193,7 +190,7 @@ function appendSetCookie(
 function isSessionListRequest(req: http.IncomingMessage, upstreamPath: string): boolean {
   if (req.method !== "GET") return false;
   try {
-    return new URL(upstreamPath, config.opencodeUrl).pathname === "/session";
+    return new URL(upstreamPath, config.opencodeUrl).pathname === "/api/session";
   } catch {
     return false;
   }
@@ -202,7 +199,7 @@ function isSessionListRequest(req: http.IncomingMessage, upstreamPath: string): 
 function isSessionMessageRequest(req: http.IncomingMessage, upstreamPath: string): boolean {
   if (req.method !== "GET") return false;
   try {
-    return /^\/session\/ses_[^/]+\/message$/.test(new URL(upstreamPath, config.opencodeUrl).pathname);
+    return /^\/api\/session\/ses_[^/]+\/message$/.test(new URL(upstreamPath, config.opencodeUrl).pathname);
   } catch {
     return false;
   }
@@ -258,31 +255,11 @@ function sanitizeSessionMessageBody(body: Buffer, req: http.IncomingMessage, ups
   return Buffer.from(JSON.stringify(sanitized), "utf8");
 }
 
-function nativePromptAsyncPath(path: string | undefined): string | undefined {
-  if (!path) return undefined;
-  try {
-    const upstream = new URL(sanitizeProxyPath(path), config.opencodeUrl);
-    const match = /^\/session\/(ses_[^/]+)\/message$/.exec(upstream.pathname);
-    if (!match) return undefined;
-    upstream.pathname = `/session/${match[1]}/prompt_async`;
-    return `${upstream.pathname}${upstream.search}`;
-  } catch {
-    return undefined;
-  }
-}
-
 async function fetchSessionForList(sessionID: string, upstreamPath: string): Promise<SessionListEntry | undefined> {
-  const listUrl = new URL(upstreamPath, config.opencodeUrl);
-  const sessionUrl = new URL(`/session/${sessionID}`, config.opencodeUrl);
-  for (const key of ["directory", "workspace"]) {
-    for (const value of listUrl.searchParams.getAll(key)) {
-      sessionUrl.searchParams.append(key, value);
-    }
-  }
-
-  const res = await fetch(sessionUrl);
+  void upstreamPath;
+  const res = await upstreamFetch(`/session/${sessionID}`);
   if (!res.ok) return undefined;
-  return await res.json() as SessionListEntry;
+  return unwrap<SessionListEntry>(await res.json());
 }
 
 async function preserveCurrentSessionInList(
@@ -293,13 +270,20 @@ async function preserveCurrentSessionInList(
   const sessionID = sessionIDFromReferer(req.headers) ?? sessionIDFromCookie(req.headers);
   if (!sessionID) return body;
 
-  let sessions: unknown;
+  let payload: unknown;
   try {
-    sessions = JSON.parse(body.toString("utf8"));
+    payload = JSON.parse(body.toString("utf8"));
   } catch {
     return body;
   }
+  // 2.x wraps the list as { data: [...], cursor? }; keep the envelope intact.
+  const envelope = payload && typeof payload === "object" && !Array.isArray(payload) && Array.isArray((payload as any).data)
+    ? (payload as { data: SessionListEntry[] })
+    : undefined;
+  const sessions: unknown = envelope ? envelope.data : payload;
   if (!Array.isArray(sessions)) return body;
+  const serialize = (next: SessionListEntry[]): Buffer =>
+    Buffer.from(JSON.stringify(envelope ? { ...envelope, data: next } : next), "utf8");
 
   const list = sessions as SessionListEntry[];
   const maxUpdated = list.reduce((max, session) => Math.max(max, session.time?.updated ?? 0), 0);
@@ -315,7 +299,7 @@ async function preserveCurrentSessionInList(
       upstreamPath: trimDebugValue(upstreamPath),
       note: `bumped ${sessionID}`,
     });
-    return Buffer.from(JSON.stringify(list), "utf8");
+    return serialize(list);
   }
 
   try {
@@ -330,7 +314,7 @@ async function preserveCurrentSessionInList(
       upstreamPath: trimDebugValue(upstreamPath),
       note: `appended ${sessionID}`,
     });
-    return Buffer.from(JSON.stringify(list), "utf8");
+    return serialize(list);
   } catch (err) {
     addRemoteDebugEntry({
       event: "session-list-preserve-error",
@@ -429,6 +413,7 @@ function sanitizeResponseHeaders(headers: http.IncomingHttpHeaders): http.Outgoi
     "keep-alive",
     "proxy-authenticate",
     "proxy-authorization",
+    "www-authenticate",
     "te",
     "trailer",
     "transfer-encoding",
@@ -470,6 +455,7 @@ function proxy(
     headers: {
       ...sanitizeProxyHeaders(req.headers),
       host: `127.0.0.1:${config.opencodePort}`,
+      ...upstreamAuthHeaders(),
     },
   };
 
@@ -535,7 +521,7 @@ function proxy(
       // browsers re-download the ~2.5MB JS bundle on every visit. Hashed
       // names change when content changes, so immutable caching is safe
       // and makes repeat loads of the standard session UI near-instant.
-      if (upstreamPath.startsWith("/assets/") && (upstreamRes.statusCode ?? 200) === 200) {
+      if ((upstreamPath.startsWith("/assets/") || upstreamPath.startsWith("/_assets/")) && (upstreamRes.statusCode ?? 200) === 200) {
         headers["cache-control"] = "public, max-age=31536000, immutable";
       }
 
@@ -593,7 +579,7 @@ function proxy(
           // session is gone, redirect to root so the app recovers to the
           // session list / most-recent session instead of the dead screen.
           if (pageSessionID) {
-            fetch(`${config.opencodeUrl}/session/${pageSessionID}`, { method: "GET" })
+            upstreamFetch(`/session/${pageSessionID}`, { method: "GET" })
               .then((r) => {
                 if (res.destroyed || cleanedUp) return;
                 if (r.status === 404) {
@@ -682,66 +668,6 @@ function proxy(
   startProxyRequest(true);
 }
 
-function proxyNativePromptAsync(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  upstreamPath: string,
-): void {
-  const startedAt = Date.now();
-  let logged = false;
-  const log = (entry: Pick<RemoteDebugEntry, "status" | "error" | "note">): void => {
-    if (logged) return;
-    logged = true;
-    addRemoteDebugEntry({
-      event: "native-prompt-async",
-      method: req.method,
-      path: trimDebugValue(req.url),
-      upstreamPath: trimDebugValue(upstreamPath),
-      durationMs: Date.now() - startedAt,
-      ...entry,
-    });
-  };
-
-  const upstreamReq = http.request({
-    hostname: "127.0.0.1",
-    port: config.opencodePort,
-    path: upstreamPath,
-    method: "POST",
-    headers: {
-      ...sanitizeProxyHeaders(req.headers),
-      host: `127.0.0.1:${config.opencodePort}`,
-    },
-  }, (upstreamRes) => {
-    log({ status: upstreamRes.statusCode, note: "rewrote native prompt to prompt_async" });
-    const headers = sanitizeResponseHeaders(upstreamRes.headers);
-
-    if ((upstreamRes.statusCode ?? 500) >= 200 && (upstreamRes.statusCode ?? 500) < 300) {
-      upstreamRes.resume();
-      if (!res.headersSent && !res.destroyed) {
-        res.writeHead(upstreamRes.statusCode ?? 204, headers);
-        res.end();
-      }
-      return;
-    }
-
-    if (!res.headersSent && !res.destroyed) {
-      res.writeHead(upstreamRes.statusCode ?? 502, headers);
-      upstreamRes.pipe(res, { end: true });
-    } else {
-      upstreamRes.resume();
-    }
-  });
-
-  upstreamReq.on("error", (err) => {
-    log({ status: 502, error: err.message });
-    if (!res.headersSent && !res.destroyed) {
-      res.writeHead(502, { "Cache-Control": "no-store", "X-OpenCode-Remote": "true" });
-      res.end("Bad Gateway");
-    }
-  });
-
-  req.pipe(upstreamReq, { end: true });
-}
 
 // ─── HTTP Server ─────────────────────────────────────────────────────────────
 
@@ -930,8 +856,10 @@ function redirectToSession(res: http.ServerResponse, sessionPath: string): void 
 
 async function handleRemoteHealth(res: http.ServerResponse): Promise<void> {
   try {
-    const healthRes = await fetch(`${config.opencodeUrl}/global/health`);
-    const upstreamHealth = await healthRes.json();
+    const info = await upstreamInfo();
+    if (!info) throw new Error("upstream health probe failed");
+    // `version` is what update-opencode-sara.sh compares after a CLI swap.
+    const upstreamHealth = { healthy: true, api: "v2", version: info.version };
 
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
@@ -1269,6 +1197,8 @@ const server = http.createServer((req, res) => {
     void handleMergedSessionStatus(req, res, {
       ownOrigin: config.opencodeUrl,
       allowedRoot: config.opencodeDirectory,
+      loadDesktopConnection: async () => undefined,
+      fetchFn: (input, init) => fetch(input, { ...init, headers: { ...upstreamAuthHeaders(), ...(init?.headers as Record<string, string> | undefined) } }),
     });
     return;
   }
@@ -1333,17 +1263,17 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if ((req.method === "GET" || req.method === "HEAD") && req.url === "/latest") {
-    void handleLatestRedirect(res);
+  // OpenCode 2.x's own web UI lives at upstream `/`; expose it at /native so the
+  // compact pages keep `/`.
+  if ((req.method === "GET" || req.method === "HEAD") && req.url === "/native") {
+    req.url = "/";
+    proxy(req, res);
     return;
   }
 
-  if (req.method === "POST") {
-    const asyncPromptPath = nativePromptAsyncPath(req.url);
-    if (asyncPromptPath) {
-      proxyNativePromptAsync(req, res, asyncPromptPath);
-      return;
-    }
+  if ((req.method === "GET" || req.method === "HEAD") && req.url === "/latest") {
+    void handleLatestRedirect(res);
+    return;
   }
 
   proxy(req, res);
@@ -1353,24 +1283,39 @@ const server = http.createServer((req, res) => {
 
 const deadStreamAbortAttempts = new Map<string, number>();
 
-async function fetchBusySessionIDs(directory: string): Promise<string[]> {
-  const url = new URL("/session/status", config.opencodeUrl);
-  url.searchParams.set("directory", normalizeDirectory(directory));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`GET /session/status returned ${res.status}`);
-  const statuses = await res.json() as SessionStatusMap;
-  return Object.entries(statuses)
-    .filter(([, status]) => status?.type === "busy")
+// 2.x: GET /api/session/active → { data: { <id>: { type: "running" } } }
+async function fetchBusySessionIDs(_directory: string): Promise<string[]> {
+  const res = await upstreamFetch("/session/active");
+  if (!res.ok) throw new Error(`GET /api/session/active returned ${res.status}`);
+  const active = unwrap<SessionStatusMap>(await res.json());
+  return Object.entries(active ?? {})
+    .filter(([, status]) => status?.type === "running" || status?.type === "busy")
     .map(([sessionID]) => sessionID);
 }
 
+// 2.x messages are { id, type: user|assistant|…, time, content: [...], tokens };
+// map the assistant ones onto the { info, parts } view the checks below use.
+export function toWatchdogMessage(raw: any): OpenCodeMessage | undefined {
+  if (!raw || (raw.type !== "assistant" && raw.type !== "user")) return undefined;
+  return {
+    info: {
+      id: raw.id,
+      role: raw.type,
+      time: raw.time ?? {},
+      tokens: raw.tokens,
+      error: raw.error,
+      providerID: raw.model?.providerID,
+      modelID: raw.model?.id ?? raw.model?.modelID,
+    },
+    parts: Array.isArray(raw.content) ? raw.content : [],
+  };
+}
+
 async function fetchRecentMessages(sessionID: string): Promise<OpenCodeMessage[]> {
-  const url = new URL(`/session/${sessionID}/message`, config.opencodeUrl);
-  url.searchParams.set("limit", "8");
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`GET /session/${sessionID}/message returned ${res.status}`);
-  const messages = await res.json() as unknown;
-  return Array.isArray(messages) ? messages as OpenCodeMessage[] : [];
+  const res = await upstreamFetch(`/session/${sessionID}/message?limit=8&order=desc`);
+  if (!res.ok) throw new Error(`GET /api/session/${sessionID}/message returned ${res.status}`);
+  const messages = unwrap<unknown>(await res.json());
+  return (Array.isArray(messages) ? messages : []).map(toWatchdogMessage).filter((m): m is OpenCodeMessage => !!m);
 }
 
 function lastMessage(messages: OpenCodeMessage[]): OpenCodeMessage | undefined {
@@ -1399,8 +1344,8 @@ async function abortDeadStream(sessionID: string, message: OpenCodeMessage, now:
   if (now - lastAttempt < 300_000) return;
   deadStreamAbortAttempts.set(messageID, now);
 
-  const res = await fetch(`${config.opencodeUrl}/session/${sessionID}/abort`, { method: "POST" });
-  if (!res.ok) throw new Error(`POST /session/${sessionID}/abort returned ${res.status}`);
+  const res = await upstreamFetch(`/session/${sessionID}/interrupt`, { method: "POST" });
+  if (!res.ok) throw new Error(`POST /api/session/${sessionID}/interrupt returned ${res.status}`);
 
   const ageSeconds = Math.round((now - (message.info?.time?.created ?? now)) / 1_000);
   addRemoteDebugEntry({
@@ -1480,8 +1425,8 @@ function startKeepAlive(): void {
 
   connect = (): void => {
     const req = http.get(
-      `${config.opencodeUrl}/event`,
-      { headers: { Accept: "text/event-stream" } },
+      `${config.opencodeUrl}/api/event`,
+      { headers: { Accept: "text/event-stream", ...upstreamAuthHeaders() } },
       (res) => {
         delay = 1_000;
         res.on("data", () => { /* consume to keep stream open */ });
@@ -1507,19 +1452,29 @@ const startupTerminationGraceMs = 3_000;
 const startupKillWaitMs = 2_000;
 
 function spawnOpenCode(): ChildProcess {
-  console.log(`[opencode-remote] spawning opencode serve in ${config.opencodeDirectory}`);
+  if (!config.serviceMode && !config.opencodeServerPassword) {
+    throw new Error("OPENCODE_SERVER_PASSWORD is required: OpenCode 2.x serve forces Basic auth");
+  }
+  console.log(`[opencode-remote] spawning opencode serve${config.serviceMode ? " --service" : ""} in ${config.opencodeDirectory}`);
   const opencodeCmd = resolveOpenCodeCommand({
     explicitPath: process.env.OPENCODE_CLI_PATH,
     localAppData: process.env.LOCALAPPDATA ?? "",
   });
   return spawn(
     opencodeCmd,
-    ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],
+    // Service mode: the CLI picks the port, writes service.json, and exits at
+    // once if a service is already running (then the exit handler below sees a
+    // healthy upstream and just keeps proxying to it).
+    config.serviceMode
+      ? ["serve", "--service"]
+      : ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencodePort)],
     {
       cwd: config.opencodeDirectory,
       stdio: "inherit",
       shell: false,
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: "" },
+      env: config.serviceMode
+        ? { ...process.env }
+        : { ...process.env, OPENCODE_SERVER_PASSWORD: config.opencodeServerPassword },
     },
   );
 }
@@ -1527,9 +1482,7 @@ function spawnOpenCode(): ChildProcess {
 async function waitForOpenCode(): Promise<void> {
   for (let i = 0; i < 60; i++) {
     try {
-      const res = await fetch(`${config.opencodeUrl}/global/health`);
-      const json = (await res.json()) as { healthy?: boolean };
-      if (json.healthy) return;
+      if (await upstreamHealthy()) return;
     } catch {
       // not ready yet
     }
@@ -1542,10 +1495,7 @@ async function probeOpenCodeHealth(timeoutMs: number): Promise<boolean> {
   const abort = new AbortController();
   const timeout = setTimeout(() => abort.abort(), Math.max(1, timeoutMs));
   try {
-    const res = await fetch(`${config.opencodeUrl}/global/health`, { signal: abort.signal });
-    if (res.status !== 200) return false;
-    const json = (await res.json()) as { healthy?: boolean };
-    return json.healthy === true;
+    return await upstreamHealthy({ signal: abort.signal });
   } catch {
     return false;
   } finally {
@@ -1627,9 +1577,7 @@ async function main(): Promise<void> {
       console.error(`[opencode-remote] opencode exited with code ${code}`);
       // If another OpenCode is already healthy on this port, don't crash.
       try {
-        const r = await fetch(`${config.opencodeUrl}/global/health`);
-        const j = (await r.json()) as { healthy?: boolean };
-        if (j.healthy) {
+        if (await upstreamHealthy()) {
           ownsOpenCodeProcess = false;
           console.log("[opencode-remote] existing OpenCode instance is healthy; continuing");
           return;
@@ -1641,9 +1589,9 @@ async function main(): Promise<void> {
   attachOpenCodeExitHandler(oc);
 
   const fetchLoadedProviderKeys = async (): Promise<Map<string, string>> => {
-    const res = await fetch(`${config.opencodeUrl}/config`);
-    if (!res.ok) throw new Error(`GET /config returned ${res.status}`);
-    return loadedProviderKeys(await res.json());
+    const res = await upstreamFetch(`/provider?location[directory]=${encodeURIComponent(config.opencodeDirectory)}`);
+    if (!res.ok) throw new Error(`GET /api/provider returned ${res.status}`);
+    return loadedProviderKeysV2(await res.json());
   };
 
   const currentKeyDrift = async (): Promise<string[]> => {
@@ -1689,11 +1637,6 @@ async function main(): Promise<void> {
         const drift = await currentKeyDrift();
         if (drift.length === 0) return;
 
-        if (!ownsOpenCodeProcess) {
-          console.warn("[opencode-remote] provider apiKey drift detected but this proxy does not own the opencode process");
-          return;
-        }
-
         const now = Date.now();
         const elapsed = now - lastDriftRestartAt;
         if (lastDriftRestartAt > 0 && elapsed < config.keyDriftRestartCooldownMs) {
@@ -1703,15 +1646,28 @@ async function main(): Promise<void> {
         }
 
         lastDriftRestartAt = now;
+        // 2.x watches opencode.jsonc itself (verified 2026-09-22: an apiKey edit shows
+        // up in /api/provider within ~4s), so drift here means the watcher missed it.
+        // Ask for a config reload first; restart the service only if that fails.
         console.warn(
-          `[opencode-remote] provider apiKey changed on disk (ids: ${drift.join(", ")}); restarting opencode serve`,
+          `[opencode-remote] provider apiKey changed on disk (ids: ${drift.join(", ")}); asking OpenCode to reload config`,
         );
-        await restartOpenCodeChild("key drift");
-        const remainingDrift = await currentKeyDrift();
+        const reload = await upstreamFetch("/location/reload", { method: "POST" });
+        if (!reload.ok) console.warn(`[opencode-remote] POST /api/location/reload returned ${reload.status}`);
+        await new Promise((r) => setTimeout(r, 3_000));
+        let remainingDrift = await currentKeyDrift();
         if (remainingDrift.length > 0) {
-          throw new Error(`provider keys still differ after restart: ${remainingDrift.join(", ")}`);
+          if (!ownsOpenCodeProcess) {
+            throw new Error(`provider keys still differ after reload (${remainingDrift.join(", ")}) and this proxy does not own the opencode process`);
+          }
+          console.warn(`[opencode-remote] provider keys still differ after reload (${remainingDrift.join(", ")}); restarting opencode serve`);
+          await restartOpenCodeChild("key drift");
+          remainingDrift = await currentKeyDrift();
+          if (remainingDrift.length > 0) {
+            throw new Error(`provider keys still differ after restart: ${remainingDrift.join(", ")}`);
+          }
         }
-        console.log("[opencode-remote] opencode serve restarted; provider keys now match");
+        console.log("[opencode-remote] provider keys now match");
       } catch (err) {
         console.warn("[opencode-remote] key drift watchdog failed:", err);
       } finally {
@@ -1762,6 +1718,21 @@ async function main(): Promise<void> {
 
         const failures = Math.max(1, config.healthWatchdogFailures);
         if (!ownsOpenCodeProcess) {
+          if (config.serviceMode) {
+            // The shared background service we were riding on (typically the one
+            // OpenCode Desktop started) is gone — e.g. Desktop was quit. Start our
+            // own so the phone keeps working; Desktop will reuse it when it returns.
+            console.warn(
+              `[opencode-remote] shared opencode service unresponsive (${failures} consecutive health probe failures); starting our own`,
+            );
+            oc = spawnOpenCode();
+            attachOpenCodeExitHandler(oc);
+            ownsOpenCodeProcess = true;
+            await waitForOpenCode();
+            console.warn("[opencode-remote] opencode service started by health watchdog");
+            state = initialHealthWatchdogState();
+            return;
+          }
           console.warn(
             `[opencode-remote] opencode serve unresponsive (${failures} consecutive health probe failures) but this proxy does not own the opencode process`,
           );
@@ -1848,7 +1819,8 @@ async function main(): Promise<void> {
     // 6. Auto-clear OpenCode streams that produced no output and never completed.
     startDeadStreamWatchdog();
 
-    // 7. Restart owned OpenCode child when provider apiKey values change on disk.
+    // 7. Provider apiKey drift: 2.x hot-reloads opencode.jsonc itself; this is the
+    //    safety net (reload, then restart) if the watcher ever misses an edit.
     startKeyDriftWatchdog();
 
     // 8. Restart owned OpenCode child when health probes stop responding.

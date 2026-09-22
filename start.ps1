@@ -34,6 +34,12 @@ try {
     # 所以這個值會蓋掉 .env 裡正確的正斜線設定，健康探針就永遠過不了。
     $env:OPENCODE_DIRECTORY = $configuration.Workspace -replace '\\', '/'
     $env:OPENCODE_UPDATE_QUIESCE_FILE = $paths.QuiesceFile
+    if ($configuration.ServiceMode) {
+        # OpenCode 2.x shared background service: pass the resolved (Desktop-bundled,
+        # newest existing) CLI so a Desktop update never leaves a dead path behind.
+        $env:OPENCODE_SERVICE_MODE = "1"
+        $env:OPENCODE_CLI_PATH = Resolve-OpenCodeCli $PSScriptRoot
+    }
     $probeFile = Ensure-OpenCodeRemoteProbe $configuration
     Write-Host "Starting opencode-remote on configured ports $($configuration.RemotePort)/$($configuration.OpenCodePort)..." -ForegroundColor Cyan
 

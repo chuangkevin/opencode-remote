@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  LatestUserModelBudgetError,
   LatestUserModelUpstreamError,
   findLatestUserModel,
 } from "../dist/compact/model.js";
@@ -11,84 +10,56 @@ import {
   matchLatestUserModelPath,
 } from "../dist/compact/handlers.js";
 
-function message(id, role, created, model, variant) {
-  return { info: { id, role, time: { created }, model, variant } };
-}
-
-function page(body, cursor, status = 200) {
-  return new Response(JSON.stringify(body), {
+// OpenCode 2.x keeps the session's current model on the session object
+// (GET /api/session/:id → { data: { model: { id, providerID, variant } } }), so
+// the picker reads that instead of scanning message history.
+function sessionResponse(session, status = 200) {
+  return new Response(JSON.stringify({ data: session }), {
     status,
-    headers: cursor ? { "content-type": "application/json", "x-next-cursor": cursor } : {
-      "content-type": "application/json",
-    },
+    headers: { "content-type": "application/json" },
   });
 }
 
-test("scans older cursor pages and follows the actual cursor header", async () => {
+test("reads the session's current model from GET /api/session/:id", async () => {
   const urls = [];
-  const pages = [
-    page(Array.from({ length: 30 }, (_, i) => message(`a${i}`, "assistant", 100 + i)), "cursor-page-2"),
-    page(Array.from({ length: 30 }, (_, i) => message(`b${i}`, "assistant", 50 + i)), "cursor-page-3"),
-    page([
-      message("msg_older", "user", 1, { providerID: "openai", modelID: "gpt-5.5" }, "low"),
-      message("msg_latest_user", "user", 2, { providerID: "openai", modelID: "gpt-5.6-sol" }, "medium"),
-    ]),
-  ];
-
+  const headers = [];
   const result = await findLatestUserModel("http://upstream", "ses_valid", {
-    fetch: async (url) => {
+    headers: { authorization: "Basic abc" },
+    fetch: async (url, init) => {
       urls.push(String(url));
-      return pages.shift();
+      headers.push(init?.headers);
+      return sessionResponse({
+        id: "ses_valid",
+        model: { id: "gpt-5.6-sol", providerID: "openai", variant: "medium" },
+        time: { created: 1, updated: 2 },
+      });
     },
   });
 
   assert.deepEqual(result, {
     model: { providerID: "openai", modelID: "gpt-5.6-sol", variant: "medium" },
     created: 2,
-    messageID: "msg_latest_user",
+    messageID: null,
   });
-  assert.equal(urls.length, 3);
-  assert.equal(new URL(urls[0]).searchParams.get("limit"), "30");
-  assert.equal(new URL(urls[1]).searchParams.get("before"), "cursor-page-2");
-  assert.equal(new URL(urls[2]).searchParams.get("before"), "cursor-page-3");
+  assert.deepEqual(urls, ["http://upstream/api/session/ses_valid"]);
+  assert.deepEqual(headers[0], { authorization: "Basic abc" });
 });
 
-test("stops on the first page containing a valid user model", async () => {
-  let calls = 0;
-  const result = await findLatestUserModel("http://upstream", "ses_valid", {
-    fetch: async () => {
-      calls += 1;
-      return page([
-        message("msg_old", "user", 10, { providerID: "openai", modelID: "gpt-5.5" }),
-        message("msg_new", "user", 20, { providerID: "openai", modelID: "gpt-5.6-sol" }, "medium"),
-      ], "unused-cursor");
-    },
+test("treats the 2.x 'default' variant as no variant and missing model as null", async () => {
+  const withDefault = await findLatestUserModel("http://upstream", "ses_valid", {
+    fetch: async () => sessionResponse({ model: { id: "gb10", providerID: "newapi", variant: "default" }, time: { updated: 5 } }),
   });
+  assert.deepEqual(withDefault.model, { providerID: "newapi", modelID: "gb10", variant: null });
 
-  assert.equal(calls, 1);
-  assert.equal(result.messageID, "msg_new");
-});
-
-test("returns model null only when pagination reaches its true end", async () => {
-  const pages = [page([], "older"), page([])];
   assert.deepEqual(await findLatestUserModel("http://upstream", "ses_valid", {
-    fetch: async () => pages.shift(),
+    fetch: async () => sessionResponse({ id: "ses_valid", time: { updated: 5 } }),
   }), { model: null });
-});
-
-test("rejects a repeated upstream cursor as a scan budget failure", async () => {
-  await assert.rejects(
-    findLatestUserModel("http://upstream", "ses_valid", {
-      fetch: async () => page([], "same-cursor"),
-    }),
-    LatestUserModelBudgetError,
-  );
 });
 
 test("rejects upstream and parse failures instead of returning model null", async () => {
   await assert.rejects(
     findLatestUserModel("http://upstream", "ses_valid", {
-      fetch: async () => page({ error: true }, null, 500),
+      fetch: async () => sessionResponse({ error: true }, 500),
     }),
     LatestUserModelUpstreamError,
   );
@@ -100,18 +71,7 @@ test("rejects upstream and parse failures instead of returning model null", asyn
   );
 });
 
-test("rejects when the page budget is exhausted before pagination ends", async () => {
-  let cursor = 0;
-  await assert.rejects(
-    findLatestUserModel("http://upstream", "ses_valid", {
-      maxPages: 2,
-      fetch: async () => page([], `cursor-${++cursor}`),
-    }),
-    LatestUserModelBudgetError,
-  );
-});
-
-test("endpoint validates session ids and maps upstream versus budget failures", async () => {
+test("endpoint validates session ids and maps upstream versus timeout failures", async () => {
   assert.equal(matchLatestUserModelPath("/c/session/ses_valid/latest-user-model"), "ses_valid");
   assert.equal(matchLatestUserModelPath("/c/session/not-a-session/latest-user-model"), undefined);
 
@@ -138,13 +98,13 @@ test("endpoint validates session ids and maps upstream versus budget failures", 
     await handleLatestUserModel("invalid", invalid);
     assert.equal(invalid.status, 400);
 
-    const upstreamFailure = await invoke(async () => page({ error: true }, null, 500));
+    const upstreamFailure = await invoke(async () => sessionResponse({ error: true }, 500));
     assert.equal(upstreamFailure.status, 502);
     assert.equal(upstreamFailure.headers["Cache-Control"], "no-store");
 
-    const budgetFailure = await invoke(async () => page([], "repeat"));
-    assert.equal(budgetFailure.status, 504);
-    assert.equal(budgetFailure.headers["Cache-Control"], "no-store");
+    const ok = await invoke(async () => sessionResponse({ model: { id: "m", providerID: "p" }, time: { updated: 1 } }));
+    assert.equal(ok.status, 200);
+    assert.deepEqual(JSON.parse(ok.body).model, { providerID: "p", modelID: "m", variant: null });
 
     const timeoutFailure = await invoke((_url, { signal }) => new Promise((resolve, reject) => {
       signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });

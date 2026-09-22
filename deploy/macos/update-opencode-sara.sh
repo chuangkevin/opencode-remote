@@ -16,13 +16,16 @@ if [[ "${OPENCODE_UPDATER_CLEAN_ENV:-}" != "1" ]]; then
 fi
 
 readonly NODE_BIN="/opt/homebrew/bin/node"
-readonly BREW_BIN="/opt/homebrew/bin/brew"
-readonly OPENCODE_BIN="/opt/homebrew/bin/opencode"
+# OpenCode 2.x: the CLI is the one bundled with OpenCode Desktop, which updates
+# itself. The updater watches that folder and re-points run-opencode-sara.sh.
+readonly DESKTOP_CLI_ROOT="/Users/kevin/Library/Application Support/ai.opencode.desktop/cli"
+readonly RUN_SCRIPT="/Users/kevin/.local/share/opencode-remote/run-opencode-sara.sh"
+readonly RUN_SCRIPT_BACKUP="/Users/kevin/.local/share/opencode-remote/run-opencode-sara.sh.bak-updater"
 readonly HELPER="/Users/kevin/.local/share/opencode-remote/update-opencode-sara-json.mjs"
 readonly OPENCODE_DIRECTORY="/Users/kevin/Documents/Projects"
 readonly HEALTH_URL="http://100.113.121.103:9223/remote-health"
 readonly STATUS_URL="http://100.113.121.103:9223/c/session-status?strict=1"
-readonly FILE_CONTENT_URL="http://100.113.121.103:9223/file/content"
+readonly FILE_CONTENT_URL="http://100.113.121.103:9223/api/fs/read/.opencode-remote/remote-fda-probe.txt"
 readonly FDA_PROBE_FILE="/Users/kevin/Documents/Projects/.opencode-remote/remote-fda-probe.txt"
 readonly FDA_PROBE_CONTENT="opencode-remote FDA probe v1"
 readonly SKYNET_MAINTENANCE_URL="http://10.11.12.55:3001/api/maintenance"
@@ -41,7 +44,7 @@ MAINTENANCE_ID=""
 KEEP_MAINTENANCE=0
 UPGRADE_STARTED=0
 OLD_VERSION=""
-OLD_SYMLINK_TARGET=""
+NEW_VERSION=""
 
 log() {
   /usr/bin/printf '%s %s\n' "$(/bin/date '+%Y-%m-%dT%H:%M:%S%z')" "$*"
@@ -106,14 +109,19 @@ strict_status_is_idle() {
   return 0
 }
 
+# In service mode the engine may be the shared background service Desktop
+# started (possibly an older CLI), so "which CLI folder we point at" and "which
+# version answers /remote-health" are legitimately different. The gate is
+# therefore: healthy upstream + FDA probe; the expected version is only logged.
 runtime_matches() {
   local expected_version="$1" health_body probe_body
   health_body="$(/usr/bin/curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 2 \
     "$HEALTH_URL" 2>/dev/null || true)"
-  /usr/bin/printf '%s' "$health_body" | "$NODE_BIN" "$HELPER" health-version "$expected_version" || return 1
+  /usr/bin/printf '%s' "$health_body" | "$NODE_BIN" "$HELPER" health-current || return 1
+  : "$expected_version"
 
   probe_body="$(/usr/bin/curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 2 \
-    --get --data-urlencode "path=$FDA_PROBE_FILE" --data-urlencode "directory=$OPENCODE_DIRECTORY" \
+    --get --data-urlencode "location[directory]=$OPENCODE_DIRECTORY" \
     "$FILE_CONTENT_URL" 2>/dev/null || true)"
   /usr/bin/printf '%s' "$probe_body" | "$NODE_BIN" "$HELPER" file-content "$FDA_PROBE_CONTENT"
 }
@@ -143,14 +151,32 @@ persist_update_block() {
 }
 
 rollback_update() {
-  if /bin/ln -sfn "$OLD_SYMLINK_TARGET" "$OPENCODE_BIN" &&
+  if /bin/cp -f "$RUN_SCRIPT_BACKUP" "$RUN_SCRIPT" &&
     /bin/launchctl kickstart -k "$SERVICE_TARGET" &&
     poll_runtime "$OLD_VERSION"; then
-    log "ROLLBACK restored=$OLD_VERSION target=$OLD_SYMLINK_TARGET"
+    log "ROLLBACK restored=$OLD_VERSION"
     return 0
   fi
-  log "ROLLBACK_FAILED old_version=$OLD_VERSION target=$OLD_SYMLINK_TARGET" >&2
+  log "ROLLBACK_FAILED old_version=$OLD_VERSION new_version=$NEW_VERSION" >&2
   return 1
+}
+
+# The CLI path line inside run-opencode-sara.sh, e.g.
+#   OPENCODE_CLI_PATH="/Users/kevin/Library/Application Support/ai.opencode.desktop/cli/2.0.11/opencode-cli" \
+current_cli_version() {
+  /usr/bin/sed -nE 's|^[[:space:]]*OPENCODE_CLI_PATH=".*/cli/([^/"]+)/opencode-cli".*$|\1|p' "$RUN_SCRIPT" | /usr/bin/head -n 1
+}
+
+point_run_script_at() {
+  local version="$1" tmp
+  tmp="$(/usr/bin/mktemp "${RUN_SCRIPT}.tmp.XXXXXX")" || return 1
+  if ! /usr/bin/sed -E "s|(OPENCODE_CLI_PATH=\".*/cli/)[^/\"]+(/opencode-cli\")|\1${version}\2|" "$RUN_SCRIPT" > "$tmp" ||
+    ! /bin/chmod 0755 "$tmp" ||
+    ! /bin/mv -f "$tmp" "$RUN_SCRIPT"; then
+    /bin/rm -f -- "$tmp"
+    return 1
+  fi
+  [[ "$(current_cli_version)" == "$version" ]]
 }
 
 fail_stage() {
@@ -168,7 +194,8 @@ fail_stage() {
 }
 
 [[ -x "$NODE_BIN" ]] || fail_stage PREFLIGHT "node missing"
-[[ -x "$BREW_BIN" ]] || fail_stage PREFLIGHT "brew missing"
+[[ -d "$DESKTOP_CLI_ROOT" ]] || fail_stage PREFLIGHT "Desktop CLI folder missing"
+[[ -f "$RUN_SCRIPT" ]] || fail_stage PREFLIGHT "run-opencode-sara.sh missing"
 [[ -f "$HELPER" ]] || fail_stage PREFLIGHT "JSON helper missing"
 
 if ! /usr/bin/shlock -f "$LOCK_FILE" -p "$$"; then
@@ -182,47 +209,44 @@ if [[ -e "$UPDATE_BLOCK_FILE" ]]; then
   exit 0
 fi
 
-[[ -x "$OPENCODE_BIN" ]] || fail_stage PREFLIGHT "opencode missing"
-if ! current_version="$($OPENCODE_BIN --version 2>/dev/null)" || [[ -z "$current_version" ]]; then
-  fail_stage PREFLIGHT "current opencode version unavailable"
-fi
+current_version="$(current_cli_version)"
+[[ -n "$current_version" ]] || fail_stage PREFLIGHT "OPENCODE_CLI_PATH in run-opencode-sara.sh is not a Desktop cli/<version> path"
+current_cli="$DESKTOP_CLI_ROOT/$current_version/opencode-cli"
 
-if ! runtime_matches "$current_version"; then
-  log "DEFERRED reason=current remote health or FDA probe unavailable"
-  exit 0
-fi
-
-STATUS_FAILURE_REASON=""
-if ! strict_status_is_idle; then
-  log "DEFERRED reason=$STATUS_FAILURE_REASON"
-  exit 0
-fi
-
-if outdated="$("$BREW_BIN" outdated --quiet opencode)"; then
-  outdated_exit=0
+# Desktop may have removed the folder the service points at (it prunes old
+# versions after updating itself). Then the service cannot restart at all, so
+# skip the health/idle gates and move to the newest folder right away.
+if [[ -x "$current_cli" ]]; then
+  current_missing=0
 else
-  outdated_exit=$?
-fi
-outdated_result=0
-/usr/bin/printf '%s' "$outdated" | "$NODE_BIN" "$HELPER" brew-outdated "$outdated_exit" || outdated_result=$?
-if ((outdated_result == 0)); then
-  log "No OpenCode update available"
-  exit 0
-fi
-if ((outdated_result != 10)); then
-  fail_stage DETECT "brew outdated opencode failed"
+  current_missing=1
+  log "WARNING current Desktop CLI $current_version is gone; forcing update"
 fi
 
-[[ -L "$OPENCODE_BIN" ]] || fail_stage DETECT "opencode launcher is not a symlink"
-if ! OLD_SYMLINK_TARGET="$(/usr/bin/readlink "$OPENCODE_BIN")" || [[ -z "$OLD_SYMLINK_TARGET" ]]; then
-  fail_stage DETECT "opencode symlink target unavailable"
+newest_result=0
+newest_version="$(/bin/ls -1 "$DESKTOP_CLI_ROOT" 2>/dev/null | "$NODE_BIN" "$HELPER" desktop-cli-newest "$current_version")" || newest_result=$?
+if ((newest_result == 11)); then
+  fail_stage DETECT "no Desktop CLI versions found under $DESKTOP_CLI_ROOT"
 fi
-if ! OLD_EXECUTABLE="$($NODE_BIN -p 'require("node:fs").realpathSync(process.argv[1])' "$OPENCODE_BIN" 2>/dev/null)" ||
-  [[ "$OLD_EXECUTABLE" != /opt/homebrew/Cellar/opencode/* ]] || [[ ! -x "$OLD_EXECUTABLE" ]]; then
-  fail_stage DETECT "opencode symlink does not resolve to an existing Homebrew executable"
+if ((newest_result == 1)) && ((current_missing == 0)); then
+  log "No OpenCode update available (Desktop CLI $current_version)"
+  exit 0
 fi
-if ! OLD_VERSION="$($OLD_EXECUTABLE --version 2>/dev/null)" || [[ -z "$OLD_VERSION" ]]; then
-  fail_stage DETECT "old opencode version unavailable"
+[[ -x "$DESKTOP_CLI_ROOT/$newest_version/opencode-cli" ]] || fail_stage DETECT "Desktop CLI $newest_version has no executable"
+OLD_VERSION="$current_version"
+NEW_VERSION="$newest_version"
+
+if ((current_missing == 0)); then
+  if ! runtime_matches "$current_version"; then
+    log "DEFERRED reason=current remote health or FDA probe unavailable"
+    exit 0
+  fi
+
+  STATUS_FAILURE_REASON=""
+  if ! strict_status_is_idle; then
+    log "DEFERRED reason=$STATUS_FAILURE_REASON"
+    exit 0
+  fi
 fi
 
 if ! (set -o noclobber; /usr/bin/printf '%s\n' "$$" > "$QUIESCE_FILE") 2>/dev/null; then
@@ -232,7 +256,7 @@ fi
 QUIESCE_HELD=1
 /bin/sleep 1
 
-if ! strict_status_is_idle; then
+if ((current_missing == 0)) && ! strict_status_is_idle; then
   log "DEFERRED reason=$STATUS_FAILURE_REASON after quiesce"
   exit 0
 fi
@@ -252,17 +276,11 @@ else
   log "WARNING Skynet maintenance not confirmed; continuing best-effort http=${maintenance_http_code:-curl-error}" >&2
 fi
 
-log "Upgrading Homebrew formula opencode"
+log "Switching opencode-sara to Desktop CLI $NEW_VERSION (was $OLD_VERSION)"
+/bin/cp -f "$RUN_SCRIPT" "$RUN_SCRIPT_BACKUP" || fail_stage UPGRADE "could not back up run-opencode-sara.sh"
 UPGRADE_STARTED=1
-if ! HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 "$BREW_BIN" upgrade opencode; then
-  fail_stage UPGRADE "brew upgrade opencode failed"
-fi
-if ! new_version="$($OPENCODE_BIN --version 2>/dev/null)" || [[ -z "$new_version" ]]; then
-  fail_stage VERSION "new opencode version unavailable"
-fi
-if [[ "$new_version" == "$OLD_VERSION" ]]; then
-  fail_stage VERSION "opencode version did not change"
-fi
+point_run_script_at "$NEW_VERSION" || fail_stage UPGRADE "could not rewrite OPENCODE_CLI_PATH"
+new_version="$NEW_VERSION"
 
 if ! /bin/launchctl kickstart -k "$SERVICE_TARGET"; then
   fail_stage RESTART "launchctl kickstart failed"

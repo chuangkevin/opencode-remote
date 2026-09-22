@@ -5,7 +5,7 @@ function isPromptCreatingPost(req: http.IncomingMessage): boolean {
   if (req.method !== "POST" || !req.url) return false;
   try {
     const pathname = new URL(req.url, "http://opencode-remote.local").pathname;
-    return /^\/session\/ses_[A-Za-z0-9]+\/(?:message|prompt_async)$/.test(pathname);
+    return /^\/api\/session\/ses_[A-Za-z0-9]+\/(?:prompt|command|synthetic)$/.test(pathname);
   } catch {
     return false;
   }

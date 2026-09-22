@@ -93,9 +93,57 @@ async function api(path, init) {
   const text = await res.text().catch(() => "");
   if (!text) return null;
   if (ct.includes("application/json")) {
-    try { return JSON.parse(text); } catch { return text; }
+    try { return unwrapData(JSON.parse(text)); } catch { return text; }
   }
   return text;
+}
+
+// OpenCode 2.x wraps list/get responses as { data, cursor?, location? }.
+function unwrapData(payload) {
+  if (payload && typeof payload === "object" && !Array.isArray(payload) && "data" in payload) return payload.data;
+  return payload;
+}
+
+const API = `/api/session/${encodeURIComponent(sessionID)}`;
+
+// ─── OpenCode 2.x message → compact { info, parts } ────────
+// 2.x messages: { id, type: user|assistant|idle|system|model-switched|…, time,
+//   text/metadata.displayText (user), content: [{ type: text|reasoning|tool }] (assistant) }.
+// The renderer below keeps the 1.x-era { info, parts } shape, so convert here.
+function toCompactMessage(m) {
+  if (!m || typeof m !== "object") return null;
+  if (m.type !== "user" && m.type !== "assistant") return null;
+  const model = m.type === "user" ? m.metadata?.model : m.model;
+  const info = {
+    id: m.id,
+    sessionID: m.sessionID ?? sessionID,
+    role: m.type,
+    time: m.time ?? {},
+    agent: m.agent ?? m.metadata?.agent,
+    model: model ? { providerID: model.providerID, modelID: model.modelID ?? model.id } : undefined,
+    variant: model?.variant && model.variant !== "default" ? model.variant : undefined,
+  };
+  const parts = [];
+  if (m.type === "user") {
+    const text = m.text ?? m.metadata?.displayText ?? "";
+    if (text) parts.push({ type: "text", text });
+    for (const f of Array.isArray(m.files) ? m.files : []) {
+      // 2.x stores { data (base64) | url, mime, name }; rebuild a data: URL for <img>.
+      const url = f.url ?? (f.data && f.mime ? `data:${f.mime};base64,${f.data}` : undefined);
+      parts.push({ type: "file", mime: f.mime, url, filename: f.filename ?? f.name });
+    }
+  } else {
+    for (const c of Array.isArray(m.content) ? m.content : []) {
+      if (c.type === "text") parts.push({ type: "text", text: c.text ?? "" });
+      else if (c.type === "tool") parts.push({ type: "tool", id: c.id, tool: c.name, state: c.state ?? {} });
+      else parts.push({ type: c.type ?? "unknown" });
+    }
+  }
+  return { info, parts };
+}
+
+function toCompactMessages(list) {
+  return (Array.isArray(list) ? list : []).map(toCompactMessage).filter(Boolean);
 }
 
 function fmtTime(ms) {
@@ -243,7 +291,7 @@ function escapeHTML(s) {
 // ─── History ───────────────────────────────────────────────
 async function loadHistory() {
   const { value: messages, applied } = await runLatestModelHistoryRequest(
-    () => api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`),
+    () => api(`${API}/message?limit=${HISTORY_LIMIT}&order=desc`).then(toCompactMessages),
     reconcileAuthoritativeModelHistory,
   );
   if (!applied) return;
@@ -288,7 +336,7 @@ async function loadHistory() {
 // caused every 5 seconds while the AI was streaming.
 async function refreshHistoryIncremental() {
   const { value: messages, applied } = await runLatestModelHistoryRequest(
-    () => api(`/session/${sessionID}/message?limit=${HISTORY_LIMIT}`),
+    () => api(`${API}/message?limit=${HISTORY_LIMIT}&order=desc`).then(toCompactMessages),
     reconcileAuthoritativeModelHistory,
   );
   if (!applied) return;
@@ -448,13 +496,12 @@ async function pollStreamingState() {
 async function refreshBusyStatus() {
   try {
     if (!currentDirectory) {
-      const session = await api(`/session/${sessionID}`);
-      currentDirectory = session?.directory ?? "";
+      const session = await api(API);
+      currentDirectory = session?.location?.directory ?? session?.directory ?? "";
     }
-    if (!currentDirectory) return;
-    const directory = currentDirectory.replace(/\\/g, "/");
-    const statuses = await api(`/session/status?directory=${encodeURIComponent(directory)}`);
-    const busy = statuses?.[sessionID]?.type === "busy";
+    // 2.x: /api/session/active lists every running session.
+    const active = await api("/api/session/active");
+    const busy = active?.[sessionID]?.type === "running";
     setStreaming(busy);
   } catch (err) {
     console.warn("refreshBusyStatus failed", err);
@@ -462,13 +509,14 @@ async function refreshBusyStatus() {
 }
 
 function fetchMessage(messageID) {
-  return api(`/session/${sessionID}/message/${messageID}`);
+  return api(`${API}/message/${encodeURIComponent(messageID)}`).then(toCompactMessage);
 }
 
 async function refreshMessage(messageID) {
   try {
     const m = await fetchMessage(messageID);
     // m is shaped { info: { id, sessionID, role, time, ... }, parts: [...] }
+    if (!m) return;
     if (m.info?.sessionID && m.info.sessionID !== sessionID) return;
     if (!modelInitialized) await initializeModel();
     if (needsAuthoritativeHistory([m], latestModelMessageCreated, latestModelMessageID)) {
@@ -528,102 +576,80 @@ function applyDelta(props) {
   maybeScrollOrShowChip();
 }
 
+// OpenCode 2.x event stream (/api/event, probed 2026-09-22 on 2.0.11). Every
+// event is { type, data }. The ones compact cares about:
+//   session.execution.started / .succeeded / .failed / .aborted  → busy / idle
+//   session.inbox.enqueued / .delivered   → user prompt accepted / handed to the agent
+//   session.step.started / .ended         → an assistant message (data.assistantMessageID)
+//   session.text.started / .delta / .ended → streaming text (data.ordinal, data.delta, data.text)
+//   session.tool.input.* / .called / .progress / .success / .error → tool part updates
+//   session.updated                        → title / metadata changed
+//   form.created / form.replied / form.cancelled → question cards
+//   permission.*                           → auto-accept
 function dispatchSSEEvent(type, props) {
-  // Filter by sessionID when present.
-  const eventSessionID = props?.sessionID ?? props?.info?.sessionID;
+  const eventSessionID = props?.sessionID ?? props?.form?.sessionID ?? props?.request?.sessionID ?? props?.permission?.sessionID;
   if (eventSessionID && eventSessionID !== sessionID) return;
+  const messageID = props?.assistantMessageID ?? props?.messageID ?? props?.inboxID ?? null;
 
-  // Extract messageID from the various shapes we observed:
-  //   message.updated:      props.info.id
-  //   message.part.updated: props.part.messageID
-  //   message.part.delta:   props.messageID
-  const messageID =
-    props?.info?.id ??
-    props?.part?.messageID ??
-    props?.messageID ??
-    null;
-
-  switch (type) {
-    case "message.updated":
-      // Fires for user message immediately (before AI starts) and again when
-      // the assistant message completes. Refresh to get authoritative content.
-      if (messageID) scheduleRefresh(messageID);
-      break;
-
-    case "message.part.updated": {
-      // A part was fully written (streaming chunk or final). Full refresh gets
-      // the part from the server so we replace optimistic delta text with
-      // authoritative content.
-      const partID = props?.part?.id;
-      if (partID) {
-        // Clear our delta buffer for this part — server now has the truth.
-        _deltaBuffers.delete(`${messageID}::${partID}`);
-      }
-      if (messageID) scheduleRefresh(messageID);
-      setStreaming(true);
-      break;
-    }
-
-    case "message.part.delta":
-      // Incremental text during streaming — apply optimistically without fetching.
-      setStreaming(true);
-      applyDelta(props);
-      break;
-
-    case "session.status": {
-      const statusType = props?.status?.type;
-      if (statusType === "busy") setStreaming(true);
-      else if (statusType === "idle") {
-        setStreaming(false);
-        drainQueueIfIdle().catch((err) => console.warn("drainQueueIfIdle:", err));
-      }
-      break;
-    }
-
-    case "session.idle":
-      // Definitive "all streaming done" signal. Do a final refresh of any
-      // message we have buffered but haven't flushed yet, then drain any
-      // queued user prompts.
-      setStreaming(false);
-      _deltaBuffers.clear();
-      drainQueueIfIdle().catch((err) => console.warn("drainQueueIfIdle:", err));
-      break;
-
-    case "session.updated":
-      refreshHeader();
-      break;
-
-    case "permission.asked":
-      // Auto-accept every permission ask. Trust mode covers most patterns via
-      // session.permission PATCH, but anything that slips through (new MCP
-      // tools, unmapped patterns) would otherwise block the agent forever.
-      // The user has opted into "always allow" for the compact UI; if they
-      // ever want manual control, they can use the native SPA.
-      autoAcceptPermission(props);
-      break;
-
-    case "permission.replied":
-      // Server confirmation our auto-reply was received. No UI update needed.
-      break;
-
-    case "question.asked":
-      renderQuestionRequest(props);
-      maybeScrollOrShowChip();
-      break;
-
-    case "question.replied":
-    case "question.rejected":
-      markQuestionFinished(type, props);
-      break;
-
-    default:
-      // Unknown event — log once per type for diagnostics.
-      if (!dispatchSSEEvent._seen) dispatchSSEEvent._seen = new Set();
-      if (!dispatchSSEEvent._seen.has(type)) {
-        dispatchSSEEvent._seen.add(type);
-        console.debug("[compact] unknown SSE event:", type, props);
-      }
-      break;
+  if (type === "session.execution.started") {
+    setStreaming(true);
+    return;
+  }
+  if (type.startsWith("session.execution.")) {
+    // succeeded / failed / aborted / …: definitive "all streaming done" signal.
+    setStreaming(false);
+    _deltaBuffers.clear();
+    refreshHistoryIncremental().catch(() => {});
+    drainQueueIfIdle().catch((err) => console.warn("drainQueueIfIdle:", err));
+    return;
+  }
+  if (type === "session.inbox.delivered" || type === "session.inbox.enqueued") {
+    // The user message now exists server-side; pull it so the optimistic
+    // placeholder is replaced by the canonical one.
+    refreshHistoryIncremental().catch(() => {});
+    setStreaming(true);
+    return;
+  }
+  if (type === "session.text.delta") {
+    setStreaming(true);
+    applyDelta({ messageID, partID: `text:${props?.ordinal ?? 0}`, field: "text", delta: props?.delta });
+    return;
+  }
+  if (type.startsWith("session.text.") || type.startsWith("session.tool.") || type.startsWith("session.step.")) {
+    setStreaming(true);
+    if (type === "session.text.ended") _deltaBuffers.delete(`${messageID}::text:${props?.ordinal ?? 0}`);
+    if (messageID) scheduleRefresh(messageID);
+    if (type === "session.tool.called" && props?.name === "question") schedulePendingQuestionDrain();
+    return;
+  }
+  if (type === "session.updated") {
+    refreshHeader();
+    return;
+  }
+  if (type === "form.created") {
+    renderQuestionRequest(formToQuestion(props?.form));
+    maybeScrollOrShowChip();
+    return;
+  }
+  if (type.startsWith("form.")) {
+    // replied / cancelled / deleted — anything but created resolves the card.
+    const form = props?.form ?? props;
+    markQuestionFinished(type.includes("cancel") || type.includes("delet") ? "question.rejected" : "question.replied", {
+      id: form?.id ?? props?.formID,
+      answers: form?.answer ? [Object.values(form.answer).flat()] : props?.answer ? [Object.values(props.answer).flat()] : [],
+    });
+    return;
+  }
+  if (type.startsWith("permission.")) {
+    const request = props?.request ?? props?.permission ?? props;
+    if (request?.id && type.endsWith("created") || type.endsWith("asked")) autoAcceptPermission(request);
+    return;
+  }
+  // Unknown event — log once per type for diagnostics.
+  if (!dispatchSSEEvent._seen) dispatchSSEEvent._seen = new Set();
+  if (!dispatchSSEEvent._seen.has(type)) {
+    dispatchSSEEvent._seen.add(type);
+    console.debug("[compact] unknown SSE event:", type, props);
   }
 }
 
@@ -638,10 +664,11 @@ function autoAcceptPermission(req) {
   const id = req?.id;
   if (!id || _autoAcceptedPermissions.has(id)) return;
   _autoAcceptedPermissions.add(id);
-  api(`/permission/${encodeURIComponent(id)}/reply`, {
+  // 2.x: POST /api/session/:id/permission/:requestID/reply { decision }
+  api(`${API}/permission/${encodeURIComponent(id)}/reply`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ reply: "always" }),
+    body: JSON.stringify({ decision: "allow" }),
   }).catch((err) => {
     // Remove from cache so a future retry can attempt again.
     _autoAcceptedPermissions.delete(id);
@@ -657,8 +684,38 @@ function autoAcceptPermission(req) {
 // questionNodes and _autoAcceptedPermissions are declared near messageNodes (top of file)
 // so loadHistory()'s .clear() call is unambiguous regardless of evaluation order.
 
+// 2.x "form" (GET /api/session/:id/form, event form.created):
+//   { id, sessionID, title, metadata: { kind: "question" }, fields: [
+//       { key, title, description, type, options: [{ value, label, description }], custom, multiple? } ] }
+// Reply: POST /api/session/:id/form/:id/reply { answer: { <key>: value | value[] } }
+// Cancel: DELETE /api/session/:id/form/:id
+// Convert to the question shape the card renderer already understands.
+function formToQuestion(form) {
+  if (!form?.id || !Array.isArray(form.fields) || form.fields.length === 0) return null;
+  return {
+    id: form.id,
+    sessionID: form.sessionID,
+    questions: form.fields.map((f) => ({
+      key: f.key,
+      header: f.title ?? "",
+      question: f.description ?? f.title ?? "",
+      multiple: Boolean(f.multiple) || f.type === "array",
+      custom: f.custom !== false,
+      options: (Array.isArray(f.options) ? f.options : []).map((o) => ({
+        label: String(o.label ?? o.value ?? ""),
+        value: o.value ?? o.label,
+        description: o.description ?? "",
+      })),
+    })),
+  };
+}
+
+const questionFields = new Map(); // form id → questions (for key/value lookup on reply)
+
 function renderQuestionRequest(req) {
+  if (req && Array.isArray(req.fields) && !Array.isArray(req.questions)) req = formToQuestion(req);
   const id = req?.id;
+  if (id && Array.isArray(req?.questions)) questionFields.set(id, req.questions);
   const questions = Array.isArray(req?.questions) ? req.questions : [];
   if (!id || questions.length === 0) return;
 
@@ -785,12 +842,22 @@ async function submitQuestion(id, selections, card) {
   const answers = selections.map((s) => Array.from(s));
   card.classList.add("submitting");
   try {
-    await api(`/question/${encodeURIComponent(id)}/reply`, {
+    // Map the picked labels back to the form field keys / option values.
+    const questions = questionFields.get(id) ?? [];
+    const answer = {};
+    answers.forEach((picked, i) => {
+      const q = questions[i];
+      const key = q?.key ?? `q${i}`;
+      const values = picked.map((label) => q?.options?.find((o) => o.label === label)?.value ?? label);
+      answer[key] = q?.multiple ? values : values[0] ?? "";
+    });
+    await api(`${API}/form/${encodeURIComponent(id)}/reply`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify({ answer }),
     });
-    // The server will emit question.replied via SSE — that handler marks the card.
+    // 2.x emits form.replied via SSE; mark locally too in case the stream is down.
+    markQuestionFinished("question.replied", { id, answers });
   } catch (err) {
     card.classList.remove("submitting");
     showToast("送出回答失敗：" + err.message, "error");
@@ -800,11 +867,8 @@ async function submitQuestion(id, selections, card) {
 async function rejectQuestion(id, card) {
   card.classList.add("submitting");
   try {
-    await api(`/question/${encodeURIComponent(id)}/reject`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-    });
+    await api(`${API}/form/${encodeURIComponent(id)}`, { method: "DELETE" });
+    markQuestionFinished("question.rejected", { id });
   } catch (err) {
     card.classList.remove("submitting");
     showToast("略過失敗：" + err.message, "error");
@@ -974,17 +1038,19 @@ function removeOptimisticUserMessages() {
 
 async function drainPendingInteractive() {
   // Fire both in parallel; either failing should not block the other.
-  const [perms, questions] = await Promise.all([
-    api("/permission").catch(() => []),
-    api("/question").catch(() => []),
+  const [perms, forms] = await Promise.all([
+    api(`${API}/permission`).catch(() => []),
+    api(`${API}/form`).catch(() => []),
   ]);
   for (const p of normalizePendingList(perms)) {
     if (p?.sessionID && p.sessionID !== sessionID) continue;
     autoAcceptPermission(p);
   }
   let renderedQuestion = false;
-  for (const q of normalizePendingList(questions)) {
-    if (q?.sessionID && q.sessionID !== sessionID) continue;
+  for (const form of normalizePendingList(forms)) {
+    if (form?.sessionID && form.sessionID !== sessionID) continue;
+    const q = formToQuestion(form);
+    if (!q) continue;
     renderQuestionRequest(q);
     renderedQuestion = true;
   }
@@ -992,7 +1058,7 @@ async function drainPendingInteractive() {
 }
 
 function connectSSE() {
-  const es = new EventSource("/event");
+  const es = new EventSource("/api/event");
   es.addEventListener("open", () => {
     refreshLatestSessionModel().catch((err) => {
       console.warn("latest model sync failed after SSE connect", err);
@@ -1005,7 +1071,7 @@ function connectSSE() {
     try {
       const payload = JSON.parse(ev.data);
       const type = payload?.type;
-      const props = payload?.properties ?? {};
+      const props = payload?.data ?? payload?.properties ?? {};
       if (type) dispatchSSEEvent(type, props);
     } catch {
       /* ignore non-JSON heartbeat noise */
@@ -1078,8 +1144,8 @@ let currentTitle = "";
 
 async function loadSessionMeta() {
   try {
-    const s = await api(`/session/${sessionID}`);
-    currentDirectory = s?.directory ?? currentDirectory;
+    const s = await api(API);
+    currentDirectory = s?.location?.directory ?? s?.directory ?? currentDirectory;
     setTitle(s.title ?? "");
   } catch (err) {
     console.warn("loadSessionMeta failed", err);
@@ -1115,7 +1181,7 @@ async function commitEditTitle() {
   setTitle(newTitle);
   cancelEditTitle();
   try {
-    await api(`/session/${sessionID}`, {
+    await api(API, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: newTitle }),
@@ -1253,18 +1319,27 @@ async function sendMessage() {
 
 async function sendNow(text, attachments, model) {
   const promptModel = await awaitPromptModel(modelInitialization, model, () => currentModel);
-  const parts = [];
-  if (text) parts.push({ type: "text", text });
-  for (const a of attachments) {
-    parts.push({ type: "file", mime: a.mime, url: a.dataUrl, filename: a.name });
-  }
-  const payload = { parts };
-  // Valid queued snapshots stay stable; legacy queue entries without a model
-  // use the synchronized current model after initialization.
+  // 2.x: POST /api/session/:id/prompt { text, files, agents, metadata } — returns
+  // as soon as the prompt is queued (inbox); the agent runs server-side.
+  // 2.x POST /prompt files: { uri: <data: URL>, mime, name } (verified 2026-09-22:
+  // the server rejects the UI-internal { data, source } shape with "Missing key uri"
+  // and stores the file as { data: base64, mime, source: { type: "inline" }, name }).
+  const payload = {
+    text,
+    files: attachments.map((a) => ({ uri: a.dataUrl, mime: a.mime, name: a.name })),
+    agents: [],
+    metadata: { displayText: text },
+  };
+  // The model is a session property in 2.x: POST /model { model: { providerID, id, variant } }
+  // before the prompt. Valid queued snapshots stay stable; legacy queue entries
+  // without a model use the synchronized current model after initialization.
   if (promptModel) {
     persistModel(promptModel);
-    payload.model = { providerID: promptModel.providerID, modelID: promptModel.modelID };
-    if (promptModel.variant) payload.variant = promptModel.variant;
+    payload.model = {
+      providerID: promptModel.providerID,
+      id: promptModel.modelID,
+      ...(promptModel.variant ? { variant: promptModel.variant } : {}),
+    };
   }
 
   // Optimistic UI: render the user's message immediately, clear input,
@@ -1279,13 +1354,22 @@ async function sendNow(text, attachments, model) {
 
   const t0 = performance.now();
   try {
-    await api(`/session/${sessionID}/prompt_async`, {
+    if (payload.model) {
+      const model = payload.model;
+      delete payload.model;
+      await api(`${API}/model`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+    }
+    await api(`${API}/prompt`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
     });
     const elapsed = performance.now() - t0;
-    console.info(`[compact] POST /prompt_async returned in ${Math.round(elapsed)}ms`);
+    console.info(`[compact] POST /prompt returned in ${Math.round(elapsed)}ms`);
     return true;
   } catch (err) {
     setStreaming(false);
@@ -1466,7 +1550,7 @@ function clearAttachments() {
 
 async function abortMessage() {
   try {
-    await api(`/session/${sessionID}/abort`, { method: "POST" });
+    await api(`${API}/interrupt`, { method: "POST" });
     setStreaming(false);
   } catch (err) {
     showToast("中止失敗：" + err.message, "error");
@@ -1489,14 +1573,11 @@ async function loadProviders() {
 async function loadDefaultModelFromConfig() {
   if (defaultModelFromConfig !== null) return defaultModelFromConfig;
   try {
-    const config = await api("/config");
-    const raw = config?.agent?.build?.model ?? config?.model;
-    if (typeof raw === "string" && raw.includes("/")) {
-      const sep = raw.indexOf("/");
-      defaultModelFromConfig = compactPromptModel({
-        providerID: raw.slice(0, sep),
-        modelID: raw.slice(sep + 1),
-      });
+    // 2.x: GET /api/model/default → { id|modelID, providerID }
+    const dm = await api(`/api/model/default?location[directory]=${encodeURIComponent(currentDirectory || defaultDirectory)}`);
+    const modelID = dm?.modelID ?? dm?.id;
+    if (dm?.providerID && modelID) {
+      defaultModelFromConfig = compactPromptModel({ providerID: dm.providerID, modelID });
     } else {
       defaultModelFromConfig = false;
     }
@@ -1794,9 +1875,16 @@ async function setTrustMode(on) {
   // PATCH is append-only in OpenCode v1.14.30 — not replace. Sending the full
   // ON array or the OFF override array both accumulate, but since rules are
   // evaluated last-wins the most-recently appended wildcard wins.
-  const payload = { permission: on ? TRUST_PERMISSION_ARRAY : TRUST_OFF_ARRAY };
+  // 2.x rule shape: { action, resource, effect } via PATCH /api/session/:id { permissions }.
+  // The global opencode.jsonc already allows shell/edit; this only flips the
+  // per-session override between allow and ask.
+  const effect = on ? "allow" : "ask";
+  const payload = { permissions: [
+    { action: "edit", resource: "*", effect },
+    { action: "shell", resource: "*", effect },
+  ] };
   try {
-    await api(`/session/${sessionID}`, {
+    await api(API, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
@@ -1809,17 +1897,13 @@ async function setTrustMode(on) {
 
 async function refreshTrustToggle() {
   try {
-    const session = await api(`/session/${sessionID}`);
-    const perms = Array.isArray(session.permission) ? session.permission : [];
-    // Find the last entry for the bash or edit wildcard ("*") — that is the
-    // effective state since PATCH appends and last-wins evaluation applies.
-    let on = false;
+    const session = await api(API);
+    const perms = Array.isArray(session.permissions) ? session.permissions : [];
+    // No per-session override → the global config (allow) applies.
+    let on = true;
     for (const p of perms) {
-      if (
-        (p.permission === "edit" || p.permission === "bash") &&
-        p.pattern === "*"
-      ) {
-        on = p.action === "allow";
+      if ((p.action === "edit" || p.action === "shell" || p.action === "bash") && (p.resource === "*" || p.pattern === "*")) {
+        on = (p.effect ?? p.action) === "allow";
       }
     }
     const toggle = document.getElementById("trustToggle");
@@ -1983,24 +2067,14 @@ function doNewSession() {
 }
 
 async function doOpenNative() {
-  try {
-    const s = await api(`/session/${sessionID}`);
-    const dir = s?.directory ?? "";
-    if (!dir) {
-      showToast("此 session 沒有 directory，無法開啟原生介面", "error");
-      return;
-    }
-    const slug = base64urlEncode(dir);
-    window.open(`/${slug}/session/${sessionID}`, "_blank");
-  } catch (err) {
-    showToast("無法取得 session 路徑：" + err.message, "error");
-  }
+  // 2.x web UI routes are /session/<id>; the proxy serves the SPA shell for it.
+  window.open(`/session/${sessionID}`, "_blank");
 }
 
 async function doDeleteSession() {
   if (!window.confirm("確定要刪除這個 session？此動作無法復原。")) return;
   try {
-    await api(`/session/${sessionID}`, { method: "DELETE" });
+    await api(API, { method: "DELETE" });
     window.location.href = "/remote-sessions";
   } catch (err) {
     showToast("刪除失敗：" + err.message, "error");

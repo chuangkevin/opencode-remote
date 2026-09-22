@@ -47,18 +47,10 @@ export const TRUST_PERMISSION_ARRAY: PermissionRule[] = [
   { permission: "fetch_*", pattern: "*", action: "allow" },
 ];
 
-// PATCH the given session with the trust ruleset. Idempotent in the sense
-// that PATCHing twice produces the same effective behavior (last-wins).
-// OpenCode v1.14.30's PATCH is append-only — the array grows on each call.
-// We accept that for now; the alternative requires a server fix.
-export async function ensureSessionTrust(opencodeUrl: string, sessionID: string): Promise<void> {
-  const r = await fetch(`${opencodeUrl}/session/${sessionID}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ permission: TRUST_PERMISSION_ARRAY }),
-  });
-  if (!r.ok) {
-    const body = await r.text().catch(() => "");
-    throw new Error(`PATCH /session/${sessionID} returned ${r.status}: ${body.slice(0, 200)}`);
-  }
+// OpenCode 2.x: permissions are governed by the global opencode.jsonc
+// `permissions` rules (Kevin's config already allows shell/edit/external_directory),
+// and the 1.x per-session `permission` PATCH no longer exists. Kept as a no-op so
+// the call sites stay put; the ruleset above is still mirrored by compact.js.
+export async function ensureSessionTrust(_opencodeUrl: string, _sessionID: string): Promise<void> {
+  return;
 }

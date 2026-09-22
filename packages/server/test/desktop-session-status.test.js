@@ -49,9 +49,15 @@ function statusFetch(routes, expectedDirectory = "/Users/kevin/Documents/Project
     if (url.origin === credential.origin) {
       assert.equal(options.headers.Authorization, `Basic ${Buffer.from(`${credential.username}:${credential.password}`).toString("base64")}`);
     }
-    assert.equal(url.pathname, "/session/status");
-    assert.equal(url.searchParams.get("directory"), expectedDirectory);
-    return Response.json(route);
+    // OpenCode 2.x: GET /api/session/active lists only running sessions as
+    // { data: { <id>: { type: "running" } } }; there is no directory filter.
+    void expectedDirectory;
+    assert.equal(url.pathname, "/api/session/active");
+    assert.equal(url.searchParams.has("directory"), false);
+    const running = Object.fromEntries(Object.entries(route)
+      .filter(([, status]) => status?.type === "busy")
+      .map(([id]) => [id, { type: "running" }]));
+    return Response.json({ data: running });
   };
 }
 
@@ -165,7 +171,7 @@ test("strict status merge requires both own and live Desktop sources", async () 
     fetchFn: statusFetch({
       "http://127.0.0.1:4196": { ses_own: { type: "idle" } },
     }),
-  }), { ses_own: { type: "idle" } });
+  }), {});
 });
 
 test("nine directory batches finish inside the browser budget when Desktop hangs", async () => {
@@ -257,11 +263,10 @@ test("status merge preserves busy own status when Desktop duplicate is idle", as
       },
     }),
   }), {
-    ses_own: { type: "idle" },
+    // 2.x only reports running sessions, so idle/retry entries never appear.
     ses_shared_idle: { type: "busy" },
     ses_shared_retry: { type: "busy" },
     ses_shared_unknown: { type: "busy" },
-    ses_desktop: { type: "retry" },
   });
 });
 

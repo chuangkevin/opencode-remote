@@ -9,6 +9,7 @@ import {
   detectKeyDrift,
   expectedProviderKeys,
   loadedProviderKeys,
+  loadedProviderKeysV2,
   resolveConfigValue,
 } from "../dist/key-drift.js";
 
@@ -111,4 +112,20 @@ test("config exposes key drift defaults and zero disables the interval", () => {
     interval: 0,
     cooldown: 600_000,
   });
+});
+
+test("loadedProviderKeysV2 reads apiKey from the OpenCode 2.x /api/provider list", () => {
+  const keys = loadedProviderKeysV2({
+    location: { directory: "/w" },
+    data: [
+      { id: "newapi", settings: { apiKey: "sk-live", baseURL: "https://x/v1" } },
+      { id: "opencode", settings: { apiKey: "public" } },
+      { id: "no-key", settings: {} },
+      { id: "legacy", options: { apiKey: "opt" } },
+      { settings: { apiKey: "no-id" } },
+    ],
+  });
+  assert.deepEqual([...keys.entries()], [["newapi", "sk-live"], ["opencode", "public"], ["legacy", "opt"]]);
+  assert.deepEqual(loadedProviderKeysV2({ data: "nope" }).size, 0);
+  assert.deepEqual(detectKeyDrift(new Map([["newapi", "sk-new"], ["other", "x"]]), keys), ["newapi"]);
 });

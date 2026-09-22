@@ -158,15 +158,18 @@ function validStatusMap(value: unknown): value is SessionStatusMap {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+// OpenCode 2.x has no per-directory status map; GET /api/session/active returns
+// { data: { <sessionID>: { type: "running" } } } for every session currently
+// executing. Translate to the compact contract ({ type: "busy" }) so the UI and
+// the updater keep their existing checks. `directory` is accepted but unused.
 async function fetchStatusMap(
   origin: string,
-  directory: string,
+  _directory: string,
   fetchFn: FetchFunction,
   timeoutMs: number,
   connection?: DesktopConnection,
 ): Promise<SessionStatusMap> {
-  const url = new URL("/session/status", origin);
-  url.searchParams.set("directory", directory);
+  const url = new URL("/api/session/active", origin);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -175,8 +178,14 @@ async function fetchStatusMap(
       : undefined;
     const response = await fetchFn(url, { signal: controller.signal, headers });
     if (!response.ok) throw new Error("status source unavailable");
-    const statuses: unknown = await response.json();
-    if (!validStatusMap(statuses)) throw new Error("invalid status payload");
+    const payload: unknown = await response.json();
+    const active = payload && typeof payload === "object" && "data" in payload ? (payload as any).data : payload;
+    if (!validStatusMap(active)) throw new Error("invalid status payload");
+    const statuses: SessionStatusMap = {};
+    for (const [sessionID, status] of Object.entries(active)) {
+      const type = status && typeof status === "object" && "type" in status ? (status as any).type : undefined;
+      statuses[sessionID] = { type: type === "running" || type === "busy" ? "busy" : "idle" };
+    }
     return statuses;
   } finally {
     clearTimeout(timeout);
