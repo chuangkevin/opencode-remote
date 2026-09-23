@@ -455,6 +455,8 @@ header.app-header {
   border-color: var(--danger);
   color: var(--stop-text);
 }
+/* hidden must beat the display rules above (same class of bug as .picker). */
+.stop-btn[hidden] { display: none; }
 .compose {
   flex: 1;
   min-height: 44px;

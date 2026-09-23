@@ -64,3 +64,9 @@ test("compact styles dividers and error lines", async () => {
   assert.match(css, /\.msg-error/);
   assert.match(css, /\.divider-error/);
 });
+
+test("stop button hidden attribute beats its display rule", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(new URL("../static/compact.css", import.meta.url), "utf8");
+  assert.match(css, /\.stop-btn\[hidden\] \{ display: none; \}/);
+});
