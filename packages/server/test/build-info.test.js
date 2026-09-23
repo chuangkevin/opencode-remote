@@ -24,8 +24,13 @@ test("build-info: in git repo records short HEAD with -dirty suffix", () => {
     cwd: "/Users/kevin/Documents/Projects/private-codebase/opencode-remote",
     encoding: "utf8",
   }).trim();
-  // Working tree is dirty during development, so expect the -dirty suffix.
-  assert.equal(payload.commit, `${head}-dirty`);
+  const dirty = execFileSync("git", ["status", "--porcelain"], {
+    cwd: "/Users/kevin/Documents/Projects/private-codebase/opencode-remote",
+    encoding: "utf8",
+  }).trim().length > 0;
+  // Expect exactly what write-build-info.mjs should produce for the
+  // current tree state: -dirty suffix iff the tree is actually dirty.
+  assert.equal(payload.commit, dirty ? `${head}-dirty` : head);
   assert.match(payload.builtAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
