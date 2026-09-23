@@ -107,11 +107,34 @@ function unwrapData(payload) {
 const API = `/api/session/${encodeURIComponent(sessionID)}`;
 
 // ─── OpenCode 2.x message → compact { info, parts } ────────
-// 2.x messages: { id, type: user|assistant|idle|system|model-switched|…, time,
-//   text/metadata.displayText (user), content: [{ type: text|reasoning|tool }] (assistant) }.
+// 2.x messages: { id, type: user|assistant|idle|… , time,
+//   text/metadata.displayText (user), content: [{ type: text|reasoning|tool }] (assistant),
+//   outcome (idle), error + finish (assistant), text (synthetic),
+//   model/previous (model-switched) }.
 // The renderer below keeps the 1.x-era { info, parts } shape, so convert here.
+// Divider-like types become { info: { divider: <label> } } nodes; failed-idle
+// carries the nearest earlier assistant error text for the line below it.
 function toCompactMessage(m) {
   if (!m || typeof m !== "object") return null;
+  if (m.type === "idle") {
+    if (m.outcome === "succeeded") return null; // native shows nothing either
+    if (m.outcome === "interrupted") return { info: { id: m.id, divider: "已中斷", time: m.time ?? {} } };
+    if (m.outcome === "failed") return { info: { id: m.id, divider: "失敗", time: m.time ?? {}, failedIdle: true } };
+    return null;
+  }
+  if (m.type === "model-switched") {
+    const cur = m.model?.id ?? m.model?.modelID;
+    const prev = m.previous?.id ?? m.previous?.modelID;
+    const label = cur && prev && cur !== prev
+      ? `已切換模型：${prev} → ${cur}`
+      : cur ? `模型：${cur}` : "已切換模型";
+    return { info: { id: m.id, divider: label, time: m.time ?? {} } };
+  }
+  if (m.type === "synthetic") {
+    const text = typeof m.text === "string" ? m.text : "";
+    if (!text) return null;
+    return { info: { id: m.id, divider: text, time: m.time ?? {} } };
+  }
   if (m.type !== "user" && m.type !== "assistant") return null;
   const model = m.type === "user" ? m.metadata?.model : m.model;
   const info = {
@@ -137,6 +160,13 @@ function toCompactMessage(m) {
       if (c.type === "text") parts.push({ type: "text", text: c.text ?? "" });
       else if (c.type === "tool") parts.push({ type: "tool", id: c.id, tool: c.name, state: c.state ?? {} });
       else parts.push({ type: c.type ?? "unknown" });
+    }
+    // Assistant-level error (e.g. finish:"error" / error:{type,message} after
+    // an interrupt): show it as a red line instead of an empty bubble.
+    if (m.error && (typeof m.error.message === "string" ? m.error.message : "") !== "") {
+      parts.push({ type: "error", errorType: m.error.type ?? "error", text: m.error.message });
+    } else if (typeof m.error === "string" && m.error) {
+      parts.push({ type: "error", errorType: "error", text: m.error });
     }
   }
   return { info, parts };
@@ -203,8 +233,43 @@ function ensureMessageNode(message) {
   return node;
 }
 
+// Newest assistant error text across rendered messages (for the 失敗 divider).
+function lastAssistantErrorText() {
+  const nodes = els.messages.querySelectorAll(".msg .msg-error");
+  if (nodes.length === 0) return "";
+  const last = nodes[nodes.length - 1].textContent ?? "";
+  return last.length > 200 ? last.slice(0, 197) + "…" : last;
+}
+
 function renderMessage(message) {
   const info = message.info ?? {};
+  // Divider nodes (idle outcome / model-switched / synthetic): a centered
+  // line, same role as native's separators. Failed-idle also shows the
+  // nearest earlier assistant error text on the line below.
+  if (info.divider !== undefined) {
+    let node = messageNodes.get(info.id);
+    if (!node) {
+      node = document.createElement("div");
+      node.className = "msg divider";
+      node.dataset.messageId = info.id;
+      els.messages.appendChild(node);
+      messageNodes.set(info.id, node);
+    }
+    node.innerHTML = "";
+    const line = document.createElement("div");
+    line.className = "divider-line";
+    const label = document.createElement("span");
+    label.textContent = info.divider;
+    line.appendChild(label);
+    node.appendChild(line);
+    if (info.failedIdle) {
+      const err = document.createElement("div");
+      err.className = "divider-error";
+      err.textContent = lastAssistantErrorText() || "執行失敗";
+      node.appendChild(err);
+    }
+    return;
+  }
   const isUser = info.role === "user";
   // When the first real user message renders, drop any optimistic placeholders.
   if (isUser) removeOptimisticUserMessages();
@@ -239,6 +304,12 @@ function renderMessage(message) {
       row.innerHTML = `<span class="tool-icon">🔧</span><span class="tool-name">${escapeHTML(name)}</span><span class="tool-detail">${detail ? "· " + escapeHTML(detail) : ""}</span>`;
       body.appendChild(row);
       hasContent = true;
+    } else if (part.type === "error") {
+      const row = document.createElement("div");
+      row.className = "msg-error";
+      row.textContent = `${part.errorType ?? "error"}：${part.text ?? ""}`;
+      body.appendChild(row);
+      hasContent = true;
       if (name === "question") schedulePendingQuestionDrain();
     } else if (part.type === "file" && (part.mime ?? "").startsWith("image/")) {
       const img = document.createElement("img");
@@ -259,11 +330,18 @@ function renderMessage(message) {
   // While the assistant is still thinking (no visible parts yet) show a typing
   // indicator so the user knows the agent is alive. Removed once a delta or
   // any visible part arrives — applyDelta clears it explicitly too.
-  if (!isUser && !hasContent && isStreaming) {
-    const ind = document.createElement("div");
-    ind.className = "thinking-indicator";
-    ind.innerHTML = '<span></span><span></span><span></span>';
-    body.appendChild(ind);
+  // A completely empty assistant (no text/tool/error) renders nothing at all.
+  if (!isUser && !hasContent) {
+    if (isStreaming) {
+      const ind = document.createElement("div");
+      ind.className = "thinking-indicator";
+      ind.innerHTML = '<span></span><span></span><span></span>';
+      body.appendChild(ind);
+    } else {
+      node.remove();
+      messageNodes.delete(info.id);
+      return;
+    }
   }
 }
 
@@ -507,6 +585,15 @@ async function refreshBusyStatus() {
     console.warn("refreshBusyStatus failed", err);
   }
 }
+
+// Active-state reconciliation: poll /api/session/active every 15s while the
+// page is visible. If we are not listed, any streaming UI is stale (missed
+// SSE event, abort from another surface, reconnect gap) — drop it.
+const ACTIVE_RECONCILE_MS = 15_000;
+setInterval(() => {
+  if (document.visibilityState !== "visible") return;
+  refreshBusyStatus().catch((err) => console.warn("active reconcile failed", err));
+}, ACTIVE_RECONCILE_MS);
 
 function fetchMessage(messageID) {
   return api(`${API}/message/${encodeURIComponent(messageID)}`).then(toCompactMessage);

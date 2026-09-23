@@ -218,6 +218,12 @@ header.app-header {
 .msg {
   margin: 0 0 22px;
 }
+/* Outcome / system dividers (idle interrupted|failed, model-switched, synthetic). */
+.msg.divider { margin: 14px 0; }
+.divider-line { display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 12px; }
+.divider-line::before, .divider-line::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+.msg-error { color: #ef4444; font-size: calc(13px * var(--font-scale)); margin-top: 6px; overflow-wrap: anywhere; }
+.divider-error { color: #ef4444; font-size: 12px; text-align: center; margin-top: 4px; overflow-wrap: anywhere; }
 .msg-head {
   display: flex;
   align-items: baseline;
