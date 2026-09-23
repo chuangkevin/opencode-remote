@@ -200,6 +200,7 @@ echo "Building runtime..."
 (cd "$REPO_ROOT" && PATH="$BUILD_PATH" "$NPM_BIN" run build)
 
 [[ -f "$REPO_ROOT/packages/server/dist/index.js" ]] || fail "build did not create packages/server/dist/index.js"
+[[ -f "$REPO_ROOT/packages/server/dist/build-info.json" ]] || fail "build did not create packages/server/dist/build-info.json"
 [[ -d "$REPO_ROOT/packages/server/static" ]] || fail "compact static assets are missing"
 [[ -f "$REPO_ROOT/mockups/compact-mockup.html" ]] || fail "runtime compact mockup is missing"
 
@@ -213,7 +214,11 @@ readonly UPDATER_TARGET="$GUI_DOMAIN/$UPDATER_LABEL"
 echo "Staging runtime allowlist..."
 (cd "$REPO_ROOT" && /usr/bin/tar -cf "$STAGE_ARCHIVE" \
   packages/server/package.json \
+  packages/server/dist/build-info.json \
+  packages/server/dist/build-info.js \
   packages/server/dist/config.js \
+  packages/server/dist/html-response.js \
+  packages/server/dist/proxy-compress.js \
   packages/server/dist/index.js \
   packages/server/dist/health-watchdog.js \
   packages/server/dist/key-drift.js \
@@ -225,6 +230,7 @@ echo "Staging runtime allowlist..."
   packages/server/dist/compact/pins.js \
   packages/server/dist/compact/session-status.js \
   packages/server/dist/compact/shell.js \
+  packages/server/dist/compact/static-assets.js \
   packages/server/dist/compact/trust.js \
   packages/server/static \
   mockups/compact-mockup.html)

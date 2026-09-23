@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx --env-file=../../.env watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/write-build-info.mjs",
     "start": "node --env-file=../../.env dist/index.js",
     "test": "npm run build && node --test test/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"

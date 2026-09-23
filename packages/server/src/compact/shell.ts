@@ -1,3 +1,5 @@
+import { staticAssetUrl } from "./static-assets.js";
+
 function escapeAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -16,8 +18,8 @@ export function renderCompactShell(sessionID: string, directory: string): string
   <script>(()=>{let p="system";try{const s=localStorage.getItem("opencode-color-scheme");if(["light","dark","system"].includes(s))p=s}catch{}try{const t=p==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):p;const r=document.documentElement;r.dataset.themePreference=p;r.dataset.theme=t;r.style.colorScheme=t;const m=document.querySelector('meta[name="theme-color"]');if(m)m.content=t==="light"?"#f7f7f5":"#0f0f10"}catch{}})()</script>
   <script>(()=>{let v;try{const s=localStorage.getItem("opencode-font-scale");v=["1","1.15","1.3"].includes(s)?s:(matchMedia("(max-width: 767px)").matches?"1.15":"1")}catch{v="1"}try{document.documentElement.style.setProperty("--font-scale",v)}catch{}})()</script>
   <title>OpenCode</title>
-  <link rel="stylesheet" href="/c/static/compact.css" />
-  <script src="/c/static/marked.min.js"></script>
+  <link rel="stylesheet" href="${staticAssetUrl("compact.css")}" />
+  <script src="${staticAssetUrl("marked.min.js")}"></script>
 </head>
 <body data-session-id="${id}" data-directory="${dir}">
   <div class="app">
@@ -55,9 +57,9 @@ export function renderCompactShell(sessionID: string, directory: string): string
     <div class="picker" id="picker" hidden></div>
     <div class="toast" id="toast" hidden></div>
   </div>
-  <script type="module" src="/c/static/font-scale.js"></script>
-  <script type="module" src="/c/static/theme.js"></script>
-  <script type="module" src="/c/static/compact.js"></script>
+  <script type="module" src="${staticAssetUrl("font-scale.js")}"></script>
+  <script type="module" src="${staticAssetUrl("theme.js")}"></script>
+  <script type="module" src="${staticAssetUrl("compact.js")}"></script>
 </body>
 </html>`;
 }

@@ -210,7 +210,7 @@ test("remote sessions HTML wires an accessible reduced-motion-safe indicator", a
   assert.match(source, /class="load-more-btn"/);
   assert.match(source, /remoteSessionsWindowLabel\(windowKey\)/);
   assert.match(source, /"30 天內"/);
-  assert.match(source, /<script type="module" src="\/c\/static\/remote-sessions\.js"><\/script>/);
+  assert.match(source, /<script type="module" src="\/c\/static\/remote-sessions\.js\?v=/);
 
   const client = await readFile(new URL("../static/remote-sessions.js", import.meta.url), "utf8");
   assert.match(client, /`\/c\/session-status\?directory=/);

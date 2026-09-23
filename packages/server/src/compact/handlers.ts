@@ -1,55 +1,17 @@
 import http from "node:http";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { config as appConfig } from "../config.js";
 import { renderCompactShell } from "./shell.js";
 import { ensureSessionTrust } from "./trust.js";
 import { LatestUserModelBudgetError, findLatestUserModel } from "./model.js";
 import { upstreamAuthHeaders, upstreamJson } from "../upstream.js";
+import { sendHtml } from "../html-response.js";
 
-const __filename = fileURLToPath(import.meta.url);
-// tsconfig has rootDir=src outDir=dist, so this file ends up at
-//   packages/server/dist/compact/handlers.js
-// packages/server/static is two levels up from that.
-const STATIC_ROOT = join(dirname(__filename), "..", "..", "static");
-
-// Only serve files we explicitly recognize — prevents path traversal.
-const ALLOWED: Record<string, string> = {
-  "compact.js": "application/javascript; charset=utf-8",
-  "compact-model.js": "application/javascript; charset=utf-8",
-  "compact.css": "text/css; charset=utf-8",
-  "marked.min.js": "application/javascript; charset=utf-8",
-  "remote-sessions.js": "application/javascript; charset=utf-8",
-  "hub.html": "text/html; charset=utf-8",
-  "theme.js": "application/javascript; charset=utf-8",
-  "font-scale.js": "application/javascript; charset=utf-8",
-};
-
-export function handleCompactStatic(req: http.IncomingMessage, res: http.ServerResponse): void {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  // strip leading /c/static/
-  const filename = url.pathname.replace(/^\/c\/static\//, "");
-  const contentType = ALLOWED[filename];
-  if (!contentType) {
-    res.writeHead(404, { "Cache-Control": "no-store" });
-    res.end("Not found");
-    return;
-  }
-  const path = join(STATIC_ROOT, filename);
-  if (!existsSync(path)) {
-    res.writeHead(404, { "Cache-Control": "no-store" });
-    res.end(`File not found at ${path}`);
-    return;
-  }
-  const body = readFileSync(path);
-  res.writeHead(200, {
-    "Content-Type": contentType,
-    "Cache-Control": "no-store",
-  });
-  res.end(body);
-}
+// Static assets (caching, ETag, gzip/brotli) live in static-assets.js;
+// re-exported here so existing import sites keep working.
+export { getStaticAsset, handleCompactStatic, staticAssetUrl } from "./static-assets.js";
 
 const SESSION_PATH_RE = /^\/c\/session\/(ses_[A-Za-z0-9]+)\/?$/;
 const LATEST_USER_MODEL_PATH_RE = /^\/c\/session\/(ses_[A-Za-z0-9]+)\/latest-user-model\/?$/;
@@ -107,13 +69,12 @@ export async function handleLatestUserModel(
   }
 }
 
-export function handleCompactSession(sessionID: string, res: http.ServerResponse): void {
-  res.writeHead(200, {
+export function handleCompactSession(req: http.IncomingMessage, sessionID: string, res: http.ServerResponse): void {
+  sendHtml(req, res, renderCompactShell(sessionID, appConfig.opencodeDirectory), {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
     "X-OpenCode-Remote": "compact",
   });
-  res.end(renderCompactShell(sessionID, appConfig.opencodeDirectory));
   // Fire-and-forget: PATCH trust ruleset in the background so the user
   // doesn't have to wait. If it fails the user will just see "ask" prompts
   // (the existing behavior before trust mode existed).

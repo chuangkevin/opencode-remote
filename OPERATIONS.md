@@ -185,6 +185,49 @@ connection runtime state。部署腳本本身不會重啟 Desktop。
 
 部署主服務通過上述 health gate 後，installer 才會安裝並 bootstrap exact updater LaunchAgent `io.interagent.opencode-sara-updater`，避免其 `RunAtLoad` 與主部署競爭。updater 每 3600 秒檢查一次，也會在載入時檢查一次；plist 不含 secret 或 application environment。
 
+### 三台部署
+
+只在另外取得部署授權後執行（一條指令，三台依序部署並驗證）：
+
+```bash
+cd /Users/kevin/Documents/Projects/private-codebase/opencode-remote
+./deploy/deploy-all.sh all
+```
+
+順序固定為 home → l390 → sara（sara 最後，因為它是控制端所在的機器）。
+每台的流程：部署 → 最多 90 秒輪詢該台 `https://opencode-<name>.sisihome.org/remote-health`，
+直到 `build.commit` 等於本機 HEAD 短 hash 且 `upstreamHealth.healthy == true` →
+再打該台 `/file/content` FDA 探針 → 印一行 `OK <name> <commit> upstream=<version>`。
+任何一台失敗就印原因並 exit 非 0，不繼續下一台。
+
+各台做法：sara 呼叫既有 `deploy/macos/deploy-local.sh`（呼叫前設好
+`OPENCODE_REMOTE_BUILD_COMMIT`，讓 build-info.json 帶上正確 commit）；
+l390（`ssh l390`，`C:\Users\Kevin\opencode-remote`，不是 git clone）用
+`git archive HEAD` 打包 → scp → 遠端解開覆蓋（保留遠端 `.env` 與
+`node_modules`）→ `npm install` → `npm run build` → `restart-service.ps1`；
+home（`ssh -i ~/.ssh/id_mesh_ed25519 -o IdentitiesOnly=yes kevin@100.83.112.20`，
+`D:\GitClone\_HomeProject\opencode-remote`，是 git clone）`git pull --ff-only` →
+`npm install` → `npm run build` → `restart-service.ps1`（成功會印
+`OpenCode Remote restarted and verified.`）。
+
+Windows 端多行 PowerShell 先 scp 成 `.ps1` 再
+`powershell -NoProfile -ExecutionPolicy Bypass -File` 跑
+（`deploy/windows/restart-l390.ps1`、`deploy/windows/restart-home.ps1`）。
+`--dry-run` 只印每台會跑的每一條指令，不連線、不執行。
+唯讀檢查三台現況（ssh、遠端路徑、目前 build 與版本）：
+
+```bash
+./deploy/deploy-all.sh --check all
+```
+
+注意：l390 走 Tailscale（`ssh l390-ts`，100.79.199.43）；辦公室 Wi-Fi 名稱
+`l390`（10.11.1.87）只在辦公室內才通，腳本一律用 `l390-ts`。
+
+成功長什麼樣：三行 `OK home <commit> upstream=<version>` /
+`OK l390 <commit> upstream=<version>` / `OK sara <commit> upstream=<version>`。
+失敗看哪裡：先看該台 `remote-health` 的 `build.commit` 與 `upstreamHealth` 欄位，
+再看該台服務 log（sara：`/Users/kevin/Library/Logs/opencode-remote`）。
+
 ### macOS OpenCode CLI 自動更新
 
 更新政策是 hourly idle-only：每輪先要求目前 CLI version、`/remote-health` 與 FDA probe 都吻合，再查 same-origin `/c/session-status?strict=1&directory=/Users/kevin/Documents/Projects`。strict mode 要求 Remote 成功，且有效 live Desktop credential 存在時 Desktop source 也必須成功；request 失敗、payload 格式未知、status type 未知或任一 session 為 `busy` 時，記錄 `DEFERRED` 並以 exit 0 結束。Desktop 已關閉、沒有有效 credential 時不阻擋；`idle` 與 `retry` 也不阻擋。`brew outdated --quiet opencode` 只接受 exit `0` 且 stdout empty 代表 current，或 exit `1` 且 stdout exact `opencode` 代表有更新；其他組合都在 `DETECT` fail。升級只執行 `HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew upgrade opencode`，不升級其他 formula。

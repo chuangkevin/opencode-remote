@@ -205,12 +205,12 @@ test("all custom shells initialize and expose the shared theme control", async (
     assert.match(shell, /querySelector\('meta\[name="theme-color"\]'\)/);
     assert.match(shell, /"#f7f7f5"/);
     assert.match(shell, /"#0f0f10"/);
-    assert.ok(shell.indexOf("querySelector('meta[name=\"theme-color\"]')") < shell.indexOf('<script type="module" src="/c/static/theme.js"></script>'));
+    assert.ok(shell.indexOf("querySelector('meta[name=\"theme-color\"]')") < shell.indexOf('/c/static/theme.js'));
   }
   assert.match(index, /OpenCode Sessions/);
   assert.match(index, /OpenCode Remote Debug/);
   assert.equal(index.match(/data-theme-toggle/g)?.length, 2);
-  assert.equal(index.match(/<script type="module" src="\/c\/static\/theme\.js"><\/script>/g)?.length, 2);
+  assert.equal(index.match(/<script type="module" src="\/c\/static\/theme\.js\?v=/g)?.length, 2);
   assert.equal(index.match(/querySelector\('meta\[name="theme-color"\]'\)/g)?.length, 2);
 });
 

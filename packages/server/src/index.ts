@@ -1,5 +1,6 @@
 import http from "node:http";
 import { createHash } from "node:crypto";
+import { constants as zlibConstants, createBrotliCompress, createGzip } from "node:zlib";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -24,6 +25,10 @@ import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
 import { handleMergedSessionStatus, isMergedSessionStatusPath, isPathWithinRoot } from "./compact/session-status.js";
 import { unwrap, upstreamAuthHeaders, upstreamFetch, upstreamHealthy, upstreamInfo } from "./upstream.js";
+import { readBuildInfo } from "./build-info.js";
+import { getStaticAsset } from "./compact/static-assets.js";
+import { sendHtml } from "./html-response.js";
+import { shouldCompressUpstream } from "./proxy-compress.js";
 import { rejectPromptWhileQuiesced } from "./update-quiesce.js";
 import { resolveOpenCodeCommand } from "./opencode-command.js";
 
@@ -424,6 +429,13 @@ function sanitizeResponseHeaders(headers: http.IncomingHttpHeaders): http.Outgoi
   return next;
 }
 
+export function appendVaryAcceptEncoding(vary: http.OutgoingHttpHeaders["vary"]): string {
+  const parts = Array.isArray(vary) ? vary.flatMap((v) => String(v).split(",")) : String(vary ?? "").split(",");
+  const tokens = parts.map((p) => p.trim()).filter(Boolean);
+  if (tokens.some((t) => t.toLowerCase() === "accept-encoding")) return tokens.join(", ");
+  return [...tokens, "Accept-Encoding"].join(", ");
+}
+
 function proxy(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -639,6 +651,27 @@ function proxy(
         return;
       }
 
+      const upstreamEncoding = shouldCompressUpstream({
+        method: req.method,
+        statusCode: upstreamRes.statusCode,
+        upstreamPath,
+        upstreamContentEncoding: upstreamRes.headers["content-encoding"],
+        upstreamContentType: contentType,
+        clientAcceptEncoding: req.headers["accept-encoding"],
+      });
+      if (upstreamEncoding) {
+        delete headers["content-length"];
+        delete headers["content-encoding"];
+        headers["content-encoding"] = upstreamEncoding;
+        headers["vary"] = appendVaryAcceptEncoding(headers["vary"]);
+        res.writeHead(upstreamRes.statusCode ?? 200, headers);
+        const compressor = upstreamEncoding === "br"
+          ? createBrotliCompress({ params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } })
+          : createGzip();
+        upstreamRes.pipe(compressor).pipe(res, { end: true });
+        return;
+      }
+
       res.writeHead(upstreamRes.statusCode ?? 200, headers);
       upstreamRes.pipe(res, { end: true });
     });
@@ -719,7 +752,7 @@ function sendRemoteDebugJson(res: http.ServerResponse): void {
   res.end(JSON.stringify({ entries: remoteDebugEntries }, null, 2));
 }
 
-function handleRemoteDebug(res: http.ServerResponse): void {
+function handleRemoteDebug(req: http.IncomingMessage, res: http.ServerResponse): void {
   const rows = [...remoteDebugEntries].reverse().map((entry) => {
     const details = entry.removed?.length ? entry.removed.join("\n") : "";
     return `<tr>
@@ -739,12 +772,10 @@ function handleRemoteDebug(res: http.ServerResponse): void {
     </tr>`;
   }).join("");
 
-  res.writeHead(200, {
-    "Content-Type": "text/html; charset=utf-8",
-    "Cache-Control": "no-store",
-    "X-OpenCode-Remote": "true",
-  });
-  res.end(`<!doctype html>
+  // Versioned (?v=content-hash) so a new deploy can't serve a stale cached
+  // bundle; handleCompactStatic answers immutable for the matching ?v=.
+  const themeHash = getStaticAsset("theme.js")?.hash ?? "";
+  sendHtml(req, res, `<!doctype html>
     <html lang="zh-Hant">
       <head>
         <meta charset="utf-8" />
@@ -785,9 +816,13 @@ function handleRemoteDebug(res: http.ServerResponse): void {
             <tbody>${rows || `<tr><td colspan="13">No debug entries yet.</td></tr>`}</tbody>
           </table>
         </div>
-        <script type="module" src="/c/static/theme.js"></script>
+        <script type="module" src="/c/static/theme.js?v=${themeHash}"></script>
       </body>
-    </html>`);
+    </html>`, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-OpenCode-Remote": "true",
+  });
 }
 
 function handleRemoteClientDebug(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -873,6 +908,7 @@ async function handleRemoteHealth(res: http.ServerResponse): Promise<void> {
       proxy: "opencode-remote",
       remotePort: config.port,
       upstream: config.opencodeUrl,
+      build: readBuildInfo(),
       upstreamHealth,
     }, null, 2));
   } catch (err) {
@@ -982,12 +1018,12 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
       </div>`;
     }).join("");
 
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-OpenCode-Remote": "true",
-    });
-    res.end(`<!doctype html>
+    // Versioned (?v=content-hash); see handleRemoteDebug.
+    const fontScaleHash = getStaticAsset("font-scale.js")?.hash ?? "";
+    const sessionsThemeHash = getStaticAsset("theme.js")?.hash ?? "";
+    const sessionsClientHash = getStaticAsset("remote-sessions.js")?.hash ?? "";
+    // Self-produced HTML: compress with gzip when the client accepts it.
+    sendHtml(req, res, `<!doctype html>
       <html lang="zh-Hant">
         <head>
           <meta charset="utf-8" />
@@ -1065,11 +1101,15 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
               }
             });
           </script>
-          <script type="module" src="/c/static/font-scale.js"></script>
-          <script type="module" src="/c/static/theme.js"></script>
-          <script type="module" src="/c/static/remote-sessions.js"></script>
+          <script type="module" src="/c/static/font-scale.js?v=${fontScaleHash}"></script>
+          <script type="module" src="/c/static/theme.js?v=${sessionsThemeHash}"></script>
+          <script type="module" src="/c/static/remote-sessions.js?v=${sessionsClientHash}"></script>
         </body>
-      </html>`);
+      </html>`, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-OpenCode-Remote": "true",
+    });
   } catch (err) {
     console.error("[opencode-remote] failed to render remote sessions:", err);
     res.writeHead(500, { "Cache-Control": "no-store" });
@@ -1196,7 +1236,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/remote-debug") {
-    handleRemoteDebug(res);
+    handleRemoteDebug(req, res);
     return;
   }
 
@@ -1238,12 +1278,12 @@ const server = http.createServer((req, res) => {
     }
     const compactSessionID = matchCompactSessionPath(req.url);
     if (compactSessionID) {
-      handleCompactSession(compactSessionID, res);
+      handleCompactSession(req, compactSessionID, res);
       return;
     }
   }
 
-  if (req.method === "GET" && req.url?.startsWith("/c/static/")) {
+  if ((req.method === "GET" || req.method === "HEAD") && req.url?.startsWith("/c/static/")) {
     handleCompactStatic(req, res);
     return;
   }
