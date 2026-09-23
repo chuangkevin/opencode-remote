@@ -92,13 +92,21 @@ if (typeof document !== "undefined") {
   }
 
   function cardSignature(pair) {
-    return [pair.status, pair.lastActivityAt, pair.lastText, pair.contextPct, pair.model ?? "", pair.acceptedAt ?? ""].join("|");
+    return [pair.status, pair.lastActivityAt, pair.lastText, pair.contextPct, JSON.stringify(pair.model ?? null), pair.acceptedAt ?? ""].join("|");
   }
 
-  function shortModel(model) {
-    if (!model) return "";
-    const parts = String(model).split("/");
+  function modelShortId(model) {
+    if (!model || typeof model.id !== "string") return "";
+    const parts = model.id.split("/");
     return parts[parts.length - 1];
+  }
+
+  function modelFullLabel(model) {
+    if (!model || typeof model.id !== "string" || !model.id) return "";
+    const variant = typeof model.variant === "string" && model.variant && model.variant !== "default"
+      ? ` · ${model.variant}`
+      : "";
+    return `${model.id}${variant}`;
   }
 
   function contextBar(pair) {
@@ -108,6 +116,25 @@ if (typeof document !== "undefined") {
       `<span class="ctxpct">context ${pair.contextPct}%</span></div>`;
   }
 
+  function refreshModelLine(card, pair) {
+    const modelEl = card.querySelector(".model-line");
+    if (!modelEl) return;
+    const label = modelFullLabel(pair.model);
+    modelEl.textContent = "";
+    const idSpan = document.createElement("span");
+    idSpan.className = "model-id";
+    idSpan.textContent = `模型：${label}`;
+    modelEl.appendChild(idSpan);
+    if (pair.model && pair.model.provider) {
+      const provSpan = document.createElement("span");
+      provSpan.className = "model-provider";
+      provSpan.textContent = pair.model.provider;
+      modelEl.appendChild(document.createTextNode(" "));
+      modelEl.appendChild(provSpan);
+    }
+    card.title = label;
+  }
+
   function renderCard(pair) {
     const a = document.createElement("a");
     a.className = "card";
@@ -115,14 +142,14 @@ if (typeof document !== "undefined") {
     a.href = AGGREGATE && pair.hostUrl ? pair.hostUrl.replace(/\/+$/, "") + pair.url : pair.url;
     a.dataset.sessionId = pair.id;
     const hostTag = AGGREGATE && pair.hostName ? `<span class="host-tag"></span>` : "";
-    const modelLine = shortModel(pair.model)
-      ? `<div class="partner"></div>`
-      : "";
+    const hasModel = modelFullLabel(pair.model) !== "";
+    const modelLine = hasModel ? `<div class="model-line"></div>` : "";
     a.innerHTML =
       `<div class="card-top card-row"><span class="dot ${pair.status}"></span>` +
       hostTag +
       `<span class="owner"></span>` +
       `<span class="meta"><span data-rel="${pair.lastActivityAt}">${formatRelative(pair.lastActivityAt)}</span></span></div>` +
+      `<div class="partner">夥伴：OpenCode</div>` +
       modelLine +
       `<div class="task"></div>` +
       `<div class="meta"><span class="status-word">${statusLabel(pair.status)}</span><span class="ctxpct-inline"></span></div>` +
@@ -131,12 +158,22 @@ if (typeof document !== "undefined") {
     const hostEl = a.querySelector(".host-tag");
     if (hostEl) hostEl.textContent = pair.hostName;
     a.querySelector(".owner").textContent = `派工：${pair.owner}`;
-    const partnerEl = a.querySelector(".partner");
-    if (partnerEl) partnerEl.textContent = `夥伴：OpenCode · ${shortModel(pair.model)}`;
+    const modelEl = a.querySelector(".model-line");
+    if (modelEl) refreshModelLine(a, pair);
     a.querySelector(".task").textContent = pair.task;
     const inline = a.querySelector(".ctxpct-inline");
     if (inline && pair.contextPct !== null && pair.contextPct !== undefined) {
       inline.textContent = ` · context ${pair.contextPct}%`;
+    }
+    // 手機單行／列表檢視：task 後顯示模型最後一段，完整字串放 title。
+    const short = modelShortId(pair.model);
+    if (short) {
+      const taskEl = a.querySelector(".task");
+      const tag = document.createElement("span");
+      tag.className = "model-short";
+      tag.textContent = ` · ${short}`;
+      taskEl.appendChild(tag);
+      taskEl.title = modelFullLabel(pair.model);
     }
     a.querySelector(".lasttext").textContent = "";
     a._textTarget = "";
@@ -188,9 +225,8 @@ if (typeof document !== "undefined") {
         const statusChanged = card.querySelector(".dot")?.className !== `dot ${pair.status}`;
         card.querySelector(".dot").className = `dot ${pair.status}`;
         card.querySelector(".owner").textContent = `派工：${pair.owner}`;
-        const partnerEl = card.querySelector(".partner");
-        if (partnerEl) partnerEl.textContent = `夥伴：OpenCode · ${shortModel(pair.model)}`;
         card.querySelector(".task").textContent = pair.task;
+        refreshModelLine(card, pair);
         card.querySelector("[data-rel]").textContent = formatRelative(pair.lastActivityAt, now);
         card.querySelector("[data-rel]").dataset.rel = String(pair.lastActivityAt);
         const hadText = (card._textTarget ?? "") !== "";
@@ -302,8 +338,7 @@ if (typeof document !== "undefined") {
       if (lastRenderedSig.get(nid) !== sig) {
         card.querySelector(".dot").className = `dot ${pair.status}`;
         card.querySelector(".owner").textContent = `派工：${pair.owner}`;
-        const partnerEl = card.querySelector(".partner");
-        if (partnerEl) partnerEl.textContent = `夥伴：OpenCode · ${shortModel(pair.model)}`;
+        refreshModelLine(card, pair);
         card.querySelector(".task").textContent = pair.task;
         card.querySelector("[data-rel]").textContent = formatRelative(pair.lastActivityAt, now);
         card.querySelector("[data-rel]").dataset.rel = String(pair.lastActivityAt);

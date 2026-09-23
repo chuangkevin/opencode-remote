@@ -119,10 +119,16 @@ export async function unacceptPair(id: string): Promise<void> {
 
 export type PairStatus = "busy" | "idle" | "ask" | "error";
 
+export type PairModel = {
+  provider: string;
+  id: string;
+  variant?: string;
+};
+
 export type PairSessionLite = {
   id: string;
   title: string;
-  model?: { providerID?: string; id?: string; modelID?: string };
+  model?: { providerID?: string; id?: string; modelID?: string; variant?: string };
 };
 
 export type ChatMessage = {
@@ -158,7 +164,7 @@ export type PairInfo = {
   lastActivityAt: number;
   contextPct: number | null;
   lastText: string;
-  model?: string;
+  model?: PairModel;
   acceptedAt?: number;
   url: string;
 };
@@ -230,6 +236,8 @@ export function computePairInfo(
   const lastText = withText ? messageText(withText).slice(-200) : "";
 
   const modelID = session.model?.modelID ?? session.model?.id;
+  const modelProvider = session.model?.providerID;
+  const modelVariant = (session.model as { variant?: unknown })?.variant;
   const info: PairInfo = {
     id: session.id,
     owner: parsed.owner,
@@ -240,7 +248,14 @@ export function computePairInfo(
     lastText,
     url: `/c/session/${session.id}`,
   };
-  if (typeof modelID === "string" && modelID) info.model = modelID;
+  if (typeof modelID === "string" && modelID) {
+    const model: PairModel = {
+      provider: typeof modelProvider === "string" ? modelProvider : "",
+      id: modelID,
+    };
+    if (typeof modelVariant === "string" && modelVariant) model.variant = modelVariant;
+    info.model = model;
+  }
   if (ctx.acceptedAt !== undefined) info.acceptedAt = ctx.acceptedAt;
   return info;
 }

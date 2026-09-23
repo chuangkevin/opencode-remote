@@ -234,7 +234,8 @@ test("pairs cards show owner, model, and labelled context bar", async () => {
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
   const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
   assert.match(client, /派工：\$\{pair\.owner\}/);
-  assert.match(client, /夥伴：OpenCode · \$\{shortModel\(pair\.model\)\}/);
+  assert.match(client, /<div class="partner">夥伴：OpenCode<\/div>/);
+  assert.match(client, /`模型：\$\{label\}`/);
   assert.match(client, /context \$\{pair\.contextPct\}%/);
   assert.match(client, /對話已用掉模型上限的 \$\{pair\.contextPct\}%/);
   assert.match(client, /ctxbar\$\{over \? " over" : ""\}/);
@@ -260,4 +261,40 @@ test("hub tabs keep their status dots across re-renders", async () => {
   assert.match(hub, /const lastDot = new Map\(\)/);
   assert.match(hub, /lastDot\.set\(r\.id/);
   assert.match(hub, /lastDot\.get\(r\.id\)/);
+});
+
+test("pairs model is a full object; cards show a wrapped model line", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
+  // 模型獨立一行、不截斷、可換行；variant 非 default 才加。
+  assert.match(client, /modelFullLabel\(pair\.model\)/);
+  assert.match(client, /`模型：\$\{label\}`/);
+  assert.match(client, /model-provider/);
+  assert.match(client, /modelShortId\(pair\.model\)/);
+  assert.match(client, /taskEl\.title = modelFullLabel\(pair\.model\)/);
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  assert.match(source, /\.model-line \{[^}]*overflow-wrap: anywhere/s);
+  assert.match(source, /word-break: break-all/);
+  assert.match(source, /body\[data-view="list"\] \.model-line \{ display: none; \}/);
+});
+
+test("pairs model object carries provider, id, and non-default variant", async () => {
+  const { computePairInfo } = await import("../dist/compact/pairs.js");
+  const base = { id: "ses_x", title: "pair·o·t" };
+  const full = computePairInfo(
+    { ...base, model: { providerID: "newapi-oai", id: "pair/meta/muse-spark-1.3-contributor", variant: "low" } },
+    { busy: false, formPending: false, messages: [] },
+  );
+  assert.deepEqual(full.model, {
+    provider: "newapi-oai",
+    id: "pair/meta/muse-spark-1.3-contributor",
+    variant: "low",
+  });
+  const noVariant = computePairInfo(
+    { ...base, model: { providerID: "p", modelID: "m" } },
+    { busy: false, formPending: false, messages: [] },
+  );
+  assert.deepEqual(noVariant.model, { provider: "p", id: "m" });
+  const none = computePairInfo(base, { busy: false, formPending: false, messages: [] });
+  assert.equal(none.model, undefined);
 });

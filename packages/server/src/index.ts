@@ -1243,6 +1243,9 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             @keyframes pair-pulse { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
             .owner { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .partner { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .model-line { font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; word-break: break-all; }
+            .model-id { color: var(--text); }
+            .model-provider { color: var(--muted); font-size: 11px; }
             .host-tag { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-text); white-space: nowrap; }
             .task { font-size: 14px; font-weight: 600; margin: 4px 0; overflow-wrap: anywhere; }
             .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
@@ -1258,7 +1261,14 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             .lasttext { margin: 6px 0 0; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
             body[data-view="list"] .grid { grid-template-columns: 1fr; }
             body[data-view="list"] .lasttext { -webkit-line-clamp: 1; }
-            body[data-view="list"] .ctxbar { display: none; }
+            body[data-view="list"] .ctxrow { display: none; }
+            body[data-view="list"] .model-line { display: none; }
+            body[data-view="list"] .model-short { color: var(--muted); font-weight: 400; font-size: 12px; }
+            /* 手機儀表板單行：task 後同樣顯示模型短名 */
+            @media (max-width: 767px) {
+              body[data-view="dashboard"] .model-line { display: none; }
+              body[data-view="dashboard"] .model-short { color: var(--muted); font-weight: 400; font-size: 12px; }
+            }
             .empty { padding: 24px 12px; color: var(--muted); text-align: center; }
             @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } .card { transition: none; } }
           </style>
