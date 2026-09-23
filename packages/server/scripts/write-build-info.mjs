@@ -15,7 +15,9 @@ function gitShortHead() {
     if (!commit) return undefined;
     let dirty = false;
     try {
-      const status = execFileSync("git", ["status", "--porcelain"], {
+      // Untracked files (local .env backups, stray scripts) do not affect
+      // the built output, so only tracked modifications count as dirty.
+      const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
