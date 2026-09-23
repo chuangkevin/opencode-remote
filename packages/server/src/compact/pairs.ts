@@ -158,6 +158,7 @@ export type PairInfo = {
   lastActivityAt: number;
   contextPct: number | null;
   lastText: string;
+  model?: string;
   acceptedAt?: number;
   url: string;
 };
@@ -228,6 +229,7 @@ export function computePairInfo(
   const withText = assistants.find((m) => messageText(m).length > 0);
   const lastText = withText ? messageText(withText).slice(-200) : "";
 
+  const modelID = session.model?.modelID ?? session.model?.id;
   const info: PairInfo = {
     id: session.id,
     owner: parsed.owner,
@@ -238,6 +240,7 @@ export function computePairInfo(
     lastText,
     url: `/c/session/${session.id}`,
   };
+  if (typeof modelID === "string" && modelID) info.model = modelID;
   if (ctx.acceptedAt !== undefined) info.acceptedAt = ctx.acceptedAt;
   return info;
 }

@@ -38,7 +38,41 @@ export function statusLabel(status) {
 if (typeof document !== "undefined") {
   const grid = document.getElementById("pairGrid");
   const viewButtons = [...document.querySelectorAll("[data-view-btn]")];
+  const aggNote = document.getElementById("aggNote");
+  const sessionsLink = document.querySelector('a.pairs-btn[href="/remote-sessions"]');
   const reducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ── Aggregate mode: opencode.sisihome.org/pairs (or ?all=1) merges every
+  // remote's /api/pairs. Remote list mirrors hub.html (opencode-hub:remotes).
+  const AGG_DEFAULTS = [
+    { id: "mac", name: "Mac", url: "https://opencode-sara.sisihome.org" },
+    { id: "l390", name: "L390", url: "https://opencode-l390.sisihome.org" },
+    { id: "home", name: "Home", url: "https://opencode-home.sisihome.org" },
+  ];
+  const queryAll = (() => { try { return new URLSearchParams(location.search).get("all") === "1"; } catch { return false; } })();
+  const AGGREGATE = location.hostname === "opencode.sisihome.org" || queryAll;
+  let remotes = AGG_DEFAULTS;
+  if (AGGREGATE) {
+    try {
+      const stored = JSON.parse(localStorage.getItem("opencode-hub:remotes"));
+      if (Array.isArray(stored) && stored.length > 0) {
+        remotes = stored
+          .filter((r) => r && r.enabled !== false && typeof r.url === "string" && /^https?:\/\/.+/.test(r.url.trim()))
+          .map((r) => ({ id: String(r.id ?? r.url), name: String(r.name ?? r.url), url: String(r.url).trim().replace(/\/+$/, "") }));
+        if (remotes.length === 0) remotes = AGG_DEFAULTS;
+      }
+    } catch { /* keep defaults */ }
+    document.body.dataset.agg = "1";
+    if (sessionsLink) sessionsLink.setAttribute("href", "/");
+  }
+
+  function aggHostTag(url) {
+    try {
+      return String(new URL(url).hostname);
+    } catch {
+      return String(url);
+    }
+  }
   let view = "dashboard";
   try {
     const stored = localStorage.getItem(PAIRS_VIEW_KEY);
@@ -58,27 +92,52 @@ if (typeof document !== "undefined") {
   }
 
   function cardSignature(pair) {
-    return [pair.status, pair.lastActivityAt, pair.lastText, pair.contextPct, pair.acceptedAt ?? ""].join("|");
+    return [pair.status, pair.lastActivityAt, pair.lastText, pair.contextPct, pair.model ?? "", pair.acceptedAt ?? ""].join("|");
+  }
+
+  function shortModel(model) {
+    if (!model) return "";
+    const parts = String(model).split("/");
+    return parts[parts.length - 1];
+  }
+
+  function contextBar(pair) {
+    if (pair.contextPct === null || pair.contextPct === undefined) return "";
+    const over = pair.contextPct > 50;
+    return `<div class="ctxrow"><div class="ctxbar${over ? " over" : ""}" title="對話已用掉模型上限的 ${pair.contextPct}%"><i style="width:${Math.min(100, pair.contextPct)}%"></i><b></b></div>` +
+      `<span class="ctxpct">context ${pair.contextPct}%</span></div>`;
   }
 
   function renderCard(pair) {
     const a = document.createElement("a");
     a.className = "card";
-    a.href = pair.url;
+    // Aggregate mode: absolute URL to the owning remote.
+    a.href = AGGREGATE && pair.hostUrl ? pair.hostUrl.replace(/\/+$/, "") + pair.url : pair.url;
     a.dataset.sessionId = pair.id;
-    const ctx = pair.contextPct === null || pair.contextPct === undefined
-      ? ""
-      : `<div class="ctxbar" title="context ${pair.contextPct}%"><i style="width:${Math.min(100, pair.contextPct)}%"></i></div>`;
+    const hostTag = AGGREGATE && pair.hostName ? `<span class="host-tag"></span>` : "";
+    const modelLine = shortModel(pair.model)
+      ? `<div class="partner"></div>`
+      : "";
     a.innerHTML =
-      `<div class="card-top"><span class="dot ${pair.status}"></span>` +
+      `<div class="card-top card-row"><span class="dot ${pair.status}"></span>` +
+      hostTag +
       `<span class="owner"></span>` +
       `<span class="meta"><span data-rel="${pair.lastActivityAt}">${formatRelative(pair.lastActivityAt)}</span></span></div>` +
+      modelLine +
       `<div class="task"></div>` +
-      `<div class="meta"><span>${statusLabel(pair.status)}</span></div>` +
-      ctx +
+      `<div class="meta"><span class="status-word">${statusLabel(pair.status)}</span><span class="ctxpct-inline"></span></div>` +
+      contextBar(pair) +
       `<p class="lasttext"></p>`;
-    a.querySelector(".owner").textContent = pair.owner;
+    const hostEl = a.querySelector(".host-tag");
+    if (hostEl) hostEl.textContent = pair.hostName;
+    a.querySelector(".owner").textContent = `派工：${pair.owner}`;
+    const partnerEl = a.querySelector(".partner");
+    if (partnerEl) partnerEl.textContent = `夥伴：OpenCode · ${shortModel(pair.model)}`;
     a.querySelector(".task").textContent = pair.task;
+    const inline = a.querySelector(".ctxpct-inline");
+    if (inline && pair.contextPct !== null && pair.contextPct !== undefined) {
+      inline.textContent = ` · context ${pair.contextPct}%`;
+    }
     a.querySelector(".lasttext").textContent = "";
     a._textTarget = "";
     return a;
@@ -128,7 +187,9 @@ if (typeof document !== "undefined") {
       if (lastRenderedSig.get(pair.id) !== sig) {
         const statusChanged = card.querySelector(".dot")?.className !== `dot ${pair.status}`;
         card.querySelector(".dot").className = `dot ${pair.status}`;
-        card.querySelector(".owner").textContent = pair.owner;
+        card.querySelector(".owner").textContent = `派工：${pair.owner}`;
+        const partnerEl = card.querySelector(".partner");
+        if (partnerEl) partnerEl.textContent = `夥伴：OpenCode · ${shortModel(pair.model)}`;
         card.querySelector(".task").textContent = pair.task;
         card.querySelector("[data-rel]").textContent = formatRelative(pair.lastActivityAt, now);
         card.querySelector("[data-rel]").dataset.rel = String(pair.lastActivityAt);
@@ -168,14 +229,101 @@ if (typeof document !== "undefined") {
 
   async function poll() {
     try {
-      const res = await fetch("/api/pairs");
-      if (!res.ok) return;
-      const pairs = await res.json();
-      if (!Array.isArray(pairs)) return;
-      pairsById = new Map(pairs.map((p) => [p.id, p]));
-      render(pairs);
+      if (!AGGREGATE) {
+        const res = await fetch("/api/pairs");
+        if (!res.ok) return;
+        const pairs = await res.json();
+        if (!Array.isArray(pairs)) return;
+        pairsById = new Map(pairs.map((p) => [p.id, p]));
+        render(pairs);
+        return;
+      }
+      // Aggregate: fan out to every remote, merge, keep the rest on failure.
+      const results = await Promise.allSettled(
+        remotes.map(async (r) => {
+          const res = await fetch(r.url.replace(/\/+$/, "") + "/api/pairs", { cache: "no-store" });
+          if (!res.ok) throw new Error(`GET ${r.url}/api/pairs returned ${res.status}`);
+          const list = await res.json();
+          if (!Array.isArray(list)) throw new Error("invalid pairs payload");
+          return list.map((p) => ({ ...p, hostName: r.name, hostUrl: r.url }));
+        }),
+      );
+      const merged = [];
+      const down = [];
+      results.forEach((result, i) => {
+        if (result.status === "fulfilled") merged.push(...result.value);
+        else down.push(remotes[i].name);
+      });
+      if (aggNote) {
+        if (down.length > 0) {
+          aggNote.hidden = false;
+          aggNote.textContent = `${down.join("、")} 連不上，只顯示其他台`;
+        } else {
+          aggNote.hidden = true;
+          aggNote.textContent = "";
+        }
+      }
+      // Same id on two remotes: keep the fresher activity.
+      const byId = new Map();
+      for (const p of merged) {
+        const prev = byId.get(p.id);
+        if (!prev || (p.lastActivityAt ?? 0) > (prev.lastActivityAt ?? 0)) byId.set(p.id, p);
+      }
+      const pairs = [...byId.values()];
+      pairsById = new Map(pairs.map((p) => [`${p.hostUrl}${p.id}`, p]));
+      // Aggregate cards key off host+id (same session id can exist twice).
+      renderAggregate(pairs);
     } catch {
       // next tick retries
+    }
+  }
+
+  function renderAggregate(pairs) {
+    // Reuse render() by temporarily namespacing ids.
+    const namespaced = pairs.map((p) => ({ ...p, id: `${p.hostUrl}${p.id}` }));
+    const realIds = new Map(namespaced.map((n, i) => [n.id, pairs[i]]));
+    const now = Date.now();
+    const visible = visiblePairs(pairs, view, now);
+    const seen = new Set();
+    for (const pair of visible) {
+      const nid = `${pair.hostUrl}${pair.id}`;
+      seen.add(nid);
+      const sig = cardSignature(pair);
+      let card = grid.querySelector(`[data-session-id="${CSS.escape(nid)}"]`);
+      if (!card) {
+        card = renderCard({ ...pair, id: nid });
+        const hostEl = card.querySelector(".host-tag");
+        if (hostEl) hostEl.textContent = pair.hostName;
+        grid.appendChild(card);
+        lastRenderedSig.set(nid, "");
+      }
+      if (lastRenderedSig.get(nid) !== sig) {
+        card.querySelector(".dot").className = `dot ${pair.status}`;
+        card.querySelector(".owner").textContent = `派工：${pair.owner}`;
+        const partnerEl = card.querySelector(".partner");
+        if (partnerEl) partnerEl.textContent = `夥伴：OpenCode · ${shortModel(pair.model)}`;
+        card.querySelector(".task").textContent = pair.task;
+        card.querySelector("[data-rel]").textContent = formatRelative(pair.lastActivityAt, now);
+        card.querySelector("[data-rel]").dataset.rel = String(pair.lastActivityAt);
+        updateCardText(card, pair);
+        lastRenderedSig.set(nid, sig);
+      }
+      void realIds;
+    }
+    for (const card of [...grid.querySelectorAll("[data-session-id]")]) {
+      if (!seen.has(card.dataset.sessionId)) {
+        card.remove();
+        lastRenderedSig.delete(card.dataset.sessionId);
+      }
+    }
+    if (visible.length === 0) {
+      grid.innerHTML = `<div class="empty">目前沒有夥伴 session</div>`;
+    } else {
+      grid.querySelector(".empty")?.remove();
+      for (const pair of visible) {
+        const card = grid.querySelector(`[data-session-id="${CSS.escape(`${pair.hostUrl}${pair.id}`)}"]`);
+        if (card) grid.appendChild(card);
+      }
     }
   }
 

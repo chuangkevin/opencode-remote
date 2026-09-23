@@ -180,3 +180,64 @@ test("pairs page ships both views and reduced-motion rules", async () => {
   assert.match(client, /setInterval\(poll, 3000\)/);
   assert.match(client, /data-view-btn/);
 });
+
+test("pairs phone dashboard is one row per card", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  const page = source.slice(source.indexOf("async function handlePairsPage"), source.indexOf("async function handleListPins"));
+  // 手機儀表板：單欄、一行一筆（task 單行截斷、lastText 單行、owner/ctxbar 隱藏）。
+  assert.match(page, /@media \(max-width: 767px\)/);
+  assert.match(page, /body\[data-view="dashboard"\] \.grid \{ grid-template-columns: 1fr; \}/);
+  assert.match(page, /body\[data-view="dashboard"\] \.task \{[^}]*white-space: nowrap/s);
+  assert.match(page, /body\[data-view="dashboard"\] \.lasttext \{ -webkit-line-clamp: 1;/);
+  assert.match(page, /body\[data-view="dashboard"\] \.ctxrow \{ display: none; \}/);
+  assert.match(page, /body\[data-view="dashboard"\] \.owner \{ display: block; \}/);
+  // 卡片整行可點（a.card 包 task＋時間＋lastText；彙總模式開絕對網址）。
+  const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
+  assert.match(client, /a\.href = AGGREGATE/);
+  assert.match(client, /card-row/);
+});
+
+test("sessions and pairs pages link to each other", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  // /remote-sessions header has a 夥伴 button with the live pair count.
+  assert.match(source, /<a class="pairs-btn" href="\/pairs">夥伴\$\{pairCount > 0 \? ` \$\{pairCount\}` : ""\}<\/a>/);
+  assert.match(source, /const pairCount = allSessions\.length - visibleSessions\.length;/);
+  // /pairs header links back.
+  assert.match(source, /<a class="pairs-btn" href="\/remote-sessions"/);
+});
+
+test("api pairs allows cross-origin GET for the aggregate page", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  assert.match(source, /"Access-Control-Allow-Origin": "\*",/);
+  const pairsBlock = source.slice(source.indexOf("async function handleListPairs"), source.indexOf("const PAIR_ACCEPT_PATH_RE"));
+  assert.match(pairsBlock, /Access-Control-Allow-Origin/);
+  assert.match(source, /req\.url === "\/api\/pairs"\)/);
+  assert.match(source, /\/api\/session\/active" \|\| req\.url === "\/api\/pairs"/);
+});
+
+test("pairs aggregate mode merges remotes with host tags", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
+  assert.match(client, /opencode-hub:remotes/);
+  assert.match(client, /https:\/\/opencode-sara\.sisihome\.org/);
+  assert.match(client, /\/api\/pairs/);
+  assert.match(client, /host-tag/);
+  assert.match(client, /連不上，只顯示其他台/);
+  assert.match(client, /location\.hostname === "opencode\.sisihome\.org"/);
+});
+
+test("pairs cards show owner, model, and labelled context bar", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
+  assert.match(client, /派工：\$\{pair\.owner\}/);
+  assert.match(client, /夥伴：OpenCode · \$\{shortModel\(pair\.model\)\}/);
+  assert.match(client, /context \$\{pair\.contextPct\}%/);
+  assert.match(client, /對話已用掉模型上限的 \$\{pair\.contextPct\}%/);
+  assert.match(client, /ctxbar\$\{over \? " over" : ""\}/);
+  assert.match(source, /\.ctxbar\.over > i \{ background: #f59e0b; \}/);
+  assert.match(client, /<b><\/b><\/div>/);
+});

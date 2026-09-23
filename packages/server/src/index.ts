@@ -995,6 +995,7 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
     ]);
     // Pair-partner sessions (title "pair·…") live on /pairs, not here.
     const visibleSessions = allSessions.filter((s) => !isPairSession(s));
+    const pairCount = allSessions.length - visibleSessions.length;
     const pinnedSet = new Set(pinnedIds);
     const ordered = await mergePinnedSessions(visibleSessions, pinnedIds);
     // 2.x SPA server route key is base64url(browser origin).
@@ -1071,13 +1072,15 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
             .compact-btn { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); display: inline-flex; align-items: center; min-height: 44px; font-size: 11px; font-weight: 500; padding: 4px 10px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-text); border: 1px solid var(--pinned-border); text-decoration: none; line-height: 1; }
             .compact-btn:active { background: var(--accent-active); color: #fff; }
             .empty { padding: 24px 12px; color: var(--muted); font-size: calc(13px * var(--font-scale)); text-align: center; }
-            @media (max-width: 767px) { header { gap: 4px; } .session-link { gap: 5px; padding-right: 82px; } .session-link small { display: none; } }
+            .pairs-btn { display: inline-flex; align-items: center; min-height: 44px; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 999px; background: var(--surface); color: var(--text); border: 1px solid var(--border); text-decoration: none; line-height: 1; white-space: nowrap; }
+            @media (max-width: 767px) { header { gap: 4px; } .session-link { gap: 5px; padding-right: 82px; } .session-link small { display: none; } h1 { font-size: 14px; } .window-label { display: none; } .pairs-btn { padding: 6px 8px; font-size: 11px; } }
             @media (min-width: 768px) and (max-width: 1023px) { body { padding-inline: 16px; } header { margin-inline: -16px; } }
           </style>
         </head>
         <body data-window="${windowKey}">
           <header>
             <h1>工作階段<span class="window-label">（${windowLabel}）</span></h1>
+            <a class="pairs-btn" href="/pairs">夥伴${pairCount > 0 ? ` ${pairCount}` : ""}</a>
             <button class="font-scale-toggle" type="button" data-font-scale-cycle aria-label="切換字級">Aa</button>
             <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
             <form method="post" action="/c/new-session" style="margin:0;">
@@ -1124,13 +1127,14 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
   }
 }
 
-async function handleListPairs(res: http.ServerResponse): Promise<void> {
+async function handleListPairs(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
     const { buildPairsList } = await import("./compact/pairs.js");
     const pairs = await buildPairsList();
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
       "X-OpenCode-Remote": "true",
     });
     res.end(JSON.stringify(pairs));
@@ -1213,7 +1217,20 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             .font-scale-toggle, .theme-toggle { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-size: 17px; cursor: pointer; }
             .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; }
             @media (min-width: 768px) and (max-width: 1023px) { .grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); } }
-            @media (max-width: 767px) { .grid { grid-template-columns: 1fr; } }
+            /* 手機一行一筆版也要看得到派工者、context % */
+            @media (max-width: 767px) {
+              body[data-view="dashboard"] .grid { grid-template-columns: 1fr; }
+              body[data-view="dashboard"] .card { padding: 8px 10px; }
+              body[data-view="dashboard"] .partner,
+              body[data-view="dashboard"] .ctxrow { display: none; }
+              body[data-view="dashboard"] .owner { display: block; }
+              body[data-view="dashboard"] .card-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+              body[data-view="dashboard"] .task { flex: 1; font-size: 13px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+              body[data-view="dashboard"] .meta { flex-shrink: 0; }
+              body[data-view="dashboard"] .status-word { display: none; }
+              body[data-view="dashboard"] .ctxpct-inline { display: inline; }
+              body[data-view="dashboard"] .lasttext { -webkit-line-clamp: 1; margin-top: 4px; }
+            }
             .card { display: block; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: inherit; text-decoration: none; min-width: 0; overflow-wrap: anywhere; transition: background-color 800ms; }
             .card.flash { background-color: var(--pinned-bg, #2a2a35); }
             .card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -1223,10 +1240,19 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             .dot.error { background: #ef4444; }
             @keyframes pair-pulse { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
             .owner { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .partner { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .host-tag { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-text); white-space: nowrap; }
             .task { font-size: 14px; font-weight: 600; margin: 4px 0; overflow-wrap: anywhere; }
             .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
-            .ctxbar { height: 4px; border-radius: 2px; background: var(--border); margin-top: 6px; overflow: hidden; }
+            .ctxrow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+            .ctxbar { position: relative; flex: 1; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
             .ctxbar > i { display: block; height: 100%; background: var(--accent); }
+            .ctxbar.over > i { background: #f59e0b; }
+            .ctxbar > b { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--text); opacity: .6; }
+            .ctxpct { flex-shrink: 0; font-size: 11px; color: var(--muted); white-space: nowrap; }
+            .ctxpct-inline { display: none; }
+            .agg-note { display: none; padding: 8px 12px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 12px; }
+            body[data-agg="1"] .agg-note { display: block; }
             .lasttext { margin: 6px 0 0; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
             body[data-view="list"] .grid { grid-template-columns: 1fr; }
             body[data-view="list"] .lasttext { -webkit-line-clamp: 1; }
@@ -1238,6 +1264,7 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
         <body data-view="dashboard">
           <header>
             <h1>夥伴 Sessions</h1>
+            <a class="pairs-btn" href="/remote-sessions" style="display: inline-flex; align-items: center; min-height: 44px; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 999px; background: var(--surface); color: var(--text); border: 1px solid var(--border); text-decoration: none; line-height: 1; white-space: nowrap;">工作階段</a>
             <div class="view-toggle" role="group" aria-label="檢視切換">
               <button type="button" data-view-btn="dashboard" aria-pressed="true">儀表板</button>
               <button type="button" data-view-btn="list" aria-pressed="false">列表</button>
@@ -1245,6 +1272,7 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             <button class="font-scale-toggle" type="button" data-font-scale-cycle aria-label="切換字級">Aa</button>
             <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
           </header>
+          <div class="agg-note" id="aggNote" hidden></div>
           <div class="grid" id="pairGrid"><div class="empty">載入中…</div></div>
           <script type="module" src="/c/static/font-scale.js?v=${fontScaleHash}"></script>
           <script type="module" src="/c/static/theme.js?v=${themeHash}"></script>
@@ -1358,8 +1386,9 @@ const server = http.createServer((req, res) => {
 
   // The hub page (one tab per opencode-remote) reads /remote-health and
   // /api/session/active on every remote from another origin; answer its CORS
-  // preflight and mark those two read-only endpoints as cross-origin readable.
-  if (req.method === "OPTIONS" && (req.url === "/remote-health" || req.url === "/api/session/active")) {
+  // preflight and mark those read-only endpoints as cross-origin readable.
+  // /api/pairs is also read-only GET (accept POST/DELETE stay same-origin).
+  if (req.method === "OPTIONS" && (req.url === "/remote-health" || req.url === "/api/session/active" || req.url === "/api/pairs")) {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -1471,7 +1500,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/api/pairs") {
-    void handleListPairs(res);
+    void handleListPairs(req, res);
     return;
   }
   if (req.url) {

@@ -6,28 +6,31 @@
 
 在 Windows 或核准的 macOS 電腦上運行 OpenCode headless server，並透過透明 HTTP proxy 將 OpenCode 的原生 Web UI 提供給受信任裝置。根路徑進入工作階段列表，`/latest` 進入最近活躍的 session。Session 在伺服器端持久化，瀏覽器關閉不影響。
 
-## 架構
+## 架構（2026-09-23 現況）
 
 ```
-瀏覽器 → proxy (port 9223) → opencode serve (port 4196, localhost only)
+瀏覽器 → proxy (port 9223) → Desktop 的 opencode-cli serve --service（service mode，port 動態）
 ```
 
-> **Port 注意**：OpenCode CLI 預設是 4096，但這個 repo 的 `docker-compose.yml`
-> 也 publish 4096，會跟本機 `opencode-cli` 衝。`.env` 把 `OPENCODE_PORT` 改成
-> **4196** 避開。詳見「重大修復記錄 / 2026-05-21」。
+Mac（OPENCODE_SERVICE_MODE=1）不再自己 spawn `opencode serve`：OpenCode 由
+Desktop 起的 `opencode-cli serve --service` 提供，url／pid 寫在
+`~/.local/state/opencode/service.json`（例 `http://127.0.0.1:49374`），proxy
+讀同一份（config.ts readServiceState）共用。固定 4196 已作廢。
 
 `packages/server/src/index.ts` — proxy 主程式：
 - `GET /` → 302 redirect 到 `/remote-sessions`
-- `GET /latest` → 302 redirect 到最近 session 的完整 SPA URL
+- `GET /latest` → 302 到最近 session 的 2.x SPA URL（見下）
+- `GET /remote-sessions` — 工作階段列表（`pair·` 開頭的夥伴 session 不列，見 /pairs）
+- `GET /pairs` ＋ `GET /api/pairs` — 夥伴 session 儀表板＋列表（見「/pairs 頁」）
 - 其他所有請求 → 透明 pipe 到 OpenCode
 - Background SSE keep-alive 防止 OpenCode idle
 - 每 30 秒 refresh active session path
 
 `packages/server/src/session.ts` — session 解析：
-- 呼叫 `GET /session` 列出所有 sessions
+- 呼叫 `GET /api/session` 列出所有 sessions
 - 依 `OPENCODE_DIRECTORY` 過濾，取 `time.updated` 最新的
 - 若無符合 directory 的 session，fallback 到全域最新
-- 只在完全沒有 session 時才 `POST /session` 新建
+- 只在完全沒有 session 時才 `POST /api/session` 新建
 
 `packages/server/src/config.ts` — 設定（從環境變數讀取）
 
@@ -105,33 +108,24 @@ node test-screenshot2.mjs
 
 ## 關鍵技術細節
 
-### OpenCode SPA URL 格式
+### OpenCode 2.x SPA URL 格式
 
-OpenCode SPA 的 router 路由是 `/:dir/session/:id?`，其中：
-- `:dir` = **`base64url(session.directory)`**（UTF-8 編碼的目錄路徑，不含 `=` padding）
+OpenCode 2.x SPA 的路由只認 `/server/<key>/session/<id>`，其中：
+- `<key>` = **base64url（無 `=` padding）的瀏覽器 origin**（例 `https://opencode-l390.sisihome.org` → `aHR0cHM6Ly9vcGVuY29kZS1sMzkwLnNpc2lob21lLm9yZw`）
 - `:id` = session ID（格式 `ses_xxxxx`）
+
+其他路徑（`/session/<id>`、`/<base64url(dir)>/session/<id>`）一律 `Unrecognised route!`。
 
 **正確範例：**
 ```
-D:\Projects\_HomeProject
-  → base64url → RDpcUHJvamVjdHNcX0hvbWVQcm9qZWN0
-  → URL: /RDpcUHJvamVjdHNcX0hvbWVQcm9qZWN0/session/ses_2661d25a0ffeTMVY2KwFgK5Ifz
+/server/aHR0cHM6Ly9vcGVuY29kZS1sMzkwLnNpc2lob21lLm9yZw/session/ses_f3ba01005ffezARh9Lp5VqqXI3
 ```
 
-**錯誤做法：** 不能用 `/global/session/<id>` 或 `/<session-slug>`。
-- `/global/session/<id>` — SPA 會自己跳轉到用 session 存儲的 directory 編碼的 URL，但如果該 directory 含有亂碼 bytes（Windows 編碼問題），會產生格式錯誤的 URL，導致空白頁
-- `/<session-slug>` — SPA 把 slug 當成 workspace 識別符，不是 session，會打開一個新空白 session
+`encodeServerKey()`（`session.ts`）做 base64url 編碼；`/latest` 與
+`/remote-sessions` 卡片按請求的 origin（`x-forwarded-proto/host` 優先）組出；
+compact 頁「在原生介面打開」用前端 `location.origin` 算 key。
 
-**`encodeDirSlug()` 實作（`session.ts`）：**
-```typescript
-function encodeDirSlug(dir: string): string {
-  return Buffer.from(dir, "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-```
+`encodeDirSlug()`（base64url directory，1.x 格式）已無引用，僅保留 export。
 
 ### OpenCode Session API
 
@@ -344,7 +338,11 @@ HTML + 單一 vanilla ES module，無 build step。
 | `GET /remote-sessions` | session 列表頁（含 📌 釘選、Compact pill、新 session 按鈕）|
 | `GET /c/session/:id` | compact 對話 UI 主畫面 |
 | `GET /c/session/:id/latest-user-model` | server 端分頁掃描最新 user message，只回 model metadata |
-| `GET /c/session-status?directory=<absolute-path>` | 僅接受 `OPENCODE_DIRECTORY` 或其子目錄，合併 Remote-owned `:4196` 與 macOS Desktop sidecar 的 session status；一般 UI 任一來源失敗時使用另一來源，`strict=1` 則要求 Remote 與所有有效 live Desktop 來源都成功 |
+| `GET /c/session-status?directory=<absolute-path>` | 僅接受 `OPENCODE_DIRECTORY` 或其子目錄，合併 service mode 共用 upstream 與 macOS Desktop sidecar 的 session status；一般 UI 任一來源失敗時使用另一來源，`strict=1` 則要求 Remote 與所有有效 live Desktop 來源都成功 |
+| `GET /pairs` | 夥伴 session 頁（儀表板＋列表，見「/pairs 頁」）|
+| `GET /api/pairs` | 夥伴 session JSON（唯讀，帶 `Access-Control-Allow-Origin: *` 供彙總模式跨台讀）|
+| `POST /api/pairs/:id/accept` | 驗收標記（記 acceptedAt，存 `<OPENCODE_DIRECTORY>/.opencode-remote/pairs-accept.json`，原子寫檔）|
+| `DELETE /api/pairs/:id/accept` | 取消驗收 |
 | `GET /c/static/<file>` | 服 `compact.js` / `compact.css` / `theme.js` / `marked.min.js`（白名單檢查）|
 | `POST /c/new-session` | 新建 session（**不帶 title** 讓 OpenCode 自動命名）+ 套 trust ruleset + 303 redirect |
 | `GET /c/pins` | 列出已釘選的 sessionID（從 `<OPENCODE_DIRECTORY>/.opencode-remote/pins.json` 讀）|
