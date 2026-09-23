@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const KNOWN_STATUS_TYPES = new Set(["busy", "idle", "retry"]);
@@ -36,12 +36,27 @@ export function healthMatchesVersion(raw, expectedVersion) {
   return health?.upstreamHealth?.healthy === true && health.upstreamHealth.version === expectedVersion;
 }
 
-export function deploymentHealthIsExpected(raw) {
+// Service mode: the expected upstream is whatever the Desktop-owned
+// service recorded in service.json (url), not a fixed 4196.
+// expectedUpstreamUrl must be passed in (read from service.json by the
+// caller); missing/empty means FAIL, never fall back to 4196.
+export function deploymentHealthIsExpected(raw, expectedUpstreamUrl) {
+  if (!expectedUpstreamUrl) return false;
   const health = parseObject(raw);
   return health?.proxy === "opencode-remote" &&
     health.remotePort === 9223 &&
-    health.upstream === "http://127.0.0.1:4196" &&
+    health.upstream === expectedUpstreamUrl &&
     health.upstreamHealth?.healthy === true;
+}
+
+export function readServiceJsonUrl(serviceJsonPath) {
+  try {
+    if (!existsSync(serviceJsonPath)) return "";
+    const data = JSON.parse(readFileSync(serviceJsonPath, "utf8"));
+    return typeof data?.url === "string" ? data.url : "";
+  } catch {
+    return "";
+  }
 }
 
 // OpenCode 2.x GET /api/fs/read/<path> answers with the raw file body; the 1.x
@@ -90,7 +105,7 @@ function main([mode, argument]) {
   }
   if (mode === "health-current") process.exit(healthIsCurrent(raw) ? 0 : 1);
   if (mode === "health-version") process.exit(healthMatchesVersion(raw, argument) ? 0 : 1);
-  if (mode === "deploy-health") process.exit(deploymentHealthIsExpected(raw) ? 0 : 1);
+  if (mode === "deploy-health") process.exit(deploymentHealthIsExpected(raw, argument) ? 0 : 1);
   if (mode === "file-content") process.exit(fileContentMatches(raw, argument) ? 0 : 1);
   if (mode === "desktop-cli-newest") {
     const result = newestDesktopCliVersion(raw, argument);

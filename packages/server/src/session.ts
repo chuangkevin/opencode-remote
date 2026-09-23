@@ -125,7 +125,11 @@ export async function resolveActiveSessionPath(): Promise<string> {
     [...sessions].sort(byUpdatedDesc)[0] ??
     (await createSession());
 
-  return `/session/${session.id}`;
+  // 2.x SPA routes are /<base64url(dir)>/session/<id> (same as the
+  // /remote-sessions list links); bare /session/<id> renders
+  // "Error: Unrecognised route!".
+  const dir = session.directory || config.opencodeDirectory;
+  return `/${encodeDirSlug(dir)}/session/${session.id}`;
 }
 
 export async function resolveActiveWorkspaceSessionPath(): Promise<string> {

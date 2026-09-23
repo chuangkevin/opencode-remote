@@ -72,3 +72,20 @@ test("macOS deploy tar allowlist covers every compiled server module", async () 
   const missing = distJs.filter((f) => !packed.has(f));
   assert.deepEqual(missing, [], `tar allowlist is missing compiled modules: ${missing.join(", ")}`);
 });
+
+test("macOS deploy follows the Desktop-owned OpenCode service, not a fixed 4196", async () => {
+  const source = await readFile(new URL("../../../deploy/macos/deploy-local.sh", import.meta.url), "utf8");
+  const helper = await readFile(new URL("../../../deploy/macos/update-opencode-sara-json.mjs", import.meta.url), "utf8");
+
+  // Expected upstream comes from the Desktop-owned service.json; missing file is FAIL.
+  assert.match(source, /OPENCODE_SERVICE_JSON="\/Users\/kevin\/\.local\/state\/opencode\/service\.json"/);
+  assert.match(source, /service_opencode_is_expected/);
+  assert.match(source, /opencode-cli serve --service/);
+  assert.doesNotMatch(source, /exact_listener_pid "127\.0\.0\.1" 4196/);
+  assert.doesNotMatch(source, /\$OPENCODE_BIN serve --hostname/);
+  // deploy-health takes the expected upstream as an argument; empty means reject.
+  assert.match(helper, /deploymentHealthIsExpected\(raw, expectedUpstreamUrl\)/);
+  assert.match(helper, /if \(!expectedUpstreamUrl\) return false/);
+  assert.match(helper, /readServiceJsonUrl/);
+  assert.doesNotMatch(helper, /127\.0\.0\.1:4196/);
+});

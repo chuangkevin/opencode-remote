@@ -112,3 +112,19 @@ test("single-session lookup treats only 404 as absent", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("resolveActiveSessionPath returns the 2.x workspace-scoped SPA route", async () => {
+  const { resolveActiveSessionPath } = await import("../dist/session.js");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json({ data: [
+      { id: "ses_abc123", projectID: "p", title: "t", location: { directory: "/w" }, time: { created: 1, updated: 100 } },
+    ] });
+  try {
+    const path = await resolveActiveSessionPath();
+    assert.match(path, /^\/[A-Za-z0-9_-]+\/session\/ses_/);
+    assert.doesNotMatch(path, /^\/session\//);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

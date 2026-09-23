@@ -59,12 +59,17 @@ test("deployment health parser requires the exact Remote topology and healthy up
   const expected = {
     proxy: "opencode-remote",
     remotePort: 9223,
-    upstream: "http://127.0.0.1:4196",
+    upstream: "http://127.0.0.1:49374",
     upstreamHealth: { healthy: true, version: "1.18.30" },
   };
-  assert.equal(deploymentHealthIsExpected(JSON.stringify(expected)), true);
-  assert.equal(deploymentHealthIsExpected(JSON.stringify({ ...expected, remotePort: 9224 })), false);
-  assert.equal(deploymentHealthIsExpected(JSON.stringify({ ...expected, upstreamHealth: { healthy: false } })), false);
+  const url = "http://127.0.0.1:49374";
+  assert.equal(deploymentHealthIsExpected(JSON.stringify(expected), url), true);
+  assert.equal(deploymentHealthIsExpected(JSON.stringify({ ...expected, remotePort: 9224 }), url), false);
+  assert.equal(deploymentHealthIsExpected(JSON.stringify({ ...expected, upstreamHealth: { healthy: false } }), url), false);
+  // Service mode: expected upstream comes from service.json; missing means FAIL, never 4196.
+  assert.equal(deploymentHealthIsExpected(JSON.stringify(expected), ""), false);
+  assert.equal(deploymentHealthIsExpected(JSON.stringify(expected), undefined), false);
+  assert.equal(deploymentHealthIsExpected(JSON.stringify({ ...expected, upstream: "http://127.0.0.1:4196" }), url), false);
 });
 
 test("maintenance ID parsing accepts only a positive integer ID", () => {

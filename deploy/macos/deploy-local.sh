@@ -34,6 +34,10 @@ readonly HEALTH_WAIT_SECONDS=2
 readonly STOP_ATTEMPTS=15
 readonly STOP_WAIT_SECONDS=1
 readonly SERVER_ENTRY="$RUNTIME_DIR/packages/server/dist/index.js"
+# Desktop-owned OpenCode service (service mode): CLI writes its url/pid here.
+# The proxy reads the same file (config.ts readServiceState) and reuses the
+# shared service instead of spawning its own `opencode serve --port 4196`.
+readonly OPENCODE_SERVICE_JSON="/Users/kevin/.local/state/opencode/service.json"
 readonly PLUGIN_SOURCE_NAME="opencode-remote-desktop-bridge.js"
 readonly PLUGIN_DIR="/Users/kevin/.config/opencode/plugins"
 readonly PLUGIN_DEST="$PLUGIN_DIR/$PLUGIN_SOURCE_NAME"
@@ -95,7 +99,10 @@ require_executable "/usr/sbin/lsof"
 require_executable "/usr/bin/shlock"
 
 health_response_is_expected() {
-  /usr/bin/printf '%s' "$1" | "$NODE_BIN" "$SCRIPT_DIR/$UPDATER_HELPER_SOURCE_NAME" deploy-health
+  local expected_upstream
+  expected_upstream="$("$NODE_BIN" -e "console.log(JSON.parse(require('fs').readFileSync('$OPENCODE_SERVICE_JSON','utf8')).url||'')" 2>/dev/null)"
+  [[ -n "$expected_upstream" ]] || return 1
+  /usr/bin/printf '%s' "$1" | "$NODE_BIN" "$SCRIPT_DIR/$UPDATER_HELPER_SOURCE_NAME" deploy-health "$expected_upstream"
 }
 
 fda_probe_response_is_expected() {
@@ -167,19 +174,34 @@ pid_parent_is() {
 }
 
 expected_listeners_are_absent() {
-  ! exact_listener_exists "$EXPECTED_TAILSCALE_IP" 9223 &&
-    ! exact_listener_exists "127.0.0.1" 4196
+  ! exact_listener_exists "$EXPECTED_TAILSCALE_IP" 9223
+}
+
+# Service mode: OpenCode is the Desktop-owned `opencode-cli serve --service`
+# (url/pid in $OPENCODE_SERVICE_JSON), not a fixed 127.0.0.1:4196 child.
+# Verify the recorded pid is alive, its command is the service CLI, and it
+# actually holds the recorded url's port.
+service_opencode_is_expected() {
+  local url pid port listener_pid command
+  url="$("$NODE_BIN" -e "console.log(JSON.parse(require('fs').readFileSync(process.env.SERVICE_JSON,'utf8')).url||'')" 2>/dev/null)" || return 1
+  pid="$("$NODE_BIN" -e "console.log(JSON.parse(require('fs').readFileSync(process.env.SERVICE_JSON,'utf8')).pid||'')" 2>/dev/null)" || return 1
+  [[ "$url" =~ ^http://127\.0\.0\.1:([0-9]+)$ ]] || return 1
+  port="${BASH_REMATCH[1]}"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  /bin/ps -p "$pid" >/dev/null 2>&1 || return 1
+  command="$(/bin/ps -ww -p "$pid" -o command= 2>/dev/null)" || return 1
+  [[ "$command" == *"opencode-cli serve --service"* ]] || return 1
+  listener_pid="$(exact_listener_pid "127.0.0.1" "$port")" || return 1
+  [[ "$listener_pid" == "$pid" ]] || return 1
 }
 
 runtime_process_tree_is_expected() {
-  local service_pid="$1" proxy_pid opencode_pid
+  local service_pid="$1" proxy_pid
+  SERVICE_JSON="$OPENCODE_SERVICE_JSON" service_opencode_is_expected || return 1
 
   proxy_pid="$(exact_listener_pid "$EXPECTED_TAILSCALE_IP" 9223)" || return 1
-  opencode_pid="$(exact_listener_pid "127.0.0.1" 4196)" || return 1
   [[ "$service_pid" == "$proxy_pid" ]] || return 1
   pid_command_is "$service_pid" "$NODE_BIN $SERVER_ENTRY" || return 1
-  pid_command_is "$opencode_pid" "$OPENCODE_BIN serve --hostname 127.0.0.1 --port 4196" || return 1
-  pid_parent_is "$opencode_pid" "$service_pid"
 }
 
 node_major="$("$NODE_BIN" -p 'Number(process.versions.node.split(".")[0])')"
