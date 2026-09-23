@@ -253,3 +253,11 @@ test("pairs agg note hides when all remotes are up; card time never wraps", asyn
   assert.match(client, /aggNote\.classList\.add\("show"\)/);
   assert.match(client, /aggNote\.classList\.remove\("show"\)/);
 });
+
+test("hub tabs keep their status dots across re-renders", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const hub = await readFile(new URL("../static/hub.html", import.meta.url), "utf8");
+  assert.match(hub, /const lastDot = new Map\(\)/);
+  assert.match(hub, /lastDot\.set\(r\.id/);
+  assert.match(hub, /lastDot\.get\(r\.id\)/);
+});

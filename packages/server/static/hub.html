@@ -104,6 +104,7 @@
   if (!Array.isArray(remotes) || remotes.length === 0) remotes = DEFAULTS.map((r) => ({ ...r }));
   let active = load(KEY_ACTIVE, null);
   const frames = new Map(); // id → iframe
+  const lastDot = new Map(); // id → { cls, title }: survives tab re-render
 
   function enabledRemotes() { return remotes.filter((r) => r.enabled && normalizeUrl(r.url)); }
 
@@ -133,6 +134,13 @@
       b.innerHTML = `<span class="dot" data-dot="${r.id}"></span><span>${escapeHtml(r.name)}</span>`;
       b.addEventListener("click", () => { active = r.id; render(); });
       tabsEl.appendChild(b);
+      // Rebuilt buttons lose their dot state; re-apply the last known one
+      // immediately instead of waiting for the next 20s refreshStatus tick.
+      const cached = lastDot.get(r.id);
+      if (cached) {
+        const dot = b.querySelector(`[data-dot="${r.id}"]`);
+        if (dot) { dot.className = cached.cls; dot.title = cached.title; }
+      }
     }
     // frames: keep alive, only toggle visibility; drop frames of removed/disabled remotes
     for (const [id, f] of frames) { if (!list.some((r) => r.id === id)) { f.remove(); frames.delete(id); } }
@@ -163,8 +171,10 @@
         }
         dot.className = "dot " + (ok ? (busy ? "busy" : "ok") : "bad");
         dot.title = ok ? (busy ? "有 session 在跑" : "正常") : "連不上";
+        lastDot.set(r.id, { cls: dot.className, title: dot.title });
       } catch {
         dot.className = "dot bad"; dot.title = "連不上";
+        lastDot.set(r.id, { cls: dot.className, title: dot.title });
       }
     }
   }
