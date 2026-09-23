@@ -225,6 +225,7 @@ echo "Staging runtime allowlist..."
   packages/server/dist/opencode-command.js \
   packages/server/dist/session.js \
   packages/server/dist/update-quiesce.js \
+  packages/server/dist/upstream.js \
   packages/server/dist/compact/handlers.js \
   packages/server/dist/compact/model.js \
   packages/server/dist/compact/pins.js \

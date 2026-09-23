@@ -41,3 +41,34 @@ test("macOS wrapper alone configures the fixed updater quiesce marker", async ()
   assert.match(wrapper, /OPENCODE_UPDATE_QUIESCE_FILE="\/Users\/kevin\/\.local\/share\/opencode-remote\/update-opencode-sara\.quiesce"/);
   assert.doesNotMatch(plist, /OPENCODE_UPDATE_QUIESCE_FILE|EnvironmentVariables/);
 });
+
+test("macOS deploy tar allowlist covers every compiled server module", async () => {
+  const { readdir } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const source = await readFile(new URL("../../../deploy/macos/deploy-local.sh", import.meta.url), "utf8");
+  const dist = new URL("../dist/", import.meta.url);
+
+  const distJs = [];
+  const walk = async (dir, prefix) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const name = entry.name;
+      if (entry.isDirectory()) {
+        await walk(join(dir, name), `${prefix}${name}/`);
+      } else if (name.endsWith(".js") && !name.endsWith(".test.js")) {
+        distJs.push(`packages/server/dist/${prefix}${name}`);
+      }
+    }
+  };
+  await walk(fileURLToPath(dist), "");
+
+  // Extract the tar file list (entries between `tar -cf ... \` and the closing `)`).
+  const tarStart = source.indexOf('tar -cf "$STAGE_ARCHIVE"');
+  assert.ok(tarStart >= 0, "deploy-local.sh must contain a tar allowlist");
+  const tarEnd = source.indexOf("mockups/compact-mockup.html)");
+  assert.ok(tarEnd > tarStart, "tar allowlist must end at mockups/compact-mockup.html");
+  const tarBlock = source.slice(tarStart, tarEnd);
+  const packed = new Set(tarBlock.match(/packages\/server\/dist\/[^\s\\]+/g) ?? []);
+
+  const missing = distJs.filter((f) => !packed.has(f));
+  assert.deepEqual(missing, [], `tar allowlist is missing compiled modules: ${missing.join(", ")}`);
+});
