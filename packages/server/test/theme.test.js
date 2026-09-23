@@ -195,7 +195,7 @@ test("all custom shells initialize and expose the shared theme control", async (
   const index = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
   const mockup = await readFile(new URL("../../../mockups/compact-mockup.html", import.meta.url), "utf8");
   const debug = index.slice(index.indexOf("function handleRemoteDebug"), index.indexOf("function handleRemoteClientDebug"));
-  const sessions = index.slice(index.indexOf("async function handleRemoteSessions"), index.indexOf("async function handleListPins"));
+  const sessions = index.slice(index.indexOf("async function handleRemoteSessions"), index.indexOf("async function handleListPairs"));
 
   for (const shell of [compact, debug, sessions, mockup]) {
     assert.match(shell, /opencode-color-scheme/);
@@ -209,9 +209,10 @@ test("all custom shells initialize and expose the shared theme control", async (
   }
   assert.match(index, /OpenCode Sessions/);
   assert.match(index, /OpenCode Remote Debug/);
-  assert.equal(index.match(/data-theme-toggle/g)?.length, 2);
-  assert.equal(index.match(/<script type="module" src="\/c\/static\/theme\.js\?v=/g)?.length, 2);
-  assert.equal(index.match(/querySelector\('meta\[name="theme-color"\]'\)/g)?.length, 2);
+  // /remote-sessions, /remote-debug and /pairs are the three themed shells in index.ts.
+  assert.equal(index.match(/data-theme-toggle/g)?.length, 3);
+  assert.equal(index.match(/<script type="module" src="\/c\/static\/theme\.js\?v=/g)?.length, 3);
+  assert.equal(index.match(/querySelector\('meta\[name="theme-color"\]'\)/g)?.length, 3);
 });
 
 test("compact and inline shells define light tokens for interactive states", async () => {

@@ -93,12 +93,22 @@ test("macOS deploy follows the Desktop-owned OpenCode service, not a fixed 4196"
 test("macOS deploy retries launchctl bootstrap on the bootout race", async () => {
   const source = await readFile(new URL("../../../deploy/macos/deploy-local.sh", import.meta.url), "utf8");
   assert.match(source, /bootstrap race/);
-  assert.match(source, /bootstrap_attempt >= 3/);
-  assert.match(source, /\/bin\/sleep 2/);
+  assert.match(source, /bootstrap_attempt >= 5/);
+  assert.match(source, /\/bin\/sleep 5/);
 });
 
 test("macOS deploy FDA probe uses the 2.x fs read route", async () => {
   const source = await readFile(new URL("../../../deploy/macos/deploy-local.sh", import.meta.url), "utf8");
   assert.match(source, /FDA_PROBE_API_PATH="api\/fs\/read\/\.opencode-remote\/remote-fda-probe\.txt"/);
   assert.doesNotMatch(source, /FILE_CONTENT_URL=/);
+});
+
+test("macOS deploy never aborts on the launchd release wait", async () => {
+  const source = await readFile(new URL("../../../deploy/macos/deploy-local.sh", import.meta.url), "utf8");
+  const waitBlock = source.slice(
+    source.indexOf("Waiting for launchd to release"),
+    source.indexOf("Updating runtime copy"),
+  );
+  assert.doesNotMatch(waitBlock, /\n\s*fail /);
+  assert.match(waitBlock, /continuing to bootstrap retries/);
 });

@@ -26,6 +26,7 @@ import { ensureSessionTrust } from "./compact/trust.js";
 import { handleMergedSessionStatus, isMergedSessionStatusPath, isPathWithinRoot } from "./compact/session-status.js";
 import { unwrap, upstreamAuthHeaders, upstreamFetch, upstreamHealthy, upstreamInfo } from "./upstream.js";
 import { readBuildInfo } from "./build-info.js";
+import { isPairSession } from "./compact/pairs.js";
 import { getStaticAsset } from "./compact/static-assets.js";
 import { sendHtml } from "./html-response.js";
 import { shouldCompressUpstream } from "./proxy-compress.js";
@@ -992,8 +993,10 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
       listSessionPickerSessions(sessionOptions),
       listPins(),
     ]);
+    // Pair-partner sessions (title "pair·…") live on /pairs, not here.
+    const visibleSessions = allSessions.filter((s) => !isPairSession(s));
     const pinnedSet = new Set(pinnedIds);
-    const ordered = await mergePinnedSessions(allSessions, pinnedIds);
+    const ordered = await mergePinnedSessions(visibleSessions, pinnedIds);
     // 2.x SPA server route key is base64url(browser origin).
     const origin = requestOrigin(req);
     const windowLabel = remoteSessionsWindowLabel(windowKey);
@@ -1118,6 +1121,144 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
     console.error("[opencode-remote] failed to render remote sessions:", err);
     res.writeHead(500, { "Cache-Control": "no-store" });
     res.end("Failed to load sessions");
+  }
+}
+
+async function handleListPairs(res: http.ServerResponse): Promise<void> {
+  try {
+    const { buildPairsList } = await import("./compact/pairs.js");
+    const pairs = await buildPairsList();
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-OpenCode-Remote": "true",
+    });
+    res.end(JSON.stringify(pairs));
+  } catch (err) {
+    console.error("[opencode-remote] /api/pairs failed:", err);
+    res.writeHead(502, { "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ error: "pairs unavailable" }));
+  }
+}
+
+const PAIR_ACCEPT_PATH_RE = /^\/api\/pairs\/(ses_[A-Za-z0-9]+)\/accept\/?$/;
+
+function matchPairAcceptPath(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  try {
+    const m = PAIR_ACCEPT_PATH_RE.exec(new URL(path, "http://localhost").pathname);
+    return m ? m[1] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function handlePairAccept(id: string, res: http.ServerResponse): Promise<void> {
+  try {
+    const { acceptPair } = await import("./compact/pairs.js");
+    const acceptedAt = await acceptPair(id);
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-OpenCode-Remote": "true",
+    });
+    res.end(JSON.stringify({ ok: true, id, acceptedAt }));
+  } catch (err) {
+    const bad = err instanceof Error && /invalid session id/.test(err.message);
+    console.error(`[opencode-remote] accept pair ${id} failed:`, err);
+    res.writeHead(bad ? 400 : 500, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ ok: false, error: bad ? "invalid session id" : "accept failed" }));
+  }
+}
+
+async function handlePairUnaccept(id: string, res: http.ServerResponse): Promise<void> {
+  try {
+    const { unacceptPair } = await import("./compact/pairs.js");
+    await unacceptPair(id);
+    res.writeHead(204, { "Cache-Control": "no-store", "X-OpenCode-Remote": "true" });
+    res.end();
+  } catch (err) {
+    const bad = err instanceof Error && /invalid session id/.test(err.message);
+    console.error(`[opencode-remote] unaccept pair ${id} failed:`, err);
+    res.writeHead(bad ? 400 : 500, { "Cache-Control": "no-store" });
+    res.end(bad ? "invalid session id" : "unaccept failed");
+  }
+}
+
+async function handlePairsPage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  try {
+    const { getStaticAsset } = await import("./compact/static-assets.js");
+    const fontScaleHash = getStaticAsset("font-scale.js")?.hash ?? "";
+    const themeHash = getStaticAsset("theme.js")?.hash ?? "";
+    const pairsHash = getStaticAsset("pairs.js")?.hash ?? "";
+    sendHtml(req, res, `<!doctype html>
+      <html lang="zh-Hant">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+          <meta name="theme-color" content="#0f0f10" />
+          <script>(()=>{let p="system";try{const s=localStorage.getItem("opencode-color-scheme");if(["light","dark","system"].includes(s))p=s}catch{}try{const t=p==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):p;const r=document.documentElement;r.dataset.themePreference=p;r.dataset.theme=t;r.style.colorScheme=t;const m=document.querySelector('meta[name="theme-color"]');if(m)m.content=t==="light"?"#f7f7f5":"#0f0f10"}catch{}})()</script>
+          <script>(()=>{let v;try{const s=localStorage.getItem("opencode-font-scale");v=["1","1.15","1.3","1.45"].includes(s)?s:(matchMedia("(max-width: 767px)").matches?"1.3":"1")}catch{v="1"}try{document.documentElement.style.setProperty("--font-scale",v)}catch{}})()</script>
+          <title>夥伴 Sessions</title>
+          <style>
+            :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --bg: #0f0f10; --surface: #18181b; --surface-hi: #1f1f23; --header-bg: rgba(15,15,16,.94); --border: #27272a; --text: #f4f4f5; --muted: #71717a; --accent: #6366f1; --accent-active: #4f46e5; --pill-bg: #312e81; --pill-text: #c7d2fe; --running: #22c55e; --font-scale: 1; }
+            :root[data-theme="light"] { color-scheme: light; --bg: #f7f7f5; --surface: #ffffff; --surface-hi: #f0f0ed; --header-bg: rgba(247,247,245,.94); --border: #d7d7d2; --text: #202023; --muted: #686970; --accent: #4f46e5; --accent-active: #4338ca; --pinned-bg: #eeecff; --pill-bg: #e8e7ff; --pill-text: #3730a3; --running: #15803d; }
+            * { box-sizing: border-box; }
+            body { margin: 0; background: var(--bg); color: var(--text); padding: max(8px, env(safe-area-inset-top)) 10px max(14px, env(safe-area-inset-bottom)); font-size: calc(14px * var(--font-scale)); line-height: 1.4; overflow-x: hidden; }
+            header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 6px 12px; min-height: 52px; background: var(--header-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+            h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
+            .view-toggle { display: flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+            .view-toggle button { min-height: 44px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; padding: 6px 14px; cursor: pointer; }
+            .view-toggle button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+            .font-scale-toggle, .theme-toggle { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-size: 17px; cursor: pointer; }
+            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; }
+            @media (min-width: 768px) and (max-width: 1023px) { .grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); } }
+            @media (max-width: 767px) { .grid { grid-template-columns: 1fr; } }
+            .card { display: block; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: inherit; text-decoration: none; min-width: 0; overflow-wrap: anywhere; transition: background-color 800ms; }
+            .card.flash { background-color: var(--pinned-bg, #2a2a35); }
+            .card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+            .dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; background: var(--muted); }
+            .dot.busy { background: var(--running); animation: pair-pulse 1.8s ease-in-out infinite; }
+            .dot.ask { background: #f59e0b; }
+            .dot.error { background: #ef4444; }
+            @keyframes pair-pulse { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
+            .owner { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .task { font-size: 14px; font-weight: 600; margin: 4px 0; overflow-wrap: anywhere; }
+            .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+            .ctxbar { height: 4px; border-radius: 2px; background: var(--border); margin-top: 6px; overflow: hidden; }
+            .ctxbar > i { display: block; height: 100%; background: var(--accent); }
+            .lasttext { margin: 6px 0 0; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
+            body[data-view="list"] .grid { grid-template-columns: 1fr; }
+            body[data-view="list"] .lasttext { -webkit-line-clamp: 1; }
+            body[data-view="list"] .ctxbar { display: none; }
+            .empty { padding: 24px 12px; color: var(--muted); text-align: center; }
+            @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } .card { transition: none; } }
+          </style>
+        </head>
+        <body data-view="dashboard">
+          <header>
+            <h1>夥伴 Sessions</h1>
+            <div class="view-toggle" role="group" aria-label="檢視切換">
+              <button type="button" data-view-btn="dashboard" aria-pressed="true">儀表板</button>
+              <button type="button" data-view-btn="list" aria-pressed="false">列表</button>
+            </div>
+            <button class="font-scale-toggle" type="button" data-font-scale-cycle aria-label="切換字級">Aa</button>
+            <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
+          </header>
+          <div class="grid" id="pairGrid"><div class="empty">載入中…</div></div>
+          <script type="module" src="/c/static/font-scale.js?v=${fontScaleHash}"></script>
+          <script type="module" src="/c/static/theme.js?v=${themeHash}"></script>
+          <script type="module" src="/c/static/pairs.js?v=${pairsHash}"></script>
+        </body>
+      </html>`, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-OpenCode-Remote": "true",
+    });
+  } catch (err) {
+    console.error("[opencode-remote] failed to render pairs:", err);
+    res.writeHead(500, { "Cache-Control": "no-store" });
+    res.end("Failed to load pairs");
   }
 }
 
@@ -1326,6 +1467,35 @@ const server = http.createServer((req, res) => {
     if (req.method === "DELETE") {
       void handleUnpinSession(pinMatch[1], res);
       return;
+    }
+  }
+
+  if (req.method === "GET" && req.url === "/api/pairs") {
+    void handleListPairs(res);
+    return;
+  }
+  if (req.url) {
+    const acceptID = matchPairAcceptPath(req.url);
+    if (acceptID) {
+      if (req.method === "POST") {
+        void handlePairAccept(acceptID, res);
+        return;
+      }
+      if (req.method === "DELETE") {
+        void handlePairUnaccept(acceptID, res);
+        return;
+      }
+    }
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD")) {
+    try {
+      if (new URL(req.url ?? "/pairs", "http://localhost").pathname === "/pairs") {
+        void handlePairsPage(req, res);
+        return;
+      }
+    } catch {
+      // fall through to proxy
     }
   }
 

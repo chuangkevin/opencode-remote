@@ -252,6 +252,7 @@ echo "Staging runtime allowlist..."
   packages/server/dist/upstream.js \
   packages/server/dist/compact/handlers.js \
   packages/server/dist/compact/model.js \
+  packages/server/dist/compact/pairs.js \
   packages/server/dist/compact/pins.js \
   packages/server/dist/compact/session-status.js \
   packages/server/dist/compact/shell.js \
@@ -302,6 +303,23 @@ for ((attempt = 1; attempt <= STOP_ATTEMPTS; attempt++)); do
   /bin/sleep "$STOP_WAIT_SECONDS"
 done
 
+# launchd can lag behind the closed listeners: `launchctl print` still finds
+# the just-booted-out service, and an early bootstrap then fails with
+# "5: Input/output error". Wait until launchd really releases it (max 20s).
+echo "Waiting for launchd to release the service record..."
+for ((attempt = 1; attempt <= 20; attempt++)); do
+  if ! /bin/launchctl print "$SERVICE_TARGET" >/dev/null 2>&1; then
+    break
+  fi
+  if ((attempt == 20)); then
+    # Don't fail here: the bootstrap retry below is the real safety net.
+    # Stopping the deploy now would leave 9223 down with no recovery.
+    echo "warning: launchd still holds $SERVICE_TARGET after 20s; continuing to bootstrap retries..." >&2
+    break
+  fi
+  /bin/sleep 1
+done
+
 echo "Updating runtime copy without deleting service data..."
 /usr/bin/tar -xf "$STAGE_ARCHIVE" -C "$RUNTIME_DIR"
 /bin/rm -f -- "$RUNTIME_DIR/launch-opencode-sara.sh"
@@ -324,17 +342,17 @@ PROBE_TEMP="$(/usr/bin/mktemp "$FDA_PROBE_DIR/.remote-fda-probe.txt.XXXXXX")"
 PROBE_TEMP=""
 
 echo "Loading LaunchAgent..."
-# launchd can still hold the just-booted-out service (bootstrap then fails
-# with "5: Input/output error"); retry a few times before giving up.
+# Even after the service record is gone, bootstrap can still return
+# "5: Input/output error"; wait 5s and retry, up to 5 attempts.
 bootstrap_attempt=0
 until /bin/launchctl bootstrap "$GUI_DOMAIN" "$PLIST_DEST" 2>/tmp/bootstrap-err.txt; do
   bootstrap_attempt=$((bootstrap_attempt + 1))
-  if ((bootstrap_attempt >= 3)); then
+  if ((bootstrap_attempt >= 5)); then
     cat /tmp/bootstrap-err.txt >&2 || true
-    fail "launchctl bootstrap failed after 3 attempts"
+    fail "launchctl bootstrap failed after 5 attempts"
   fi
-  echo "bootstrap race (attempt $bootstrap_attempt/3), waiting 2s..."
-  /bin/sleep 2
+  echo "bootstrap race (attempt $bootstrap_attempt/5), waiting 5s..."
+  /bin/sleep 5
 done
 /bin/launchctl kickstart "$SERVICE_TARGET"
 
