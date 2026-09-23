@@ -113,18 +113,45 @@ test("single-session lookup treats only 404 as absent", async () => {
   }
 });
 
-test("resolveActiveSessionPath returns the 2.x workspace-scoped SPA route", async () => {
-  const { resolveActiveSessionPath } = await import("../dist/session.js");
+test("resolveActiveSessionPath returns the 2.x /server/<key>/session route", async () => {
+  const { encodeServerKey, requestOrigin, resolveActiveSessionPath } = await import("../dist/session.js");
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () =>
     Response.json({ data: [
       { id: "ses_abc123", projectID: "p", title: "t", location: { directory: "/w" }, time: { created: 1, updated: 100 } },
     ] });
   try {
-    const path = await resolveActiveSessionPath();
-    assert.match(path, /^\/[A-Za-z0-9_-]+\/session\/ses_/);
-    assert.doesNotMatch(path, /^\/session\//);
+    // Key is base64url(origin), verified against the L390 production URL.
+    assert.equal(
+      encodeServerKey("https://opencode-l390.sisihome.org"),
+      "aHR0cHM6Ly9vcGVuY29kZS1sMzkwLnNpc2lob21lLm9yZw",
+    );
+    const path = await resolveActiveSessionPath("https://opencode-sara.sisihome.org");
+    assert.match(path, /^\/server\/[A-Za-z0-9_-]+\/session\/ses_abc123$/);
+    assert.equal(
+      path,
+      `/server/${encodeServerKey("https://opencode-sara.sisihome.org")}/session/ses_abc123`,
+    );
+    // x-forwarded headers win; no host falls back to undefined.
+    assert.equal(
+      requestOrigin({ headers: { "x-forwarded-proto": "https", "x-forwarded-host": "opencode-sara.sisihome.org" } }),
+      "https://opencode-sara.sisihome.org",
+    );
+    assert.equal(
+      requestOrigin({ headers: { host: "127.0.0.1:9299" }, socket: {} }),
+      "http://127.0.0.1:9299",
+    );
+    assert.equal(requestOrigin({ headers: {} }), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("remote-sessions cards and compact link the 2.x /server/ route", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  assert.match(source, /\/server\/\$\{encodeServerKey\(origin\)\}\/session\/\$\{session\.id\}/);
+  const compact = await readFile(new URL("../static/compact.js", import.meta.url), "utf8");
+  assert.match(compact, /\/server\/\$\{key\}\/session\/\$\{sessionID\}/);
+  assert.match(compact, /btoa\(location\.origin\)/);
 });

@@ -1,3 +1,4 @@
+import type http from "node:http";
 import { config } from "./config.js";
 import { unwrap, upstreamFetch, upstreamJson } from "./upstream.js";
 
@@ -93,8 +94,8 @@ export async function mergePinnedSessions(
 }
 
 /**
- * 1.x SPA used base64url(directory) as the workspace slug; 2.x routes are
- * /session/<sessionId>. Kept exported for the tests that still cover it.
+ * 1.x SPA used base64url(directory) as the workspace slug. Kept exported
+ * for the tests that still cover it.
  */
 export function encodeDirSlug(dir: string): string {
   const slugDirectory = dir.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
@@ -106,14 +107,28 @@ export function encodeDirSlug(dir: string): string {
 }
 
 /**
+ * OpenCode 2.x SPA server route key: base64url (no padding) of the browser
+ * origin, e.g. https://opencode-l390.sisihome.org →
+ * aHR0cHM6Ly9vcGVuY29kZS1sMzkwLnNpc2lob21lLm9yZw.
+ */
+export function encodeServerKey(origin: string): string {
+  return Buffer.from(origin, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/**
  * Finds the most recently updated session for OPENCODE_DIRECTORY,
  * falling back to the most recent session globally, creating one only
  * if no sessions exist at all.
  *
- * Returns the full SPA path: /<base64url(dir)>/session/<sessionId>
- * using the session directory as the slug to match OpenCode's workspace key.
+ * Returns the full 2.x SPA path: /server/<base64url(origin)>/session/<id>.
+ * `origin` is what the browser sees (scheme + host); without it the route
+ * is unresolvable, so callers must fall back to "/" themselves.
  */
-export async function resolveActiveSessionPath(): Promise<string> {
+export async function resolveActiveSessionPath(origin?: string): Promise<string> {
   const sessions = (await listSessions()).filter(isUserSession);
 
   const byDir = sessions
@@ -125,11 +140,22 @@ export async function resolveActiveSessionPath(): Promise<string> {
     [...sessions].sort(byUpdatedDesc)[0] ??
     (await createSession());
 
-  // 2.x SPA routes are /<base64url(dir)>/session/<id> (same as the
-  // /remote-sessions list links); bare /session/<id> renders
-  // "Error: Unrecognised route!".
-  const dir = session.directory || config.opencodeDirectory;
-  return `/${encodeDirSlug(dir)}/session/${session.id}`;
+  if (!origin) return `/session/${session.id}`;
+  return `/server/${encodeServerKey(origin)}/session/${session.id}`;
+}
+
+/**
+ * The browser-facing origin for 2.x SPA server routes, from proxy headers.
+ * Returns undefined when no host is known (caller falls back to "/").
+ */
+export function requestOrigin(req: http.IncomingMessage): string | undefined {
+  const headers = req.headers as Record<string, string | string[] | undefined>;
+  const first = (v: string | string[] | undefined): string | undefined =>
+    Array.isArray(v) ? v[0] : v;
+  const host = first(headers["x-forwarded-host"]) ?? first(headers["host"]);
+  if (!host) return undefined;
+  const proto = first(headers["x-forwarded-proto"]) ?? ((req.socket as { encrypted?: boolean } | undefined)?.encrypted ? "https" : "http");
+  return `${proto}://${host}`;
 }
 
 export async function resolveActiveWorkspaceSessionPath(): Promise<string> {

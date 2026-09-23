@@ -19,7 +19,7 @@ import {
   initialHealthWatchdogState,
   nextHealthState,
 } from "./health-watchdog.js";
-import { RECENT_SESSION_WINDOW_MS, encodeDirSlug, listSessionPickerSessions, mergePinnedSessions, resolveActiveSessionPath } from "./session.js";
+import { RECENT_SESSION_WINDOW_MS, encodeServerKey, listSessionPickerSessions, mergePinnedSessions, requestOrigin, resolveActiveSessionPath } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
@@ -994,12 +994,16 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
     ]);
     const pinnedSet = new Set(pinnedIds);
     const ordered = await mergePinnedSessions(allSessions, pinnedIds);
+    // 2.x SPA server route key is base64url(browser origin).
+    const origin = requestOrigin(req);
     const windowLabel = remoteSessionsWindowLabel(windowKey);
     const nextWindow = remoteSessionsNextWindow(windowKey);
     const loadMoreLabel = remoteSessionsLoadMoreLabel(nextWindow);
 
     const items = ordered.map((session) => {
-      const nativePath = `/${encodeDirSlug(session.directory)}/session/${session.id}`;
+      const nativePath = origin
+        ? `/server/${encodeServerKey(origin)}/session/${session.id}`
+        : `/c/session/${session.id}`;
       const compactPath = `/c/session/${session.id}`;
       const title = session.title || session.slug || session.id;
       const pinned = pinnedSet.has(session.id);
@@ -1180,9 +1184,14 @@ function handleRootRedirect(res: http.ServerResponse): void {
   redirectToSession(res, "/remote-sessions");
 }
 
-async function handleLatestRedirect(res: http.ServerResponse): Promise<void> {
+async function handleLatestRedirect(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
-    activeSessionPath = await resolveActiveSessionPath();
+    const origin = requestOrigin(req);
+    if (!origin) {
+      redirectToSession(res, "/");
+      return;
+    }
+    activeSessionPath = await resolveActiveSessionPath(origin);
     redirectToSession(res, activeSessionPath);
     return;
   } catch (err) {
@@ -1334,7 +1343,7 @@ const server = http.createServer((req, res) => {
   }
 
   if ((req.method === "GET" || req.method === "HEAD") && req.url === "/latest") {
-    void handleLatestRedirect(res);
+    void handleLatestRedirect(req, res);
     return;
   }
 
@@ -1609,6 +1618,8 @@ async function terminateOpenCodeChild(child: ChildProcess, context: string): Pro
 
 async function refreshSessionPath(): Promise<void> {
   try {
+    // Startup log only; no browser origin is known here. The /latest
+    // handler resolves the real /server/<key>/session/<id> per request.
     activeSessionPath = await resolveActiveSessionPath();
     console.log(`[opencode-remote] active session path: ${activeSessionPath}`);
   } catch (err) {

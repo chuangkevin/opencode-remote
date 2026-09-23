@@ -24,7 +24,9 @@ readonly UPDATER_HELPER_DEST="$RUNTIME_DIR/$UPDATER_HELPER_SOURCE_NAME"
 readonly UPDATER_PLIST_DEST="/Users/kevin/Library/LaunchAgents/$UPDATER_PLIST_SOURCE_NAME"
 readonly UPDATER_LABEL="io.interagent.opencode-sara-updater"
 readonly HEALTH_URL="http://100.113.121.103:9223/remote-health"
-readonly FILE_CONTENT_URL="http://100.113.121.103:9223/file/content"
+# OpenCode 2.x: GET /api/fs/read/<relative>?location[directory]=<workspace>
+# answers with the raw file body (proxied to upstream).
+readonly FDA_PROBE_API_PATH="api/fs/read/.opencode-remote/remote-fda-probe.txt"
 readonly FDA_PROBE_DIR="$WORKSPACE/.opencode-remote"
 readonly FDA_PROBE_FILE="$FDA_PROBE_DIR/remote-fda-probe.txt"
 readonly FDA_PROBE_CONTENT="opencode-remote FDA probe v1"
@@ -322,19 +324,37 @@ PROBE_TEMP="$(/usr/bin/mktemp "$FDA_PROBE_DIR/.remote-fda-probe.txt.XXXXXX")"
 PROBE_TEMP=""
 
 echo "Loading LaunchAgent..."
-/bin/launchctl bootstrap "$GUI_DOMAIN" "$PLIST_DEST"
+# launchd can still hold the just-booted-out service (bootstrap then fails
+# with "5: Input/output error"); retry a few times before giving up.
+bootstrap_attempt=0
+until /bin/launchctl bootstrap "$GUI_DOMAIN" "$PLIST_DEST" 2>/tmp/bootstrap-err.txt; do
+  bootstrap_attempt=$((bootstrap_attempt + 1))
+  if ((bootstrap_attempt >= 3)); then
+    cat /tmp/bootstrap-err.txt >&2 || true
+    fail "launchctl bootstrap failed after 3 attempts"
+  fi
+  echo "bootstrap race (attempt $bootstrap_attempt/3), waiting 2s..."
+  /bin/sleep 2
+done
 /bin/launchctl kickstart "$SERVICE_TARGET"
 
 echo "Waiting for $HEALTH_URL..."
 healthy_service_pid=""
+gate_health_json="FAIL" gate_process_tree="FAIL" gate_fda="FAIL" gate_listener_pid="FAIL"
 for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
   health_body="$(/usr/bin/curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 2 "$HEALTH_URL" 2>/dev/null || true)"
   if health_response_is_expected "$health_body"; then
+    gate_health_json="PASS"
     if service_pid="$(running_service_pid)" && runtime_process_tree_is_expected "$service_pid"; then
+      gate_process_tree="PASS"
+      listener_pid="$(exact_listener_pid "$EXPECTED_TAILSCALE_IP" 9223 || true)"
+      if [[ "$listener_pid" == "$service_pid" ]]; then
+        gate_listener_pid="PASS"
+      fi
       probe_body="$(/usr/bin/curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 2 \
-        --get --data-urlencode "path=$FDA_PROBE_FILE" --data-urlencode "directory=$WORKSPACE" \
-        "$FILE_CONTENT_URL" 2>/dev/null || true)"
+        "http://100.113.121.103:9223/$FDA_PROBE_API_PATH?location%5Bdirectory%5D=%2FUsers%2Fkevin%2FDocuments%2FProjects" 2>/dev/null || true)"
       if fda_probe_response_is_expected "$probe_body"; then
+        gate_fda="PASS"
         echo "OpenCode Remote is healthy with verified FDA access at $EXPECTED_TAILSCALE_IP:9223 (LaunchAgent Node PID $service_pid)."
         healthy_service_pid="$service_pid"
         break
@@ -346,6 +366,8 @@ for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
     /bin/sleep "$HEALTH_WAIT_SECONDS"
   fi
 done
+
+echo "gate: health_json=$gate_health_json process_tree=$gate_process_tree listener_pid=$gate_listener_pid fda=$gate_fda"
 
 [[ -n "$healthy_service_pid" ]] || fail "health check did not confirm the expected JSON, FDA probe, LaunchAgent Node PID, exact listeners, and runtime process tree after $HEALTH_ATTEMPTS attempts; inspect $LOG_DIR"
 

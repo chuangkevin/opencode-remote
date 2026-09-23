@@ -2067,8 +2067,9 @@ function doNewSession() {
 }
 
 async function doOpenNative() {
-  // 2.x web UI routes are /session/<id>; the proxy serves the SPA shell for it.
-  window.open(`/session/${sessionID}`, "_blank");
+  // 2.x SPA server route: /server/<base64url(origin)>/session/<id>.
+  const key = btoa(location.origin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  window.open(`/server/${key}/session/${sessionID}`, "_blank");
 }
 
 async function doDeleteSession() {

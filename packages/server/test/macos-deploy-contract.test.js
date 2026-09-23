@@ -89,3 +89,16 @@ test("macOS deploy follows the Desktop-owned OpenCode service, not a fixed 4196"
   assert.match(helper, /readServiceJsonUrl/);
   assert.doesNotMatch(helper, /127\.0\.0\.1:4196/);
 });
+
+test("macOS deploy retries launchctl bootstrap on the bootout race", async () => {
+  const source = await readFile(new URL("../../../deploy/macos/deploy-local.sh", import.meta.url), "utf8");
+  assert.match(source, /bootstrap race/);
+  assert.match(source, /bootstrap_attempt >= 3/);
+  assert.match(source, /\/bin\/sleep 2/);
+});
+
+test("macOS deploy FDA probe uses the 2.x fs read route", async () => {
+  const source = await readFile(new URL("../../../deploy/macos/deploy-local.sh", import.meta.url), "utf8");
+  assert.match(source, /FDA_PROBE_API_PATH="api\/fs\/read\/\.opencode-remote\/remote-fda-probe\.txt"/);
+  assert.doesNotMatch(source, /FILE_CONTENT_URL=/);
+});
