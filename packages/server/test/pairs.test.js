@@ -241,3 +241,15 @@ test("pairs cards show owner, model, and labelled context bar", async () => {
   assert.match(source, /\.ctxbar\.over > i \{ background: #f59e0b; \}/);
   assert.match(client, /<b><\/b><\/div>/);
 });
+
+test("pairs agg note hides when all remotes are up; card time never wraps", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  assert.match(source, /\.agg-note \{ display: none;/);
+  assert.match(source, /\.agg-note\.show \{ display: block; \}/);
+  assert.match(source, /\.card-top \.meta \{ flex-shrink: 0; white-space: nowrap; \}/);
+  assert.match(source, /\.card-top \.owner \{ flex: 1; min-width: 0; \}/);
+  const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
+  assert.match(client, /aggNote\.classList\.add\("show"\)/);
+  assert.match(client, /aggNote\.classList\.remove\("show"\)/);
+});

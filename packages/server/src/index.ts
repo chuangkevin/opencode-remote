@@ -1234,6 +1234,8 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             .card { display: block; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: inherit; text-decoration: none; min-width: 0; overflow-wrap: anywhere; transition: background-color 800ms; }
             .card.flash { background-color: var(--pinned-bg, #2a2a35); }
             .card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+            .card-top .owner { flex: 1; min-width: 0; }
+            .card-top .meta { flex-shrink: 0; white-space: nowrap; }
             .dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; background: var(--muted); }
             .dot.busy { background: var(--running); animation: pair-pulse 1.8s ease-in-out infinite; }
             .dot.ask { background: #f59e0b; }
@@ -1252,7 +1254,7 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             .ctxpct { flex-shrink: 0; font-size: 11px; color: var(--muted); white-space: nowrap; }
             .ctxpct-inline { display: none; }
             .agg-note { display: none; padding: 8px 12px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 12px; }
-            body[data-agg="1"] .agg-note { display: block; }
+            .agg-note.show { display: block; }
             .lasttext { margin: 6px 0 0; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
             body[data-view="list"] .grid { grid-template-columns: 1fr; }
             body[data-view="list"] .lasttext { -webkit-line-clamp: 1; }

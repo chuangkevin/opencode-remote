@@ -257,9 +257,11 @@ if (typeof document !== "undefined") {
       if (aggNote) {
         if (down.length > 0) {
           aggNote.hidden = false;
+          aggNote.classList.add("show");
           aggNote.textContent = `${down.join("、")} 連不上，只顯示其他台`;
         } else {
           aggNote.hidden = true;
+          aggNote.classList.remove("show");
           aggNote.textContent = "";
         }
       }
