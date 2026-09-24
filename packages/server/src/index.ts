@@ -1212,7 +1212,8 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 6px 12px; min-height: 52px; background: var(--header-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
             h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
             .view-toggle { display: flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
-            .view-toggle button { min-height: 44px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; padding: 6px 14px; cursor: pointer; }
+            .view-toggle button { min-height: 44px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; padding: 6px 14px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+            @media (max-width: 480px) { header { gap: 6px; padding: 6px 8px; } h1 { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } header .pairs-btn { flex-shrink: 0; padding: 6px 8px; font-size: 11px; } .view-toggle { flex-shrink: 0; } .view-toggle button { padding: 6px 10px; font-size: 11px; } .font-scale-toggle, .theme-toggle { width: 36px; height: 36px; flex: 0 0 36px; font-size: 14px; } }
             .view-toggle button[aria-pressed="true"] { background: var(--accent); color: #fff; }
             .font-scale-toggle, .theme-toggle { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-size: 17px; cursor: pointer; }
             .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; }

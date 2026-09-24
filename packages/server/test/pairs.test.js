@@ -137,18 +137,35 @@ test("buildPairsList assembles fields and isolates per-session failures", async 
   }
 });
 
-test("dashboard keeps unaccepted forever; accepted vanish after 30 idle minutes", () => {
+test("dashboard shows busy/ask/error always; idle 2h; accepted 30m", () => {
   const now = 1_000_000_000;
-  const fresh = { id: "a", lastActivityAt: now - 1000 };
-  const oldUnaccepted = { id: "b", lastActivityAt: now - 3600_000 };
-  const oldAccepted = { id: "c", lastActivityAt: now - 3600_000, acceptedAt: now - 7200_000 };
-  const recentAccepted = { id: "d", lastActivityAt: now - 1000, acceptedAt: now - 2000 };
-  assert.equal(dashboardVisible(fresh, now), true);
-  assert.equal(dashboardVisible(oldUnaccepted, now), true);
-  assert.equal(dashboardVisible(oldAccepted, now), false);
-  assert.equal(dashboardVisible(recentAccepted, now), true);
-  assert.deepEqual(visiblePairs([oldAccepted, oldUnaccepted, fresh], "dashboard", now).map((p) => p.id), ["a", "b"]);
-  assert.deepEqual(visiblePairs([oldAccepted, fresh], "list", now).map((p) => p.id), ["a", "c"]);
+  const H = 3600_000;
+  const M = 60_000;
+  const busyIdle10h = { id: "busy", status: "busy", lastActivityAt: now - 10 * H };
+  const askIdle10h = { id: "ask", status: "ask", lastActivityAt: now - 10 * H };
+  const errorUnaccepted10h = { id: "err", status: "error", lastActivityAt: now - 10 * H };
+  const idle1h = { id: "idle1", status: "idle", lastActivityAt: now - 1 * H };
+  const idle3h = { id: "idle3", status: "idle", lastActivityAt: now - 3 * H };
+  const accepted20m = { id: "acc20", status: "idle", lastActivityAt: now - 20 * M, acceptedAt: now - 25 * M };
+  const accepted40m = { id: "acc40", status: "idle", lastActivityAt: now - 40 * M, acceptedAt: now - 50 * M };
+  assert.equal(dashboardVisible(busyIdle10h, now), true);
+  assert.equal(dashboardVisible(askIdle10h, now), true);
+  assert.equal(dashboardVisible(errorUnaccepted10h, now), true);
+  assert.equal(dashboardVisible(idle1h, now), true);
+  assert.equal(dashboardVisible(idle3h, now), false);
+  assert.equal(dashboardVisible(accepted20m, now), true);
+  assert.equal(dashboardVisible(accepted40m, now), false);
+  // accepted busy still shows even when idle long (rule 1 beats rule 2)
+  assert.equal(dashboardVisible({ id: "x", status: "busy", lastActivityAt: now - 10 * H, acceptedAt: now - 10 * H }, now), true);
+  assert.deepEqual(
+    visiblePairs([accepted40m, idle3h, idle1h, accepted20m, errorUnaccepted10h, askIdle10h, busyIdle10h], "dashboard", now).map((p) => p.id),
+    ["acc20", "idle1", "err", "ask", "busy"],
+  );
+  // list view shows everything newest first (40m > 1h > 3h)
+  assert.deepEqual(
+    visiblePairs([accepted40m, idle3h, idle1h], "list", now).map((p) => p.id),
+    ["acc40", "idle1", "idle3"],
+  );
 });
 
 test("relative time ticks in Chinese units", () => {

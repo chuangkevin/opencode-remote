@@ -343,6 +343,17 @@ HTML + 單一 vanilla ES module，無 build step。
 | `GET /api/pairs` | 夥伴 session JSON（唯讀，帶 `Access-Control-Allow-Origin: *` 供彙總模式跨台讀）|
 | `POST /api/pairs/:id/accept` | 驗收標記（記 acceptedAt，存 `<OPENCODE_DIRECTORY>/.opencode-remote/pairs-accept.json`，原子寫檔）|
 | `DELETE /api/pairs/:id/accept` | 取消驗收 |
+
+### /pairs 頁
+
+儀表板顯示規則（Kevin 2026-09-24 拍板；列表檢視照舊列全部）：
+
+1. status 是 busy 或 ask → 永遠顯示
+2. 已驗收（acceptedAt 有值）→ lastActivityAt 在 30 分鐘內才顯示
+3. 未驗收且 status 是 error → 永遠顯示
+4. 未驗收的其他卡（閒置）→ lastActivityAt 在 2 小時內才顯示
+
+常數：`DASHBOARD_ACTIVE_MS`（30 分鐘，已驗收用）、`DASHBOARD_IDLE_MS`（2 小時，未驗收閒置用），見 `packages/server/static/pairs.js` 的 `dashboardVisible`。
 | `GET /c/static/<file>` | 服 `compact.js` / `compact.css` / `theme.js` / `marked.min.js`（白名單檢查）|
 | `POST /c/new-session` | 新建 session（**不帶 title** 讓 OpenCode 自動命名）+ 套 trust ruleset + 303 redirect |
 | `GET /c/pins` | 列出已釘選的 sessionID（從 `<OPENCODE_DIRECTORY>/.opencode-remote/pins.json` 讀）|

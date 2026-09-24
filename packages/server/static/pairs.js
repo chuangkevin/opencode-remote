@@ -1,15 +1,23 @@
 // /pairs page client: dashboard + list views over GET /api/pairs.
 //
-// Dashboard shows pairs that still need attention (never accepted, or
-// active within the last 30 minutes); the list shows everything newest first.
+// Dashboard shows pairs that still need attention:
+//   1. status busy / ask -> always visible
+//   2. accepted (acceptedAt set) -> visible only if active within 30 min
+//   3. unaccepted error -> always visible
+//   4. other unaccepted (idle) -> visible only if active within 2 hours
+// The list view shows everything newest first.
 // Only re-renders cards that changed; relative times tick locally every second.
 
 export const PAIRS_VIEW_KEY = "pairs-view";
 export const DASHBOARD_ACTIVE_MS = 30 * 60 * 1000;
+export const DASHBOARD_IDLE_MS = 2 * 60 * 60 * 1000;
 
 export function dashboardVisible(pair, now = Date.now()) {
-  if (pair.acceptedAt === undefined || pair.acceptedAt === null) return true;
-  return now - pair.lastActivityAt < DASHBOARD_ACTIVE_MS;
+  if (pair.status === "busy" || pair.status === "ask") return true;
+  const accepted = pair.acceptedAt !== undefined && pair.acceptedAt !== null;
+  if (accepted) return now - pair.lastActivityAt < DASHBOARD_ACTIVE_MS;
+  if (pair.status === "error") return true;
+  return now - pair.lastActivityAt < DASHBOARD_IDLE_MS;
 }
 
 export function visiblePairs(pairs, view, now = Date.now()) {
