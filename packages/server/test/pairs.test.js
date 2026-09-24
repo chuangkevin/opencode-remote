@@ -215,12 +215,30 @@ test("pairs phone dashboard is one row per card", async () => {
   assert.match(client, /card-row/);
 });
 
-test("sessions and pairs pages link to each other", async () => {
+test("pairs-rules.js serves the single dashboard rule set", async () => {
+  const rules = await import("../static/pairs-rules.js");
+  const { visiblePairs } = await import("../static/pairs.js");
+  assert.equal(rules.DASHBOARD_ACTIVE_MS, 30 * 60 * 1000);
+  assert.equal(rules.DASHBOARD_IDLE_MS, 2 * 60 * 60 * 1000);
+  // Re-exported from pairs.js so existing import paths keep working.
+  assert.equal(visiblePairs, rules.visiblePairs);
+  assert.equal(rules.dashboardVisible({ status: "busy", lastActivityAt: 0 }, 10 * 3600_000), true);
+  const { readFile } = await import("node:fs/promises");
+  const assets = await readFile(new URL("../src/compact/static-assets.ts", import.meta.url), "utf8");
+  assert.match(assets, /"pairs-rules\.js": "application\/javascript; charset=utf-8"/);
+});
+
+test("sessions badge counts dashboard-visible pairs client-side", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
-  // /remote-sessions header has a 夥伴 button with the live pair count.
-  assert.match(source, /<a class="pairs-btn" href="\/pairs">夥伴\$\{pairCount > 0 \? ` \$\{pairCount\}` : ""\}<\/a>/);
-  assert.match(source, /const pairCount = allSessions\.length - visibleSessions\.length;/);
+  const page = source.slice(source.indexOf("async function handleRemoteSessions"), source.indexOf("async function handleListPairs"));
+  // Server renders 夥伴 without a number; the client fills it from /api/pairs
+  // with the same dashboard rules, so the count matches the dashboard.
+  assert.match(page, /<a class="pairs-btn" id="pairsBtn" href="\/pairs">夥伴<\/a>/);
+  assert.doesNotMatch(page, /pairCount/);
+  assert.match(page, /import \{ visiblePairs \} from "\/c\/static\/pairs-rules\.js\?v=/);
+  assert.match(page, /visiblePairs\(pairs, "dashboard"\)\.length/);
+  assert.match(page, /fetch\("\/api\/pairs"/);
   // /pairs header links back.
   assert.match(source, /<a class="pairs-btn" href="\/remote-sessions"/);
 });

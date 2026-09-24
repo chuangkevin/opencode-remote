@@ -19,6 +19,7 @@ export const STATIC_ALLOWED: Record<string, string> = {
   "marked.min.js": "application/javascript; charset=utf-8",
   "remote-sessions.js": "application/javascript; charset=utf-8",
   "pairs.js": "application/javascript; charset=utf-8",
+  "pairs-rules.js": "application/javascript; charset=utf-8",
   "hub.html": "text/html; charset=utf-8",
   "theme.js": "application/javascript; charset=utf-8",
   "font-scale.js": "application/javascript; charset=utf-8",

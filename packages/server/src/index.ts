@@ -994,8 +994,9 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
       listPins(),
     ]);
     // Pair-partner sessions (title "pair·…") live on /pairs, not here.
+    // The 夥伴 badge count is filled in client-side from /api/pairs with the
+    // same dashboardVisible rules (/pairs 儀表板), so it matches the dashboard.
     const visibleSessions = allSessions.filter((s) => !isPairSession(s));
-    const pairCount = allSessions.length - visibleSessions.length;
     const pinnedSet = new Set(pinnedIds);
     const ordered = await mergePinnedSessions(visibleSessions, pinnedIds);
     // 2.x SPA server route key is base64url(browser origin).
@@ -1030,6 +1031,7 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
     const fontScaleHash = getStaticAsset("font-scale.js")?.hash ?? "";
     const sessionsThemeHash = getStaticAsset("theme.js")?.hash ?? "";
     const sessionsClientHash = getStaticAsset("remote-sessions.js")?.hash ?? "";
+    const pairsRulesHash = getStaticAsset("pairs-rules.js")?.hash ?? "";
     // Self-produced HTML: compress with gzip when the client accepts it.
     sendHtml(req, res, `<!doctype html>
       <html lang="zh-Hant">
@@ -1080,7 +1082,7 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
         <body data-window="${windowKey}">
           <header>
             <h1>工作階段<span class="window-label">（${windowLabel}）</span></h1>
-            <a class="pairs-btn" href="/pairs">夥伴${pairCount > 0 ? ` ${pairCount}` : ""}</a>
+            <a class="pairs-btn" id="pairsBtn" href="/pairs">夥伴</a>
             <button class="font-scale-toggle" type="button" data-font-scale-cycle aria-label="切換字級">Aa</button>
             <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
             <form method="post" action="/c/new-session" style="margin:0;">
@@ -1114,6 +1116,20 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
           <script type="module" src="/c/static/font-scale.js?v=${fontScaleHash}"></script>
           <script type="module" src="/c/static/theme.js?v=${sessionsThemeHash}"></script>
           <script type="module" src="/c/static/remote-sessions.js?v=${sessionsClientHash}"></script>
+          <script type="module">
+            import { visiblePairs } from "/c/static/pairs-rules.js?v=${pairsRulesHash}";
+            try {
+              const res = await fetch("/api/pairs", { cache: "no-store" });
+              if (!res.ok) throw new Error("pairs unavailable");
+              const pairs = await res.json();
+              if (!Array.isArray(pairs)) throw new Error("invalid pairs payload");
+              const n = visiblePairs(pairs, "dashboard").length;
+              if (n > 0) {
+                const btn = document.getElementById("pairsBtn");
+                if (btn) btn.append(document.createTextNode(" " + n));
+              }
+            } catch { /* keep 夥伴 without a count */ }
+          </script>
         </body>
       </html>`, {
       "Content-Type": "text/html; charset=utf-8",
