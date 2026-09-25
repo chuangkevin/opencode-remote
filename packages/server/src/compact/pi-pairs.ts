@@ -50,6 +50,7 @@ function toPairInfo(value: unknown): PairInfo | undefined {
 
   return {
     id,
+    partner: "pi",
     owner,
     task,
     status,

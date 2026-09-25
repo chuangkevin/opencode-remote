@@ -18,6 +18,7 @@ import {
 import {
   dashboardVisible,
   formatRelative,
+  partnerLabel,
   visiblePairs,
 } from "../static/pairs.js";
 
@@ -74,6 +75,7 @@ test("contextPct uses input+cache.read over the model limit; lastText is the new
   assert.equal(info.lastActivityAt, 2000);
   assert.equal(info.lastText, "second");
   assert.equal(info.url, "/c/session/ses_x");
+  assert.equal(info.partner, "opencode");
 
   const long = computePairInfo(session, {
     busy: false,
@@ -166,6 +168,12 @@ test("dashboard shows busy/ask/error always; idle 2h; accepted 30m", () => {
     visiblePairs([accepted40m, idle3h, idle1h], "list", now).map((p) => p.id),
     ["acc40", "idle1", "idle3"],
   );
+});
+
+test("partnerLabel identifies Pi and defaults legacy pairs to OpenCode", () => {
+  assert.equal(partnerLabel({ partner: "pi" }), "Pi");
+  assert.equal(partnerLabel({ partner: "opencode" }), "OpenCode");
+  assert.equal(partnerLabel({}), "OpenCode");
 });
 
 test("relative time ticks in Chinese units", () => {
@@ -269,7 +277,7 @@ test("pairs cards show owner, model, and labelled context bar", async () => {
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
   const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
   assert.match(client, /派工：\$\{pair\.owner\}/);
-  assert.match(client, /<div class="partner">夥伴：OpenCode<\/div>/);
+  assert.match(client, /<div class="partner">夥伴：\$\{partnerLabel\(pair\)\}<\/div>/);
   assert.match(client, /`模型：\$\{label\}`/);
   assert.match(client, /context \$\{pair\.contextPct\}%/);
   assert.match(client, /對話已用掉模型上限的 \$\{pair\.contextPct\}%/);

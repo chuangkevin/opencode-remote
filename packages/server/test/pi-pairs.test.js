@@ -42,6 +42,7 @@ test("Pi pair registry maps a busy session to PairInfo", async () => {
   await withRegistry(JSON.stringify({ sessions: { [session.id]: session } }), async () => {
     assert.deepEqual(await listPiPairs(), [{
       id: session.id,
+      partner: "pi",
       owner: session.owner,
       task: session.task,
       status: session.status,

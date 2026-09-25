@@ -158,6 +158,7 @@ export type ChatMessage = {
 
 export type PairInfo = {
   id: string;
+  partner: "pi" | "opencode";
   owner: string;
   task: string;
   status: PairStatus;
@@ -240,6 +241,7 @@ export function computePairInfo(
   const modelVariant = (session.model as { variant?: unknown })?.variant;
   const info: PairInfo = {
     id: session.id,
+    partner: "opencode",
     owner: parsed.owner,
     task: parsed.task,
     status,

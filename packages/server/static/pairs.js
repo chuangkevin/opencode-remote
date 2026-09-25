@@ -26,6 +26,10 @@ export function statusLabel(status) {
   return "閒置";
 }
 
+export function partnerLabel(pair) {
+  return pair && pair.partner === "pi" ? "Pi" : "OpenCode";
+}
+
 if (typeof document !== "undefined") {
   const grid = document.getElementById("pairGrid");
   const viewButtons = [...document.querySelectorAll("[data-view-btn]")];
@@ -140,7 +144,7 @@ if (typeof document !== "undefined") {
       hostTag +
       `<span class="owner"></span>` +
       `<span class="meta"><span data-rel="${pair.lastActivityAt}">${formatRelative(pair.lastActivityAt)}</span></span></div>` +
-      `<div class="partner">夥伴：OpenCode</div>` +
+      `<div class="partner">夥伴：${partnerLabel(pair)}</div>` +
       modelLine +
       `<div class="task"></div>` +
       `<div class="meta"><span class="status-word">${statusLabel(pair.status)}</span><span class="ctxpct-inline"></span></div>` +
