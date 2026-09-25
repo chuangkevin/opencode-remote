@@ -252,6 +252,7 @@ echo "Staging runtime allowlist..."
   packages/server/dist/upstream.js \
   packages/server/dist/compact/handlers.js \
   packages/server/dist/compact/model.js \
+  packages/server/dist/compact/pi-pairs.js \
   packages/server/dist/compact/pairs.js \
   packages/server/dist/compact/pins.js \
   packages/server/dist/compact/session-status.js \

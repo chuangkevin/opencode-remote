@@ -1146,7 +1146,12 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
 async function handleListPairs(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
     const { buildPairsList } = await import("./compact/pairs.js");
-    const pairs = await buildPairsList();
+    const { listPiPairs } = await import("./compact/pi-pairs.js");
+    const [openPairs, piPairs] = await Promise.all([
+      buildPairsList(),
+      listPiPairs().catch(() => []),
+    ]);
+    const pairs = [...openPairs, ...piPairs].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
