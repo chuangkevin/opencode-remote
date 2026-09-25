@@ -286,6 +286,16 @@ test("pairs cards show owner, model, and labelled context bar", async () => {
   assert.match(client, /<b><\/b><\/div>/);
 });
 
+test("pairs phone dashboard shows a compact partner tag", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
+  assert.match(client, /<span class="partner-tag partner-\$\{pair\.partner === "pi" \? "pi" : "opencode"\}">\$\{partnerLabel\(pair\)\}<\/span>/);
+  assert.match(source, /\.partner-tag \{ display: none;/);
+  assert.match(source, /body\[data-view="dashboard"\] \.partner-tag \{ display: inline-block; \}/);
+  assert.match(source, /\.partner-tag\.partner-pi \{ background: var\(--partner-pi-bg\); color: var\(--partner-pi-text\); \}/);
+});
+
 test("pairs agg note hides when all remotes are up; card time never wraps", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");

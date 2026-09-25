@@ -142,6 +142,7 @@ if (typeof document !== "undefined") {
     a.innerHTML =
       `<div class="card-top card-row"><span class="dot ${pair.status}"></span>` +
       hostTag +
+      `<span class="partner-tag partner-${pair.partner === "pi" ? "pi" : "opencode"}">${partnerLabel(pair)}</span>` +
       `<span class="owner"></span>` +
       `<span class="meta"><span data-rel="${pair.lastActivityAt}">${formatRelative(pair.lastActivityAt)}</span></span></div>` +
       `<div class="partner">夥伴：${partnerLabel(pair)}</div>` +

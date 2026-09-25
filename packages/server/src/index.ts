@@ -1226,8 +1226,8 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
           <script>(()=>{let v;try{const s=localStorage.getItem("opencode-font-scale");v=["1","1.15","1.3","1.45"].includes(s)?s:(matchMedia("(max-width: 767px)").matches?"1.3":"1")}catch{v="1"}try{document.documentElement.style.setProperty("--font-scale",v)}catch{}})()</script>
           <title>夥伴 Sessions</title>
           <style>
-            :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --bg: #0f0f10; --surface: #18181b; --surface-hi: #1f1f23; --header-bg: rgba(15,15,16,.94); --border: #27272a; --text: #f4f4f5; --muted: #71717a; --accent: #6366f1; --accent-active: #4f46e5; --pill-bg: #312e81; --pill-text: #c7d2fe; --running: #22c55e; --font-scale: 1; }
-            :root[data-theme="light"] { color-scheme: light; --bg: #f7f7f5; --surface: #ffffff; --surface-hi: #f0f0ed; --header-bg: rgba(247,247,245,.94); --border: #d7d7d2; --text: #202023; --muted: #686970; --accent: #4f46e5; --accent-active: #4338ca; --pinned-bg: #eeecff; --pill-bg: #e8e7ff; --pill-text: #3730a3; --running: #15803d; }
+            :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --bg: #0f0f10; --surface: #18181b; --surface-hi: #1f1f23; --header-bg: rgba(15,15,16,.94); --border: #27272a; --text: #f4f4f5; --muted: #71717a; --accent: #6366f1; --accent-active: #4f46e5; --pill-bg: #312e81; --pill-text: #c7d2fe; --partner-pi-bg: #422006; --partner-pi-text: #fdba74; --running: #22c55e; --font-scale: 1; }
+            :root[data-theme="light"] { color-scheme: light; --bg: #f7f7f5; --surface: #ffffff; --surface-hi: #f0f0ed; --header-bg: rgba(247,247,245,.94); --border: #d7d7d2; --text: #202023; --muted: #686970; --accent: #4f46e5; --accent-active: #4338ca; --pinned-bg: #eeecff; --pill-bg: #e8e7ff; --pill-text: #3730a3; --partner-pi-bg: #fff7ed; --partner-pi-text: #c2410c; --running: #15803d; }
             * { box-sizing: border-box; }
             body { margin: 0; background: var(--bg); color: var(--text); padding: max(8px, env(safe-area-inset-top)) 10px max(14px, env(safe-area-inset-bottom)); font-size: calc(14px * var(--font-scale)); line-height: 1.4; overflow-x: hidden; }
             header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 6px 12px; min-height: 52px; background: var(--header-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
@@ -1246,6 +1246,7 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
               body[data-view="dashboard"] .partner,
               body[data-view="dashboard"] .ctxrow { display: none; }
               body[data-view="dashboard"] .owner { display: block; }
+              body[data-view="dashboard"] .partner-tag { display: inline-block; }
               body[data-view="dashboard"] .card-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
               body[data-view="dashboard"] .task { flex: 1; font-size: 13px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
               body[data-view="dashboard"] .meta { flex-shrink: 0; }
@@ -1269,6 +1270,9 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             .model-id { color: var(--text); }
             .model-provider { color: var(--muted); font-size: 11px; }
             .host-tag { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-text); white-space: nowrap; }
+            .partner-tag { display: none; flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+            .partner-tag.partner-opencode { background: var(--pill-bg); color: var(--pill-text); }
+            .partner-tag.partner-pi { background: var(--partner-pi-bg); color: var(--partner-pi-text); }
             .task { font-size: 14px; font-weight: 600; margin: 4px 0; overflow-wrap: anywhere; }
             .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
             .ctxrow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
