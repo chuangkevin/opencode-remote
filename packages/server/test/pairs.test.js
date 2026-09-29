@@ -22,6 +22,7 @@ import {
   pairCardUrl,
   partnerLabel,
   visiblePairs,
+  withBase,
 } from "../static/pairs.js";
 
 function assistant({ text = "", tokens = undefined, created = 1000, completed = 1000, error = undefined, flat = false } = {}) {
@@ -194,13 +195,24 @@ test("partnerLabel identifies Pi and defaults legacy pairs to OpenCode", () => {
 
 test("pair card URLs use the owning prefix outside aggregate mode", () => {
   const pair = { url: "/c/session/ses_test" };
-  const ownPath = (path) => `/sara${path}`;
+  const ownPath = (path) => withBase("/sara", path);
   assert.equal(pairCardUrl(pair, false, ownPath), "/sara/c/session/ses_test");
   assert.equal(pairCardUrl(pair, false, (path) => path), "/c/session/ses_test");
   assert.equal(
     pairCardUrl({ ...pair, hostUrl: "https://remote.example///" }, true, ownPath),
     "https://remote.example/c/session/ses_test",
   );
+  assert.equal(pairCardUrl({ url: "#" }, false, ownPath), "#");
+});
+
+test("base paths only prefix root-relative URLs", () => {
+  assert.equal(withBase("/sara", "/c/session/x"), "/sara/c/session/x");
+  assert.equal(withBase("/sara", "#"), "#");
+  assert.equal(withBase("/sara", ""), "");
+  assert.equal(withBase("/sara", "https://remote.example/c/session/x"), "https://remote.example/c/session/x");
+  assert.equal(withBase("", "/c/session/x"), "/c/session/x");
+  assert.equal(withBase("", "#"), "#");
+  assert.equal(withBase("", ""), "");
 });
 
 test("relative time ticks in Chinese units", () => {
@@ -250,6 +262,7 @@ test("pairs phone dashboard is one row per card", async () => {
   const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
   assert.match(client, /a\.href = pairCardUrl\(pair, AGGREGATE, ownPath\)/);
   assert.match(client, /: ownPath\(pair\.url\)/);
+  assert.match(client, /fetch\(ownPath\("\/api\/pairs"\)\)/);
   assert.match(client, /card-row/);
 });
 

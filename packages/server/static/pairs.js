@@ -50,13 +50,17 @@ export function partnerLabel(pair) {
   return pair && pair.partner === "pi" ? "Pi" : "OpenCode";
 }
 
+export function withBase(basePath, path) {
+  return typeof path === "string" && path.startsWith("/") ? `${basePath}${path}` : path;
+}
+
 export function pairCardUrl(pair, aggregate, ownPath) {
   return aggregate && pair.hostUrl ? pair.hostUrl.replace(/\/+$/, "") + pair.url : ownPath(pair.url);
 }
 
 if (typeof document !== "undefined") {
   const BASE_PATH = getBasePath();
-  const ownPath = (path) => `${BASE_PATH}${path}`;
+  const ownPath = (path) => withBase(BASE_PATH, path);
   const ownKey = (key) => `${key}${BASE_PATH ? `:${BASE_PATH.slice(1)}` : ""}`;
   const grid = document.getElementById("pairGrid");
   const viewButtons = [...document.querySelectorAll("[data-view-btn]")];
