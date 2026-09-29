@@ -730,3 +730,12 @@ OpenCode 原生 SPA 在手機橫向 / 雙螢幕不可用，因此提供獨立 co
 - 移除 VISIBILITY_SCRIPT 注入邏輯
 - 改為純透傳代理模式
 - 修復：Transfer-Encoding: chunked 導致的連接關閉問題
+
+## 單一網域路徑入口（2026-09-29）
+
+- `https://opencode.sisihome.org/sara/…`、`/l390/…`、`/home/…`：GN100 Caddy（homelab-docs `infra/caddy/routes.caddyfile`）用 `handle_path` 去前綴後轉各機 `:9223`，並帶 `X-Forwarded-Prefix`。
+- app 只認 `X-Forwarded-Prefix` 為 `/sara`、`/l390`、`/home`（`packages/server/src/base-path.ts`）；沒有這個 header 時行為與舊版相同。
+- 「在原生介面打開」仍連各機子網域（`opencode-sara`、`opencode-l390`、Home 用 `opencode.sisihome.org`）。
+- `/pairs` 儀表板：error／閒置／已驗收且 24 小時沒動靜的卡自動歸檔（前端規則，不刪 session），「已歸檔」分頁可看。
+- 部署：`./deploy/deploy-all.sh <sara|l390|home|all>`；Home 健康檢查打 `http://100.83.112.20:9223/remote-health`（tailnet 直連）。
+- 已知：`/sara/` 之後 app 的 302 會落到無前綴的 `/remote-sessions`；新路由沒有 Caddy active health check。
