@@ -92,10 +92,20 @@ run_or_print() {
 
 # Fetch and parse one host's /remote-health into shell vars:
 #   HEALTH_COMMIT HEALTH_HEALTHY(yes/no) HEALTH_VERSION.
+remote_base_url() {
+  local host="$1"
+  if [[ "$host" == http://* || "$host" == https://* ]]; then
+    printf '%s' "$host"
+  else
+    printf 'https://%s' "$host"
+  fi
+}
+
 read_remote_health() {
   local host="$1"
-  local body
-  body="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 5 "https://$host/remote-health" 2>/dev/null || true)"
+  local base_url body
+  base_url="$(remote_base_url "$host")"
+  body="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 5 "$base_url/remote-health" 2>/dev/null || true)"
   HEALTH_COMMIT="$(printf '%s' "$body" | /opt/homebrew/bin/node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.parse(d).build?.commit??'')}catch{}})" 2>/dev/null || true)"
   HEALTH_HEALTHY="$(printf '%s' "$body" | /opt/homebrew/bin/node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.parse(d).upstreamHealth?.healthy===true?'yes':'no')}catch{console.log('no')}})" 2>/dev/null || true)"
   HEALTH_VERSION="$(printf '%s' "$body" | /opt/homebrew/bin/node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.parse(d).upstreamHealth?.version??'')}catch{}})" 2>/dev/null || true)"
@@ -106,10 +116,11 @@ read_remote_health() {
 # answers with the raw file body. Expect the exact probe text back.
 fda_probe_host() {
   local host="$1" workspace="$2"
-  local encoded_workspace body
+  local base_url encoded_workspace body
+  base_url="$(remote_base_url "$host")"
   encoded_workspace="$(printf '%s' "$workspace" | /opt/homebrew/bin/node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(encodeURIComponent(d)))")"
   body="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 5 \
-    "https://$host/api/fs/read/$FDA_RELATIVE?location%5Bdirectory%5D=$encoded_workspace" 2>/dev/null || true)"
+    "$base_url/api/fs/read/$FDA_RELATIVE?location%5Bdirectory%5D=$encoded_workspace" 2>/dev/null || true)"
   # Trim trailing newline/carriage-return like the Windows runtime check does.
   body="$(printf '%s' "$body" | tr -d '\r\n' | sed 's/[[:space:]]*$//')"
   if [[ "$body" == "$FDA_CONTENT" ]]; then
@@ -126,8 +137,10 @@ fda_probe_host() {
 wait_for_host() {
   local name="$1" host="$2" workspace="$3"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "would run: poll https://$host/remote-health until build.commit == $HEAD_SHORT and upstreamHealth.healthy == true (90s max)"
-    echo "would run: FDA probe https://$host/api/fs/read/$FDA_RELATIVE?location[directory]=$workspace"
+    local base_url
+    base_url="$(remote_base_url "$host")"
+    echo "would run: poll $base_url/remote-health until build.commit == $HEAD_SHORT and upstreamHealth.healthy == true (90s max)"
+    echo "would run: FDA probe $base_url/api/fs/read/$FDA_RELATIVE?location[directory]=$workspace"
     echo "OK $name $HEAD_SHORT upstream=<version> (dry-run)"
     return 0
   fi
@@ -182,7 +195,7 @@ deploy_home() {
   run_or_print "${HOME_SSH[@]}" "powershell -NoProfile -ExecutionPolicy Bypass -Command \"New-Item -ItemType Directory -Force $HOME_STAGE_WIN | Out-Null\""
   run_or_print "${HOME_SCP[@]}" "$REPO_ROOT/deploy/windows/restart-home.ps1" "$HOME_USER:$HOME_STAGE_DIR/restart-home.ps1"
   run_or_print "${HOME_SSH[@]}" "powershell -NoProfile -ExecutionPolicy Bypass -File $HOME_STAGE_WIN\\restart-home.ps1"
-  wait_for_host home opencode-home.sisihome.org "$workspace"
+  wait_for_host home http://100.83.112.20:9223 "$workspace"
 }
 
 # --- --check: read-only. ssh echo, remote path probe, current health. ---
@@ -202,7 +215,7 @@ check_host() {
 
 check_sara() { check_host sara opencode-sara.sisihome.org "/Users/kevin/.local/share/opencode-remote" posix bash -c; }
 check_l390() { check_host l390 opencode-l390.sisihome.org "$L390_REPO_WIN" win "${L390_SSH[@]}"; }
-check_home() { check_host home opencode-home.sisihome.org "$HOME_REPO_WIN" win "${HOME_SSH[@]}"; }
+check_home() { check_host home http://100.83.112.20:9223 "$HOME_REPO_WIN" win "${HOME_SSH[@]}"; }
 
 if [[ "$CHECK" -eq 1 ]]; then
   case "$TARGET" in
