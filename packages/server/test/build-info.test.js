@@ -3,11 +3,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { readBuildInfo } from "../dist/build-info.js";
 
 const SCRIPT = new URL("../scripts/write-build-info.mjs", import.meta.url);
+const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 function runScript(cwd, env) {
   execFileSync(process.execPath, [SCRIPT.pathname], { cwd, env: { ...process.env, ...env } });
@@ -17,15 +19,15 @@ function runScript(cwd, env) {
 test("build-info: in git repo records short HEAD with -dirty suffix", () => {
   const dir = mkdtempSync(join(tmpdir(), "bi-git-"));
   const out = join(dir, "build-info.json");
-  const payload = runScript("/Users/kevin/Documents/Projects/private-codebase/opencode-remote", {
+  const payload = runScript(REPO_ROOT, {
     OPENCODE_REMOTE_BUILD_INFO_OUT: out,
   });
   const head = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-    cwd: "/Users/kevin/Documents/Projects/private-codebase/opencode-remote",
+    cwd: REPO_ROOT,
     encoding: "utf8",
   }).trim();
   const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
-    cwd: "/Users/kevin/Documents/Projects/private-codebase/opencode-remote",
+    cwd: REPO_ROOT,
     encoding: "utf8",
   }).trim().length > 0;
   // Expect exactly what write-build-info.mjs should produce for the
