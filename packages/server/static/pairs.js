@@ -9,6 +9,20 @@ export { DASHBOARD_ACTIVE_MS, DASHBOARD_IDLE_MS, PAIR_ARCHIVE_MS, archivedPair, 
 import { visiblePairs } from "./pairs-rules.js";
 export const PAIRS_VIEW_KEY = "pairs-view";
 
+export function getBasePath(documentObject = globalThis.document) {
+  const value = documentObject?.querySelector('meta[name="opencode-base"]')?.content || "";
+  return /^\/(sara|l390|home)$/.test(value) ? value : "";
+}
+
+export function migrateRemoteUrl(url) {
+  const normalized = String(url || "").trim().replace(/\/+$/, "");
+  return ({
+    "https://opencode-sara.sisihome.org": "https://opencode.sisihome.org/sara",
+    "https://opencode-l390.sisihome.org": "https://opencode.sisihome.org/l390",
+    "https://opencode-home.sisihome.org": "https://opencode.sisihome.org/home",
+  })[normalized] || normalized;
+}
+
 export const PAIR_REMOTE_DOMAINS = Object.freeze({
   mac: "https://opencode-sara.sisihome.org",
   l390: "https://opencode-l390.sisihome.org",
@@ -37,6 +51,9 @@ export function partnerLabel(pair) {
 }
 
 if (typeof document !== "undefined") {
+  const BASE_PATH = getBasePath();
+  const ownPath = (path) => `${BASE_PATH}${path}`;
+  const ownKey = (key) => `${key}${BASE_PATH ? `:${BASE_PATH.slice(1)}` : ""}`;
   const grid = document.getElementById("pairGrid");
   const viewButtons = [...document.querySelectorAll("[data-view-btn]")];
   const aggNote = document.getElementById("aggNote");
@@ -46,20 +63,20 @@ if (typeof document !== "undefined") {
   // ── Aggregate mode: opencode.sisihome.org/pairs (or ?all=1) merges every
   // remote's /api/pairs. Remote list mirrors hub.html (opencode-hub:remotes).
   const AGG_DEFAULTS = [
-    { id: "mac", name: "Mac", url: PAIR_REMOTE_DOMAINS.mac },
-    { id: "l390", name: "L390", url: PAIR_REMOTE_DOMAINS.l390 },
-    { id: "home", name: "Home", url: PAIR_REMOTE_DOMAINS.home },
+    { id: "mac", name: "Mac", url: "https://opencode.sisihome.org/sara" },
+    { id: "l390", name: "L390", url: "https://opencode.sisihome.org/l390" },
+    { id: "home", name: "Home", url: "https://opencode.sisihome.org/home" },
   ];
   const queryAll = (() => { try { return new URLSearchParams(location.search).get("all") === "1"; } catch { return false; } })();
-  const AGGREGATE = location.hostname === "opencode.sisihome.org" || queryAll;
+  const AGGREGATE = (!BASE_PATH && location.hostname === "opencode.sisihome.org") || queryAll;
   let remotes = AGG_DEFAULTS;
   if (AGGREGATE) {
     try {
-      const stored = JSON.parse(localStorage.getItem("opencode-hub:remotes"));
+      const stored = JSON.parse(localStorage.getItem(ownKey("opencode-hub:remotes")));
       if (Array.isArray(stored) && stored.length > 0) {
         remotes = stored
           .filter((r) => r && r.enabled !== false && typeof r.url === "string" && /^https?:\/\/.+/.test(r.url.trim()))
-          .map((r) => ({ id: String(r.id ?? r.url), name: String(r.name ?? r.url), url: String(r.url).trim().replace(/\/+$/, "") }));
+          .map((r) => ({ id: String(r.id ?? r.url), name: String(r.name ?? r.url), url: migrateRemoteUrl(r.url) }));
         if (remotes.length === 0) remotes = AGG_DEFAULTS;
       }
     } catch { /* keep defaults */ }
@@ -95,7 +112,7 @@ if (typeof document !== "undefined") {
       btn.setAttribute("aria-pressed", btn.dataset.viewBtn === view ? "true" : "false");
     }
     try {
-      localStorage.setItem(PAIRS_VIEW_KEY, view);
+    localStorage.setItem(ownKey(PAIRS_VIEW_KEY), view);
     } catch { /* ignore */ }
   }
 
@@ -275,7 +292,7 @@ if (typeof document !== "undefined") {
   async function poll() {
     try {
       if (!AGGREGATE) {
-        const res = await fetch("/api/pairs");
+        const res = await fetch(ownPath("/api/pairs"));
         if (!res.ok) return;
         const pairs = await res.json();
         if (!Array.isArray(pairs)) return;

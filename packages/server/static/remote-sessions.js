@@ -10,6 +10,13 @@ export function findMissingBusySessions(statuses, cardIds) {
   return busySessionIds(statuses).filter((id) => !existing.has(id));
 }
 
+function getBasePath() {
+  const value = globalThis.document?.querySelector('meta[name="opencode-base"]')?.content || "";
+  return /^\/(sara|l390|home)$/.test(value) ? value : "";
+}
+
+const ownPath = (path) => `${getBasePath()}${path}`;
+
 export async function loadSessionStatuses(directories, signal, fetchFn = globalThis.fetch) {
   const uniqueDirectories = [...new Set(directories)];
   const statusMaps = new Array(uniqueDirectories.length);
@@ -20,7 +27,7 @@ export async function loadSessionStatuses(directories, signal, fetchFn = globalT
       const index = nextIndex;
       nextIndex += 1;
       const directory = uniqueDirectories[index];
-      const url = `/c/session-status?directory=${encodeURIComponent(directory)}`;
+      const url = ownPath(`/c/session-status?directory=${encodeURIComponent(directory)}`);
       const response = await fetchFn(url, { signal });
       if (!response.ok) throw new Error(`GET ${url} returned ${response.status}`);
       const statuses = await response.json();
@@ -125,7 +132,7 @@ if (typeof document !== "undefined") {
   }
 
   function remoteSessionsUrl(windowKey = currentSessionWindow()) {
-    return `/remote-sessions?window=${encodeURIComponent(windowKey)}`;
+    return ownPath(`/remote-sessions?window=${encodeURIComponent(windowKey)}`);
   }
 
   function refreshCards() {

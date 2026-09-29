@@ -259,13 +259,13 @@ test("sessions badge counts dashboard-visible pairs client-side", async () => {
   const page = source.slice(source.indexOf("async function handleRemoteSessions"), source.indexOf("async function handleListPairs"));
   // Server renders 夥伴 without a number; the client fills it from /api/pairs
   // with the same dashboard rules, so the count matches the dashboard.
-  assert.match(page, /<a class="pairs-btn" id="pairsBtn" href="\/pairs">夥伴<\/a>/);
+  assert.match(page, /<a class="pairs-btn" id="pairsBtn" href="\$\{path\("\/pairs"\)\}">夥伴<\/a>/);
   assert.doesNotMatch(page, /pairCount/);
-  assert.match(page, /import \{ visiblePairs \} from "\/c\/static\/pairs-rules\.js\?v=/);
+  assert.match(page, /import \{ visiblePairs \} from "\$\{path\(`\/c\/static\/pairs-rules\.js\?v=\$\{pairsRulesHash\}`\)\}"/);
   assert.match(page, /visiblePairs\(pairs, "dashboard"\)\.length/);
-  assert.match(page, /fetch\("\/api\/pairs"/);
+  assert.match(page, /fetch\("\$\{basePath\}\/api\/pairs"/);
   // /pairs header links back.
-  assert.match(source, /<a class="pairs-btn" href="\/remote-sessions"/);
+  assert.match(source, /path\("\/remote-sessions"\)/);
 });
 
 test("api pairs allows cross-origin GET for the aggregate page", async () => {
@@ -284,12 +284,13 @@ test("pairs aggregate mode merges remotes with host tags", async () => {
   assert.match(client, /opencode-hub:remotes/);
   assert.match(client, /https:\/\/opencode-sara\.sisihome\.org/);
   assert.match(client, /https:\/\/opencode-l390\.sisihome\.org/);
+  assert.match(client, /https:\/\/opencode\.sisihome\.org\/sara/);
   assert.match(client, /https:\/\/opencode\.sisihome\.org/);
   assert.match(client, /PAIR_REMOTE_DOMAINS/);
   const hub = await readFile(new URL("../static/hub.html", import.meta.url), "utf8");
-  assert.match(hub, /id: "mac"[^\n]+opencode-sara\.sisihome\.org/);
-  assert.match(hub, /id: "l390"[^\n]+opencode-l390\.sisihome\.org/);
-  assert.match(hub, /id: "home"[^\n]+opencode\.sisihome\.org/);
+  assert.match(hub, /id: "mac"[^\n]+opencode\.sisihome\.org\/sara/);
+  assert.match(hub, /id: "l390"[^\n]+opencode\.sisihome\.org\/l390/);
+  assert.match(hub, /id: "home"[^\n]+opencode\.sisihome\.org\/home/);
   assert.match(client, /\/api\/pairs/);
   assert.match(client, /host-tag/);
   assert.match(client, /連不上，只顯示其他台/);

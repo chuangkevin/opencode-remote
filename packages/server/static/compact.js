@@ -15,6 +15,19 @@ import { getFontScale, setFontScale } from "./font-scale.js";
 // ─── State ─────────────────────────────────────────────────
 const sessionID = document.body.dataset.sessionId;
 const defaultDirectory = document.body.dataset.directory || "";
+const BASE_PATH = (() => {
+  const value = document.querySelector('meta[name="opencode-base"]')?.content || "";
+  return /^\/(sara|l390|home)$/.test(value) ? value : "";
+})();
+const ownPath = (path) => `${BASE_PATH}${path}`;
+const ownKey = (key) => `${key}${BASE_PATH ? `:${BASE_PATH.slice(1)}` : ""}`;
+const nativeOrigin = BASE_PATH === "/sara"
+  ? "https://opencode-sara.sisihome.org"
+  : BASE_PATH === "/l390"
+    ? "https://opencode-l390.sisihome.org"
+    : BASE_PATH === "/home"
+      ? "https://opencode.sisihome.org"
+      : location.origin;
 const els = {
   messages: document.getElementById("messages"),
   compose: document.getElementById("compose"),
@@ -61,7 +74,7 @@ function setCurrentModel(model) {
 // Legacy per-session storage is a fallback when shared history has no model
 // metadata. History reconciliation also updates it so old compact sessions and
 // queued prompts retain a usable snapshot without becoming a second authority.
-const SAVED_MODEL_KEY = `compact-model:${sessionID}`;
+const SAVED_MODEL_KEY = ownKey(`compact-model:${sessionID}`);
 function persistModel(model) {
   const m = normalizePromptModel(model);
   if (!m) return;
@@ -81,7 +94,7 @@ function renderMarkdown(text) {
 
 // ─── API helpers ───────────────────────────────────────────
 async function api(path, init) {
-  const res = await fetch(path, init);
+  const res = await fetch(ownPath(path), init);
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText} ${body.slice(0, 200)}`);
@@ -200,7 +213,7 @@ let pendingQuestionDrainTimer = null;
 // Persisted prompt queue (see the "Prompt queue" section below). Hoisted
 // here so loadHistory() can clear queueNodes / re-render queue without
 // caring about module evaluation order.
-const QUEUE_KEY = `compact-queue:${sessionID}`;
+const QUEUE_KEY = ownKey(`compact-queue:${sessionID}`);
 let queue = (() => {
   try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); }
   catch { return []; }
@@ -1145,7 +1158,7 @@ async function drainPendingInteractive() {
 }
 
 function connectSSE() {
-  const es = new EventSource("/api/event");
+  const es = new EventSource(ownPath("/api/event"));
   es.addEventListener("open", () => {
     refreshLatestSessionModel().catch((err) => {
       console.warn("latest model sync failed after SSE connect", err);
@@ -1813,7 +1826,7 @@ async function saveNewProvider() {
   btn.disabled = true;
   hint.textContent = "儲存中…";
   try {
-    const r = await fetch("/c/providers", {
+  const r = await fetch(ownPath("/c/providers"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id, name: id, baseURL, modelID }),
@@ -2148,14 +2161,14 @@ function doNewSession() {
   // redirect — use a form submission so the browser follows automatically.
   const form = document.createElement("form");
   form.method = "POST";
-  form.action = "/c/new-session";
+  form.action = ownPath("/c/new-session");
   document.body.appendChild(form);
   form.submit();
 }
 
 async function doOpenNative() {
   // 2.x SPA server route: /server/<base64url(origin)>/session/<id>.
-  const key = btoa(location.origin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const key = btoa(nativeOrigin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   window.open(`/server/${key}/session/${sessionID}`, "_blank");
 }
 
@@ -2163,7 +2176,7 @@ async function doDeleteSession() {
   if (!window.confirm("確定要刪除這個 session？此動作無法復原。")) return;
   try {
     await api(API, { method: "DELETE" });
-    window.location.href = "/remote-sessions";
+    window.location.href = ownPath("/remote-sessions");
   } catch (err) {
     showToast("刪除失敗：" + err.message, "error");
   }

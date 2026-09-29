@@ -1,15 +1,19 @@
 import { staticAssetUrl } from "./static-assets.js";
+import { prefixPath } from "../base-path.js";
 
 function escapeAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function renderCompactShell(sessionID: string, directory: string): string {
+export function renderCompactShell(sessionID: string, directory: string, basePath = ""): string {
   const id = escapeAttr(sessionID);
   const dir = escapeAttr(directory);
+  const asset = (name: string) => staticAssetUrl(name, basePath);
+  const path = (value: string) => prefixPath(basePath, value);
   return `<!doctype html>
 <html lang="zh-Hant">
-<head>
+<head>${basePath ? `
+  <meta name="opencode-base" content="${basePath}" />` : ""}
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -18,13 +22,13 @@ export function renderCompactShell(sessionID: string, directory: string): string
   <script>(()=>{let p="system";try{const s=localStorage.getItem("opencode-color-scheme");if(["light","dark","system"].includes(s))p=s}catch{}try{const t=p==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):p;const r=document.documentElement;r.dataset.themePreference=p;r.dataset.theme=t;r.style.colorScheme=t;const m=document.querySelector('meta[name="theme-color"]');if(m)m.content=t==="light"?"#f7f7f5":"#0f0f10"}catch{}})()</script>
   <script>(()=>{let v;try{const s=localStorage.getItem("opencode-font-scale");v=["1","1.15","1.3"].includes(s)?s:(matchMedia("(max-width: 767px)").matches?"1.15":"1")}catch{v="1"}try{document.documentElement.style.setProperty("--font-scale",v)}catch{}})()</script>
   <title>OpenCode</title>
-  <link rel="stylesheet" href="${staticAssetUrl("compact.css")}" />
-  <script src="${staticAssetUrl("marked.min.js")}"></script>
+  <link rel="stylesheet" href="${asset("compact.css")}" />
+  <script src="${asset("marked.min.js")}"></script>
 </head>
 <body data-session-id="${id}" data-directory="${dir}">
   <div class="app">
     <header class="app-header">
-      <a class="header-back" href="/remote-sessions" aria-label="返回工作階段">← <span>Sessions</span></a>
+      <a class="header-back" href="${path("/remote-sessions")}" aria-label="返回工作階段">← <span>Sessions</span></a>
       <button class="header-title" id="titleBtn" type="button" title="點擊重新命名">
         <span id="titleText">…</span>
       </button>
@@ -57,9 +61,9 @@ export function renderCompactShell(sessionID: string, directory: string): string
     <div class="picker" id="picker" hidden></div>
     <div class="toast" id="toast" hidden></div>
   </div>
-  <script type="module" src="${staticAssetUrl("font-scale.js")}"></script>
-  <script type="module" src="${staticAssetUrl("theme.js")}"></script>
-  <script type="module" src="${staticAssetUrl("compact.js")}"></script>
+  <script type="module" src="${asset("font-scale.js")}"></script>
+  <script type="module" src="${asset("theme.js")}"></script>
+  <script type="module" src="${asset("compact.js")}"></script>
 </body>
 </html>`;
 }

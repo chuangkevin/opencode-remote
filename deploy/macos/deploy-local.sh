@@ -240,6 +240,7 @@ echo "Staging runtime allowlist..."
   packages/server/package.json \
   packages/server/dist/build-info.json \
   packages/server/dist/build-info.js \
+  packages/server/dist/base-path.js \
   packages/server/dist/config.js \
   packages/server/dist/html-response.js \
   packages/server/dist/proxy-compress.js \

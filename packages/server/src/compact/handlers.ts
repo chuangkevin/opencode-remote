@@ -8,6 +8,7 @@ import { ensureSessionTrust } from "./trust.js";
 import { LatestUserModelBudgetError, findLatestUserModel } from "./model.js";
 import { upstreamAuthHeaders, upstreamJson } from "../upstream.js";
 import { sendHtml } from "../html-response.js";
+import { prefixPath, requestBasePath } from "../base-path.js";
 
 // Static assets (caching, ETag, gzip/brotli) live in static-assets.js;
 // re-exported here so existing import sites keep working.
@@ -70,7 +71,7 @@ export async function handleLatestUserModel(
 }
 
 export function handleCompactSession(req: http.IncomingMessage, sessionID: string, res: http.ServerResponse): void {
-  sendHtml(req, res, renderCompactShell(sessionID, appConfig.opencodeDirectory), {
+  sendHtml(req, res, renderCompactShell(sessionID, appConfig.opencodeDirectory, requestBasePath(req)), {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
     "X-OpenCode-Remote": "compact",
@@ -211,7 +212,7 @@ export async function handleCompactAddProvider(
   }
 }
 
-export async function handleCompactNewSession(res: http.ServerResponse): Promise<void> {
+export async function handleCompactNewSession(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
     // Do NOT set `title` here — OpenCode's auto-titling (LLM-generated
     // session title) only kicks in when the existing title matches the
@@ -233,7 +234,7 @@ export async function handleCompactNewSession(res: http.ServerResponse): Promise
       console.warn(`[opencode-remote] ensureSessionTrust on new session ${session.id} failed:`, err);
     }
     res.writeHead(303, {
-      Location: `/c/session/${session.id}`,
+      Location: prefixPath(requestBasePath(req), `/c/session/${session.id}`),
       "Cache-Control": "no-store",
     });
     res.end();

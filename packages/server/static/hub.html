@@ -86,21 +86,32 @@
 
 <script>
 (() => {
+  const base = (() => { const value = document.querySelector('meta[name="opencode-base"]')?.content || ""; return /^\/(sara|l390|home)$/.test(value) ? value : ""; })();
+  const ownKey = (key) => `${key}${base ? `:${base.slice(1)}` : ""}`;
   const DEFAULTS = [
-    { id: "mac",  name: "Mac",  url: "https://opencode-sara.sisihome.org", enabled: true },
-    { id: "l390", name: "L390", url: "https://opencode-l390.sisihome.org", enabled: true },
-    { id: "home", name: "Home", url: "https://opencode.sisihome.org", enabled: true },
+    { id: "mac",  name: "Mac",  url: "https://opencode.sisihome.org/sara", enabled: true },
+    { id: "l390", name: "L390", url: "https://opencode.sisihome.org/l390", enabled: true },
+    { id: "home", name: "Home", url: "https://opencode.sisihome.org/home", enabled: true },
   ];
-  const KEY_REMOTES = "opencode-hub:remotes";
-  const KEY_ACTIVE = "opencode-hub:active";
+  const KEY_REMOTES = ownKey("opencode-hub:remotes");
+  const KEY_ACTIVE = ownKey("opencode-hub:active");
   const $ = (s) => document.querySelector(s);
   const tabsEl = $("#tabs"), mainEl = $("main"), emptyEl = $("#empty");
 
   const load = (k, fb) => { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? fb; } catch { return fb; } };
   const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
   const normalizeUrl = (u) => String(u || "").trim().replace(/\/+$/, "");
+  const migrateRemoteUrl = (u) => ({
+    "https://opencode-sara.sisihome.org": "https://opencode.sisihome.org/sara",
+    "https://opencode-l390.sisihome.org": "https://opencode.sisihome.org/l390",
+    "https://opencode-home.sisihome.org": "https://opencode.sisihome.org/home",
+  })[normalizeUrl(u)] || normalizeUrl(u);
 
   let remotes = load(KEY_REMOTES, null);
+  if (Array.isArray(remotes)) {
+    const migrated = remotes.map((r) => ({ ...r, url: migrateRemoteUrl(r.url) }));
+    if (JSON.stringify(migrated) !== JSON.stringify(remotes)) { remotes = migrated; save(KEY_REMOTES, remotes); }
+  }
   if (!Array.isArray(remotes) || remotes.length === 0) remotes = DEFAULTS.map((r) => ({ ...r }));
   let active = load(KEY_ACTIVE, null);
   const frames = new Map(); // id → iframe

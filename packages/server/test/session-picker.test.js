@@ -150,8 +150,8 @@ test("resolveActiveSessionPath returns the 2.x /server/<key>/session route", asy
 test("remote-sessions cards and compact link the 2.x /server/ route", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
-  assert.match(source, /\/server\/\$\{encodeServerKey\(origin\)\}\/session\/\$\{session\.id\}/);
+  assert.match(source, /encodeServerKey\(origin\).*session\.id/s);
   const compact = await readFile(new URL("../static/compact.js", import.meta.url), "utf8");
   assert.match(compact, /\/server\/\$\{key\}\/session\/\$\{sessionID\}/);
-  assert.match(compact, /btoa\(location\.origin\)/);
+  assert.match(compact, /btoa\(nativeOrigin\)/);
 });

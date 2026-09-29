@@ -32,6 +32,7 @@ import { sendHtml } from "./html-response.js";
 import { shouldCompressUpstream } from "./proxy-compress.js";
 import { rejectPromptWhileQuiesced } from "./update-quiesce.js";
 import { resolveOpenCodeCommand } from "./opencode-command.js";
+import { cookieName, machineOrigin, prefixPath, requestBasePath } from "./base-path.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -164,10 +165,10 @@ function sessionIDFromPath(path: string | undefined): string | undefined {
   }
 }
 
-function sessionIDFromCookie(headers: http.IncomingHttpHeaders): string | undefined {
+function sessionIDFromCookie(headers: http.IncomingHttpHeaders, basePath = ""): string | undefined {
   const cookie = Array.isArray(headers.cookie) ? headers.cookie.join("; ") : headers.cookie;
   if (!cookie) return undefined;
-  const match = cookie.match(/(?:^|;\s*)opencode_remote_session=([^;]+)/);
+  const match = cookie.match(new RegExp(`(?:^|;\\s*)${cookieName(basePath, "opencode_remote_session")}=([^;]+)`));
   if (!match?.[1]) return undefined;
   try {
     const value = decodeURIComponent(match[1]);
@@ -273,7 +274,7 @@ async function preserveCurrentSessionInList(
   req: http.IncomingMessage,
   upstreamPath: string,
 ): Promise<Buffer> {
-  const sessionID = sessionIDFromReferer(req.headers) ?? sessionIDFromCookie(req.headers);
+  const sessionID = sessionIDFromReferer(req.headers) ?? sessionIDFromCookie(req.headers, requestBasePath(req));
   if (!sessionID) return body;
 
   let payload: unknown;
@@ -569,7 +570,7 @@ function proxy(
           });
           appendSetCookie(
             headers,
-            `opencode_remote_session=${encodeURIComponent(pageSessionID)}; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly`,
+            `${cookieName(requestBasePath(req), "opencode_remote_session")}=${encodeURIComponent(pageSessionID)}; Path=${requestBasePath(req) || "/"}; Max-Age=3600; SameSite=Lax; HttpOnly`,
           );
         }
         const chunks: Buffer[] = [];
@@ -776,9 +777,12 @@ function handleRemoteDebug(req: http.IncomingMessage, res: http.ServerResponse):
   // Versioned (?v=content-hash) so a new deploy can't serve a stale cached
   // bundle; handleCompactStatic answers immutable for the matching ?v=.
   const themeHash = getStaticAsset("theme.js")?.hash ?? "";
+  const basePath = requestBasePath(req);
+  const path = (value: string) => prefixPath(basePath, value);
   sendHtml(req, res, `<!doctype html>
     <html lang="zh-Hant">
-      <head>
+      <head>${basePath ? `
+        <meta name="opencode-base" content="${basePath}" />` : ""}
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#0f0f10" />
@@ -805,7 +809,7 @@ function handleRemoteDebug(req: http.IncomingMessage, res: http.ServerResponse):
       </head>
       <body>
         <div class="page-head"><h1>OpenCode Remote Debug</h1><button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button></div>
-        <p>Recent session/API and browser reset events only. Prompt bodies are not recorded. JSON: <a href="/remote-debug.json">/remote-debug.json</a></p>
+        <p>Recent session/API and browser reset events only. Prompt bodies are not recorded. JSON: <a href="${path("/remote-debug.json")}">/remote-debug.json</a></p>
         <div class="wrap">
           <table>
             <thead>
@@ -817,7 +821,7 @@ function handleRemoteDebug(req: http.IncomingMessage, res: http.ServerResponse):
             <tbody>${rows || `<tr><td colspan="13">No debug entries yet.</td></tr>`}</tbody>
           </table>
         </div>
-        <script type="module" src="/c/static/theme.js?v=${themeHash}"></script>
+        <script type="module" src="${path(`/c/static/theme.js?v=${themeHash}`)}"></script>
       </body>
     </html>`, {
     "Content-Type": "text/html; charset=utf-8",
@@ -883,9 +887,9 @@ function handleRemoteClientDebug(req: http.IncomingMessage, res: http.ServerResp
   });
 }
 
-function redirectToSession(res: http.ServerResponse, sessionPath: string): void {
+function redirectToSession(req: http.IncomingMessage, res: http.ServerResponse, sessionPath: string): void {
   res.writeHead(302, {
-    Location: sessionPath,
+    Location: prefixPath(requestBasePath(req), sessionPath),
     "Cache-Control": "no-store",
     "X-OpenCode-Remote": "true",
   });
@@ -1000,16 +1004,21 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
     const pinnedSet = new Set(pinnedIds);
     const ordered = await mergePinnedSessions(visibleSessions, pinnedIds);
     // 2.x SPA server route key is base64url(browser origin).
-    const origin = requestOrigin(req);
+    const basePath = requestBasePath(req);
+    const origin = machineOrigin(basePath, requestOrigin(req));
+    const path = (value: string) => prefixPath(basePath, value);
+    const asset = (value: string) => path(value);
     const windowLabel = remoteSessionsWindowLabel(windowKey);
     const nextWindow = remoteSessionsNextWindow(windowKey);
     const loadMoreLabel = remoteSessionsLoadMoreLabel(nextWindow);
 
     const items = ordered.map((session) => {
       const nativePath = origin
-        ? `/server/${encodeServerKey(origin)}/session/${session.id}`
-        : `/c/session/${session.id}`;
-      const compactPath = `/c/session/${session.id}`;
+        ? basePath
+          ? `${origin}/server/${encodeServerKey(origin)}/session/${session.id}`
+          : `/server/${encodeServerKey(origin)}/session/${session.id}`
+        : path(`/c/session/${session.id}`);
+      const compactPath = path(`/c/session/${session.id}`);
       const title = session.title || session.slug || session.id;
       const pinned = pinnedSet.has(session.id);
       const pinClass = pinned ? "pin-btn pinned" : "pin-btn";
@@ -1035,7 +1044,8 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
     // Self-produced HTML: compress with gzip when the client accepts it.
     sendHtml(req, res, `<!doctype html>
       <html lang="zh-Hant">
-        <head>
+        <head>${basePath ? `
+          <meta name="opencode-base" content="${basePath}" />` : ""}
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
           <meta name="theme-color" content="#0f0f10" />
@@ -1082,10 +1092,10 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
         <body data-window="${windowKey}">
           <header>
             <h1>工作階段<span class="window-label">（${windowLabel}）</span></h1>
-            <a class="pairs-btn" id="pairsBtn" href="/pairs">夥伴</a>
+            <a class="pairs-btn" id="pairsBtn" href="${path("/pairs")}">夥伴</a>
             <button class="font-scale-toggle" type="button" data-font-scale-cycle aria-label="切換字級">Aa</button>
             <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
-            <form method="post" action="/c/new-session" style="margin:0;">
+            <form method="post" action="${path("/c/new-session")}" style="margin:0;">
               <button class="new-btn" type="submit">+ 新</button>
             </form>
           </header>
@@ -1101,7 +1111,7 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
               const wasPinned = btn.dataset.pinned === "1";
               btn.disabled = true;
               try {
-                const r = await fetch("/c/pins/" + id, { method: wasPinned ? "DELETE" : "POST" });
+                const r = await fetch("${basePath}/c/pins/" + id, { method: wasPinned ? "DELETE" : "POST" });
                 if (!r.ok) throw new Error("pin toggle failed: " + r.status);
                 // Re-fetch the page to get the canonical sort order so the
                 // user immediately sees the pinned item bubble up.
@@ -1113,13 +1123,13 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
               }
             });
           </script>
-          <script type="module" src="/c/static/font-scale.js?v=${fontScaleHash}"></script>
-          <script type="module" src="/c/static/theme.js?v=${sessionsThemeHash}"></script>
-          <script type="module" src="/c/static/remote-sessions.js?v=${sessionsClientHash}"></script>
+          <script type="module" src="${asset(`/c/static/font-scale.js?v=${fontScaleHash}`)}"></script>
+          <script type="module" src="${asset(`/c/static/theme.js?v=${sessionsThemeHash}`)}"></script>
+          <script type="module" src="${asset(`/c/static/remote-sessions.js?v=${sessionsClientHash}`)}"></script>
           <script type="module">
-            import { visiblePairs } from "/c/static/pairs-rules.js?v=${pairsRulesHash}";
+             import { visiblePairs } from "${path(`/c/static/pairs-rules.js?v=${pairsRulesHash}`)}";
             try {
-              const res = await fetch("/api/pairs", { cache: "no-store" });
+                const res = await fetch("${basePath}/api/pairs", { cache: "no-store" });
               if (!res.ok) throw new Error("pairs unavailable");
               const pairs = await res.json();
               if (!Array.isArray(pairs)) throw new Error("invalid pairs payload");
@@ -1212,13 +1222,16 @@ async function handlePairUnaccept(id: string, res: http.ServerResponse): Promise
 
 async function handlePairsPage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
+    const basePath = requestBasePath(req);
+    const path = (value: string) => prefixPath(basePath, value);
     const { getStaticAsset } = await import("./compact/static-assets.js");
     const fontScaleHash = getStaticAsset("font-scale.js")?.hash ?? "";
     const themeHash = getStaticAsset("theme.js")?.hash ?? "";
     const pairsHash = getStaticAsset("pairs.js")?.hash ?? "";
     sendHtml(req, res, `<!doctype html>
       <html lang="zh-Hant">
-        <head>
+        <head>${basePath ? `
+          <meta name="opencode-base" content="${basePath}" />` : ""}
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
           <meta name="theme-color" content="#0f0f10" />
@@ -1302,7 +1315,7 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
         <body data-view="dashboard">
           <header>
             <h1>夥伴 Sessions</h1>
-            <a class="pairs-btn" href="/remote-sessions" style="display: inline-flex; align-items: center; min-height: 44px; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 999px; background: var(--surface); color: var(--text); border: 1px solid var(--border); text-decoration: none; line-height: 1; white-space: nowrap;">工作階段</a>
+            <a class="pairs-btn" href="${path("/remote-sessions")}" style="display: inline-flex; align-items: center; min-height: 44px; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 999px; background: var(--surface); color: var(--text); border: 1px solid var(--border); text-decoration: none; line-height: 1; white-space: nowrap;">工作階段</a>
             <div class="view-toggle" role="group" aria-label="檢視切換">
               <button type="button" data-view-btn="dashboard" aria-pressed="true">儀表板</button>
               <button type="button" data-view-btn="list" aria-pressed="false">列表</button>
@@ -1312,9 +1325,9 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
           </header>
           <div class="agg-note" id="aggNote" hidden></div>
           <div class="grid" id="pairGrid"><div class="empty">載入中…</div></div>
-          <script type="module" src="/c/static/font-scale.js?v=${fontScaleHash}"></script>
-          <script type="module" src="/c/static/theme.js?v=${themeHash}"></script>
-          <script type="module" src="/c/static/pairs.js?v=${pairsHash}"></script>
+          <script type="module" src="${path(`/c/static/font-scale.js?v=${fontScaleHash}`)}"></script>
+          <script type="module" src="${path(`/c/static/theme.js?v=${themeHash}`)}"></script>
+          <script type="module" src="${path(`/c/static/pairs.js?v=${pairsHash}`)}"></script>
         </body>
       </html>`, {
       "Content-Type": "text/html; charset=utf-8",
@@ -1387,19 +1400,20 @@ function sendCompactMockup(res: http.ServerResponse): void {
   }
 }
 
-function handleRootRedirect(res: http.ServerResponse): void {
-  redirectToSession(res, "/remote-sessions");
+function handleRootRedirect(req: http.IncomingMessage, res: http.ServerResponse): void {
+  redirectToSession(req, res, "/remote-sessions");
 }
 
 async function handleLatestRedirect(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  let nativeOrigin: string | undefined;
   try {
-    const origin = requestOrigin(req);
-    if (!origin) {
-      redirectToSession(res, "/");
+    nativeOrigin = machineOrigin(requestBasePath(req), requestOrigin(req));
+    if (!nativeOrigin) {
+      redirectToSession(req, res, "/");
       return;
     }
-    activeSessionPath = await resolveActiveSessionPath(origin);
-    redirectToSession(res, activeSessionPath);
+    activeSessionPath = await resolveActiveSessionPath(nativeOrigin);
+    redirectToSession(req, res, requestBasePath(req) ? `${nativeOrigin}${activeSessionPath}` : activeSessionPath);
     return;
   } catch (err) {
     console.error("[opencode-remote] failed to resolve active session for /latest:", err);
@@ -1411,7 +1425,7 @@ async function handleLatestRedirect(req: http.IncomingMessage, res: http.ServerR
     return;
   }
 
-  redirectToSession(res, activeSessionPath);
+  redirectToSession(req, res, requestBasePath(req) && nativeOrigin ? `${nativeOrigin}${activeSessionPath}` : activeSessionPath);
 }
 
 const server = http.createServer((req, res) => {
@@ -1517,7 +1531,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "POST" && req.url === "/c/new-session") {
-    void handleCompactNewSession(res);
+      void handleCompactNewSession(req, res);
     return;
   }
 
@@ -1567,7 +1581,7 @@ const server = http.createServer((req, res) => {
   }
 
   if ((req.method === "GET" || req.method === "HEAD") && req.url === "/") {
-    handleRootRedirect(res);
+    handleRootRedirect(req, res);
     return;
   }
 

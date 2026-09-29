@@ -211,7 +211,7 @@ test("all custom shells initialize and expose the shared theme control", async (
   assert.match(index, /OpenCode Remote Debug/);
   // /remote-sessions, /remote-debug and /pairs are the three themed shells in index.ts.
   assert.equal(index.match(/data-theme-toggle/g)?.length, 3);
-  assert.equal(index.match(/<script type="module" src="\/c\/static\/theme\.js\?v=/g)?.length, 3);
+  assert.equal(index.match(/theme\.js\?v=/g)?.length, 3);
   assert.equal(index.match(/querySelector\('meta\[name="theme-color"\]'\)/g)?.length, 3);
 });
 

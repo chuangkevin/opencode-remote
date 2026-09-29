@@ -4,6 +4,7 @@ import type http from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, gzipSync } from "node:zlib";
+import { prefixPath, requestBasePath } from "../base-path.js";
 
 const __filename = fileURLToPath(import.meta.url);
 // tsconfig has rootDir=src outDir=dist, so this file ends up at
@@ -69,10 +70,10 @@ export function getStaticAsset(filename: string): CachedAsset | undefined {
   return entry;
 }
 
-export function staticAssetUrl(name: string): string {
+export function staticAssetUrl(name: string, basePath = ""): string {
   const asset = getStaticAsset(name);
-  if (!asset) return `/c/static/${name}`;
-  return `/c/static/${name}?v=${asset.hash}`;
+  if (!asset) return prefixPath(basePath, `/c/static/${name}`);
+  return prefixPath(basePath, `/c/static/${name}?v=${asset.hash}`);
 }
 
 function requestHeader(req: http.IncomingMessage, name: string): string {
@@ -107,13 +108,21 @@ export function handleCompactStatic(req: http.IncomingMessage, res: http.ServerR
     return;
   }
   const acceptEncoding = requestHeader(req, "accept-encoding").toLowerCase();
-  let body: Buffer = asset.content;
+  const basePath = requestBasePath(req);
+  let content = asset.content;
+  if (filename === "hub.html") {
+    if (basePath) {
+      const meta = `<meta name="opencode-base" content="${basePath}">`;
+      content = Buffer.from(content.toString("utf8").replace("</head>", `${meta}</head>`), "utf8");
+    }
+  }
+  let body: Buffer = content;
   let contentEncoding: string | undefined;
   if (acceptEncoding.includes("br")) {
-    body = asset.br;
+    body = filename === "hub.html" ? brotliCompressSync(content) : asset.br;
     contentEncoding = "br";
   } else if (acceptEncoding.includes("gzip")) {
-    body = asset.gzip;
+    body = filename === "hub.html" ? gzipSync(content) : asset.gzip;
     contentEncoding = "gzip";
   }
   const headers: http.OutgoingHttpHeaders = {

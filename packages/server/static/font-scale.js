@@ -1,5 +1,10 @@
 export const FONT_SCALE_STORAGE_KEY = "opencode-font-scale";
 
+function storageKey(key) {
+  const base = globalThis.document?.querySelector('meta[name="opencode-base"]')?.content || "";
+  return /^\/(sara|l390|home)$/.test(base) ? `${key}:${base.slice(1)}` : key;
+}
+
 const scales = ["1", "1.15", "1.3", "1.45"];
 const labels = {
   "1": "小",
@@ -22,7 +27,7 @@ export function defaultFontScale({ window } = globalThis) {
 
 export function getFontScale({ window } = globalThis) {
   try {
-    return normalizeFontScale(window.localStorage.getItem(FONT_SCALE_STORAGE_KEY)) ?? defaultFontScale({ window });
+    return normalizeFontScale(window.localStorage.getItem(storageKey(FONT_SCALE_STORAGE_KEY))) ?? defaultFontScale({ window });
   } catch {
     return defaultFontScale({ window });
   }
@@ -47,7 +52,7 @@ function applyFontScale(value, { document } = globalThis) {
 export function setFontScale(value, env = globalThis) {
   const next = normalizeFontScale(value) ?? defaultFontScale(env);
   try {
-    env.window.localStorage.setItem(FONT_SCALE_STORAGE_KEY, next);
+    env.window.localStorage.setItem(storageKey(FONT_SCALE_STORAGE_KEY), next);
   } catch {
     // Keep the current page usable when storage is blocked or full.
   }
