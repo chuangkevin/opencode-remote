@@ -50,6 +50,10 @@ export function partnerLabel(pair) {
   return pair && pair.partner === "pi" ? "Pi" : "OpenCode";
 }
 
+export function pairCardUrl(pair, aggregate, ownPath) {
+  return aggregate && pair.hostUrl ? pair.hostUrl.replace(/\/+$/, "") + pair.url : ownPath(pair.url);
+}
+
 if (typeof document !== "undefined") {
   const BASE_PATH = getBasePath();
   const ownPath = (path) => `${BASE_PATH}${path}`;
@@ -164,7 +168,7 @@ if (typeof document !== "undefined") {
     const a = document.createElement("a");
     a.className = "card";
     // Aggregate mode: absolute URL to the owning remote.
-    a.href = AGGREGATE && pair.hostUrl ? pair.hostUrl.replace(/\/+$/, "") + pair.url : pair.url;
+    a.href = pairCardUrl(pair, AGGREGATE, ownPath);
     a.dataset.sessionId = pair.id;
     const hostTag = AGGREGATE && pair.hostName ? `<span class="host-tag"></span>` : "";
     const hasModel = modelFullLabel(pair.model) !== "";

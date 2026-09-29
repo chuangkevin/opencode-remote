@@ -19,6 +19,7 @@ import {
   archivedPair,
   dashboardVisible,
   formatRelative,
+  pairCardUrl,
   partnerLabel,
   visiblePairs,
 } from "../static/pairs.js";
@@ -191,6 +192,17 @@ test("partnerLabel identifies Pi and defaults legacy pairs to OpenCode", () => {
   assert.equal(partnerLabel({}), "OpenCode");
 });
 
+test("pair card URLs use the owning prefix outside aggregate mode", () => {
+  const pair = { url: "/c/session/ses_test" };
+  const ownPath = (path) => `/sara${path}`;
+  assert.equal(pairCardUrl(pair, false, ownPath), "/sara/c/session/ses_test");
+  assert.equal(pairCardUrl(pair, false, (path) => path), "/c/session/ses_test");
+  assert.equal(
+    pairCardUrl({ ...pair, hostUrl: "https://remote.example///" }, true, ownPath),
+    "https://remote.example/c/session/ses_test",
+  );
+});
+
 test("relative time ticks in Chinese units", () => {
   const now = 1_000_000;
   assert.equal(formatRelative(now - 5000, now), "5 秒前");
@@ -236,7 +248,8 @@ test("pairs phone dashboard is one row per card", async () => {
   assert.match(page, /body\[data-view="dashboard"\] \.owner \{ display: block; \}/);
   // 卡片整行可點（a.card 包 task＋時間＋lastText；彙總模式開絕對網址）。
   const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
-  assert.match(client, /a\.href = AGGREGATE/);
+  assert.match(client, /a\.href = pairCardUrl\(pair, AGGREGATE, ownPath\)/);
+  assert.match(client, /: ownPath\(pair\.url\)/);
   assert.match(client, /card-row/);
 });
 
