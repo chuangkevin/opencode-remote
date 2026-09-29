@@ -6,7 +6,7 @@
     ],
     "permission": {
         "edit": {
-            "*": "ask",
+            "*": "allow",
             ".env": "deny",
             ".env.*": "deny",
             "*service-account*.json": "deny",
@@ -22,6 +22,15 @@
         },
         "bash": {
             "*": "ask",
+            "ls*": "allow",
+            "cat*": "allow",
+            "grep*": "allow",
+            "rg*": "allow",
+            "head*": "allow",
+            "tail*": "allow",
+            "wc*": "allow",
+            "curl -s http://127.0.0.1*": "allow",
+            "npm test": "allow",
             "git status*": "allow",
             "git log*": "allow",
             "git diff*": "allow",

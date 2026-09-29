@@ -13,8 +13,17 @@
 
 export const DASHBOARD_ACTIVE_MS = 30 * 60 * 1000;
 export const DASHBOARD_IDLE_MS = 2 * 60 * 60 * 1000;
+export const PAIR_ARCHIVE_MS = 24 * 60 * 60 * 1000;
+
+export function archivedPair(pair, now = Date.now()) {
+  if (pair.status === "busy" || pair.status === "ask") return false;
+  const eligible = pair.status === "error" || pair.status === "idle"
+    || (pair.acceptedAt !== undefined && pair.acceptedAt !== null);
+  return eligible && now - pair.lastActivityAt > PAIR_ARCHIVE_MS;
+}
 
 export function dashboardVisible(pair, now = Date.now()) {
+  if (archivedPair(pair, now)) return false;
   if (pair.status === "busy" || pair.status === "ask") return true;
   const accepted = pair.acceptedAt !== undefined && pair.acceptedAt !== null;
   if (accepted) return now - pair.lastActivityAt < DASHBOARD_ACTIVE_MS;
@@ -24,6 +33,7 @@ export function dashboardVisible(pair, now = Date.now()) {
 
 export function visiblePairs(pairs, view, now = Date.now()) {
   const sorted = [...pairs].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
-  if (view === "list") return sorted;
+  if (view === "archived") return sorted.filter((p) => archivedPair(p, now));
+  if (view === "list") return sorted.filter((p) => !archivedPair(p, now));
   return sorted.filter((p) => dashboardVisible(p, now));
 }

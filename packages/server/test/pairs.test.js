@@ -16,6 +16,7 @@ import {
   unacceptPair,
 } from "../dist/compact/pairs.js";
 import {
+  archivedPair,
   dashboardVisible,
   formatRelative,
   partnerLabel,
@@ -163,11 +164,25 @@ test("dashboard shows busy/ask/error always; idle 2h; accepted 30m", () => {
     visiblePairs([accepted40m, idle3h, idle1h, accepted20m, errorUnaccepted10h, askIdle10h, busyIdle10h], "dashboard", now).map((p) => p.id),
     ["acc20", "idle1", "err", "ask", "busy"],
   );
-  // list view shows everything newest first (40m > 1h > 3h)
+  // list view excludes archived pairs, but keeps newest-first order.
   assert.deepEqual(
     visiblePairs([accepted40m, idle3h, idle1h], "list", now).map((p) => p.id),
     ["acc40", "idle1", "idle3"],
   );
+});
+
+test("pairs archive eligible statuses strictly after 24 hours", () => {
+  const now = 1_000_000_000;
+  const day = 24 * 3600_000;
+  const atBoundary = { id: "boundary", status: "idle", lastActivityAt: now - day };
+  const afterBoundary = { id: "after", status: "idle", lastActivityAt: now - day - 1 };
+  assert.equal(archivedPair(atBoundary, now), false);
+  assert.equal(archivedPair(afterBoundary, now), true);
+  assert.equal(archivedPair({ ...afterBoundary, status: "error" }, now), true);
+  assert.equal(archivedPair({ ...afterBoundary, acceptedAt: now - day }, now), true);
+  assert.equal(archivedPair({ ...afterBoundary, status: "busy" }, now), false);
+  assert.equal(archivedPair({ ...afterBoundary, status: "ask" }, now), false);
+  assert.deepEqual(visiblePairs([afterBoundary, atBoundary], "archived", now).map((p) => p.id), ["after"]);
 });
 
 test("partnerLabel identifies Pi and defaults legacy pairs to OpenCode", () => {
@@ -204,6 +219,8 @@ test("pairs page ships both views and reduced-motion rules", async () => {
   assert.match(client, /prefers-reduced-motion/);
   assert.match(client, /setInterval\(poll, 3000\)/);
   assert.match(client, /data-view-btn/);
+  assert.match(client, /dataset\.viewBtn = "archived"/);
+  assert.match(client, /textContent = "已歸檔"/);
 });
 
 test("pairs phone dashboard is one row per card", async () => {
@@ -266,6 +283,13 @@ test("pairs aggregate mode merges remotes with host tags", async () => {
   const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
   assert.match(client, /opencode-hub:remotes/);
   assert.match(client, /https:\/\/opencode-sara\.sisihome\.org/);
+  assert.match(client, /https:\/\/opencode-l390\.sisihome\.org/);
+  assert.match(client, /https:\/\/opencode\.sisihome\.org/);
+  assert.match(client, /PAIR_REMOTE_DOMAINS/);
+  const hub = await readFile(new URL("../static/hub.html", import.meta.url), "utf8");
+  assert.match(hub, /id: "mac"[^\n]+opencode-sara\.sisihome\.org/);
+  assert.match(hub, /id: "l390"[^\n]+opencode-l390\.sisihome\.org/);
+  assert.match(hub, /id: "home"[^\n]+opencode\.sisihome\.org/);
   assert.match(client, /\/api\/pairs/);
   assert.match(client, /host-tag/);
   assert.match(client, /連不上，只顯示其他台/);

@@ -5,9 +5,15 @@
 // imports from this module keep working.
 // Only re-renders cards that changed; relative times tick locally every second.
 
-export { DASHBOARD_ACTIVE_MS, DASHBOARD_IDLE_MS, dashboardVisible, visiblePairs } from "./pairs-rules.js";
+export { DASHBOARD_ACTIVE_MS, DASHBOARD_IDLE_MS, PAIR_ARCHIVE_MS, archivedPair, dashboardVisible, visiblePairs } from "./pairs-rules.js";
 import { visiblePairs } from "./pairs-rules.js";
 export const PAIRS_VIEW_KEY = "pairs-view";
+
+export const PAIR_REMOTE_DOMAINS = Object.freeze({
+  mac: "https://opencode-sara.sisihome.org",
+  l390: "https://opencode-l390.sisihome.org",
+  home: "https://opencode.sisihome.org",
+});
 
 export function formatRelative(ts, now = Date.now()) {
   const s = Math.max(0, Math.floor((now - ts) / 1000));
@@ -40,9 +46,9 @@ if (typeof document !== "undefined") {
   // ── Aggregate mode: opencode.sisihome.org/pairs (or ?all=1) merges every
   // remote's /api/pairs. Remote list mirrors hub.html (opencode-hub:remotes).
   const AGG_DEFAULTS = [
-    { id: "mac", name: "Mac", url: "https://opencode-sara.sisihome.org" },
-    { id: "l390", name: "L390", url: "https://opencode-l390.sisihome.org" },
-    { id: "home", name: "Home", url: "https://opencode-home.sisihome.org" },
+    { id: "mac", name: "Mac", url: PAIR_REMOTE_DOMAINS.mac },
+    { id: "l390", name: "L390", url: PAIR_REMOTE_DOMAINS.l390 },
+    { id: "home", name: "Home", url: PAIR_REMOTE_DOMAINS.home },
   ];
   const queryAll = (() => { try { return new URLSearchParams(location.search).get("all") === "1"; } catch { return false; } })();
   const AGGREGATE = location.hostname === "opencode.sisihome.org" || queryAll;
@@ -71,8 +77,15 @@ if (typeof document !== "undefined") {
   let view = "dashboard";
   try {
     const stored = localStorage.getItem(PAIRS_VIEW_KEY);
-    if (stored === "list" || stored === "dashboard") view = stored;
+    if (stored === "list" || stored === "dashboard" || stored === "archived") view = stored;
   } catch { /* private mode: keep default */ }
+  const archivedButton = document.createElement("button");
+  archivedButton.type = "button";
+  archivedButton.dataset.viewBtn = "archived";
+  archivedButton.setAttribute("aria-pressed", "false");
+  archivedButton.textContent = "已歸檔";
+  viewButtons[viewButtons.length - 1]?.insertAdjacentElement("afterend", archivedButton);
+  viewButtons.push(archivedButton);
   let pairsById = new Map();
   let lastRenderedSig = new Map();
 
@@ -362,7 +375,7 @@ if (typeof document !== "undefined") {
 
   for (const btn of viewButtons) {
     btn.addEventListener("click", () => {
-      view = btn.dataset.viewBtn === "list" ? "list" : "dashboard";
+      view = btn.dataset.viewBtn === "archived" ? "archived" : btn.dataset.viewBtn === "list" ? "list" : "dashboard";
       applyView();
       lastRenderedSig = new Map();
       grid.innerHTML = "";
