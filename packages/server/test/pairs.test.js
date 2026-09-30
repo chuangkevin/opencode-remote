@@ -262,11 +262,13 @@ test("aggregate helpers merge freshest cards and keep offline state for its cool
 
 test("aggregate host count labels resolve loading, success, failure, and cooldown", () => {
   const now = 100_000;
-  assert.equal(aggregateHostCountLabel({ pending: true, failedAt: now - 1, count: 8, now }), "載入中");
-  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: undefined, count: 3, now }), "3");
-  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 1, count: 0, now }), "離線");
-  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 59_999, count: 4, now }), "離線");
-  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 60_000, count: 2, now }), "2");
+  assert.equal(aggregateHostCountLabel({ pending: true, failedAt: undefined, count: 0, hasData: false, now }), "載入中");
+  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: undefined, count: 3, hasData: true, now }), "3");
+  assert.equal(aggregateHostCountLabel({ pending: true, failedAt: undefined, count: 273, hasData: true, now }), "273");
+  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 1, count: 0, hasData: false, now }), "離線");
+  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 59_999, count: 4, hasData: true, now }), "離線");
+  assert.equal(aggregateHostCountLabel({ pending: true, failedAt: now - 1, count: 4, hasData: true, now }), "離線");
+  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 60_000, count: 2, hasData: true, now }), "2");
 });
 
 test("aggregate polls share in-flight requests per host and view, then permit retries", async () => {
@@ -585,6 +587,7 @@ test("pairs aggregate mode merges remotes with host tags", async () => {
   assert.match(client, /if \(countEl\?\.textContent === "載入中"\) countEl\.textContent = "離線"/);
   assert.match(client, /loadRemotePairs\(`\$\{r\.id\}:\$\{requestedView\}`/);
   assert.match(client, /count: visiblePairs\(remoteData\.get\(id\) \?\? \[\], view, now\)\.length/);
+  assert.match(client, /hasData: remoteData\.has\(id\)/);
 });
 
 test("/hub serves the Hub shell without a host-scoped /pairs redirect", async () => {

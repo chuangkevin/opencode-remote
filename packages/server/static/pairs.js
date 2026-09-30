@@ -31,9 +31,9 @@ export function remoteIsOffline(lastFailureAt, now = Date.now(), cooldown = AGGR
   return remoteOfflineUntil(lastFailureAt, now, cooldown) > now;
 }
 
-export function aggregateHostCountLabel({ pending, failedAt, count, now }) {
-  if (pending) return "載入中";
+export function aggregateHostCountLabel({ pending, failedAt, count, now, hasData = false }) {
   if (failedAt !== undefined && remoteIsOffline(failedAt, now)) return "離線";
+  if (pending && !hasData) return "載入中";
   return String(count);
 }
 
@@ -421,6 +421,7 @@ if (typeof document !== "undefined") {
           failedAt: configured ? remoteFailures.get(id) : now,
           count: visiblePairs(remoteData.get(id) ?? [], view, now).length,
           now,
+          hasData: remoteData.has(id),
         });
         button.setAttribute("aria-pressed", id === selectedHost ? "true" : "false");
       };
