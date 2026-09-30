@@ -8,7 +8,7 @@
 export { DASHBOARD_ACTIVE_MS, DASHBOARD_IDLE_MS, PAIR_ARCHIVE_MS, archivedPair, dashboardVisible, visiblePairs } from "./pairs-rules.js";
 import { visiblePairs } from "./pairs-rules.js";
 export const PAIRS_VIEW_KEY = "pairs-view";
-export const AGGREGATE_FETCH_TIMEOUT_MS = 1500;
+export const AGGREGATE_FETCH_TIMEOUT_MS = 15 * 1000;
 export const AGGREGATE_OFFLINE_COOLDOWN_MS = 60 * 1000;
 
 export function mergeAggregatePairs(remoteLists) {
@@ -28,6 +28,10 @@ export function remoteOfflineUntil(lastFailureAt, now = Date.now(), cooldown = A
 
 export function remoteIsOffline(lastFailureAt, now = Date.now(), cooldown = AGGREGATE_OFFLINE_COOLDOWN_MS) {
   return remoteOfflineUntil(lastFailureAt, now, cooldown) > now;
+}
+
+export function aggregateLoading(pairCount, pendingCount) {
+  return pairCount === 0 && pendingCount > 0;
 }
 
 export function getBasePath(documentObject = globalThis.document) {
@@ -135,6 +139,8 @@ if (typeof document !== "undefined") {
   let pairsById = new Map();
   let lastRenderedSig = new Map();
   const remoteFailures = new Map();
+  const remoteData = new Map();
+  let aggregateDataView = view;
   let aggregateGeneration = 0;
 
   function applyView() {
@@ -336,10 +342,17 @@ if (typeof document !== "undefined") {
       // Aggregate: start all remotes together, but render each successful result
       // immediately instead of waiting for the slowest remote.
       const generation = ++aggregateGeneration;
-      const remoteLists = new Map();
+      if (aggregateDataView !== view) {
+        aggregateDataView = view;
+        remoteData.clear();
+      }
+      const pending = new Set();
+      for (const r of remotes) {
+        if (!remoteIsOffline(remoteFailures.get(r.id))) pending.add(r.id);
+      }
       const updateAggregate = () => {
         if (generation !== aggregateGeneration) return;
-        const pairs = mergeAggregatePairs([...remoteLists.values()]);
+        const pairs = mergeAggregatePairs([...remoteData.values()]);
         pairsById = new Map(pairs.map((p) => [`${p.hostUrl}${p.id}`, p]));
         const down = remotes.filter((r) => remoteIsOffline(remoteFailures.get(r.id))).map((r) => r.name);
         if (aggNote) {
@@ -348,10 +361,10 @@ if (typeof document !== "undefined") {
           else aggNote.classList.remove("show");
           aggNote.textContent = down.length > 0 ? `${down.join("、")} 連不上，只顯示其他台` : "";
         }
-        renderAggregate(pairs);
+        renderAggregate(pairs, aggregateLoading(pairs.length, pending.size));
       };
       await Promise.allSettled(remotes.map(async (r) => {
-        if (remoteIsOffline(remoteFailures.get(r.id))) return;
+        if (!pending.has(r.id)) return;
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), AGGREGATE_FETCH_TIMEOUT_MS);
         try {
@@ -360,12 +373,15 @@ if (typeof document !== "undefined") {
           if (!res.ok) throw new Error(`GET ${r.url}/api/pairs returned ${res.status}`);
           const list = await res.json();
           if (!Array.isArray(list)) throw new Error("invalid pairs payload");
-          remoteFailures.delete(r.id);
-          remoteLists.set(r.id, list.map((p) => ({ ...p, hostName: r.name, hostUrl: r.url })));
+          if (generation === aggregateGeneration) {
+            remoteFailures.delete(r.id);
+            remoteData.set(r.id, list.map((p) => ({ ...p, hostName: r.name, hostUrl: r.url })));
+          }
         } catch {
-          remoteFailures.set(r.id, Date.now());
+          if (generation === aggregateGeneration) remoteFailures.set(r.id, Date.now());
         } finally {
           clearTimeout(timeout);
+          pending.delete(r.id);
         }
         updateAggregate();
       }));
@@ -374,7 +390,7 @@ if (typeof document !== "undefined") {
     }
   }
 
-  function renderAggregate(pairs) {
+  function renderAggregate(pairs, loading = false) {
     // Reuse render() by temporarily namespacing ids.
     const namespaced = pairs.map((p) => ({ ...p, id: `${p.hostUrl}${p.id}` }));
     const realIds = new Map(namespaced.map((n, i) => [n.id, pairs[i]]));
@@ -412,7 +428,7 @@ if (typeof document !== "undefined") {
       }
     }
     if (visible.length === 0) {
-      grid.innerHTML = `<div class="empty">目前沒有夥伴 session</div>`;
+      grid.innerHTML = `<div class="empty">${loading ? "載入中…" : "目前沒有夥伴 session"}</div>`;
     } else {
       grid.querySelector(".empty")?.remove();
       for (const pair of visible) {

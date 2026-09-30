@@ -27,6 +27,7 @@ import {
   visiblePairs,
   withBase,
   mergeAggregatePairs,
+  aggregateLoading,
   remoteIsOffline,
 } from "../static/pairs.js";
 
@@ -244,6 +245,11 @@ test("aggregate helpers merge freshest cards and keep offline state for its cool
   assert.deepEqual(merged.map((pair) => pair.id), ["same", "old"]);
   assert.equal(remoteIsOffline(1_000, 1_000 + 59_999), true);
   assert.equal(remoteIsOffline(1_000, 1_000 + 60_000), false);
+  assert.equal(aggregateLoading(0, 1), true);
+  assert.equal(aggregateLoading(0, 0), false);
+  assert.equal(aggregateLoading(1, 2), false);
+  // A failed refresh contributes no new list; the previous successful list remains renderable.
+  assert.deepEqual(mergeAggregatePairs([merged]), merged);
 });
 
 test("partnerLabel identifies Pi and defaults legacy pairs to OpenCode", () => {
