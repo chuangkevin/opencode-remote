@@ -10,6 +10,7 @@ import {
   acceptPair,
   buildPairsList,
   computePairInfo,
+  createPairsCache,
   getClaudeArchivedOwners,
   getAcceptedAt,
   isPairSession,
@@ -252,6 +253,55 @@ test("aggregate helpers merge freshest cards and keep offline state for its cool
   assert.deepEqual(mergeAggregatePairs([merged]), merged);
 });
 
+test("pairs cache serves fresh data, revalidates stale data once, and isolates archived views", async () => {
+  let now = 0;
+  let calls = 0;
+  let finishSecond;
+  const cache = createPairsCache(() => now);
+  const build = async () => {
+    calls += 1;
+    if (calls === 2) await new Promise((resolve) => { finishSecond = resolve; });
+    return [{ id: `pair-${calls}` }];
+  };
+
+  assert.deepEqual(await cache.get(false, build), [{ id: "pair-1" }]);
+  now = 2_000;
+  assert.deepEqual(await cache.get(false, build), [{ id: "pair-1" }]);
+  assert.equal(calls, 1);
+  now = 4_000;
+  assert.deepEqual(await cache.get(false, build), [{ id: "pair-1" }]);
+  assert.deepEqual(await cache.get(false, build), [{ id: "pair-1" }]);
+  assert.equal(calls, 2);
+  finishSecond();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(await cache.get(false, build), [{ id: "pair-2" }]);
+  assert.deepEqual(await cache.get(true, build), [{ id: "pair-3" }]);
+  assert.equal(calls, 3);
+});
+
+test("pairs cache keeps stale data after refresh failure and waits on first failure", async () => {
+  let now = 0;
+  let calls = 0;
+  const cache = createPairsCache(() => now);
+  const first = await cache.get(false, async () => {
+    calls += 1;
+    return ["old"];
+  });
+  assert.deepEqual(first, ["old"]);
+  now = 4_000;
+  assert.deepEqual(await cache.get(false, async () => {
+    calls += 1;
+    throw new Error("refresh failed");
+  }), ["old"]);
+  assert.equal(calls, 2);
+
+  const empty = createPairsCache(() => now);
+  await assert.rejects(() => empty.get(false, async () => {
+    calls += 1;
+    throw new Error("initial failed");
+  }), /pairs cache refresh failed/);
+});
+
 test("partnerLabel identifies Pi and defaults legacy pairs to OpenCode", () => {
   assert.equal(partnerLabel({ partner: "pi" }), "Pi");
   assert.equal(partnerLabel({ partner: "opencode" }), "OpenCode");
@@ -367,7 +417,7 @@ test("api pairs allows cross-origin GET for the aggregate page", async () => {
   assert.match(pairsBlock, /Access-Control-Allow-Origin/);
   assert.match(source, /req\.url === "\/api\/pairs"\)/);
   assert.match(source, /searchParams\.get\("archived"\) === "1"/);
-  assert.match(source, /includeArchived: archived/);
+  assert.match(source, /pairsCache\.get\(archived/);
   assert.match(source, /\/api\/session\/active" \|\| req\.url === "\/api\/pairs"/);
 });
 

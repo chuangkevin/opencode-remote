@@ -26,7 +26,7 @@ import { ensureSessionTrust } from "./compact/trust.js";
 import { handleMergedSessionStatus, isMergedSessionStatusPath, isPathWithinRoot } from "./compact/session-status.js";
 import { unwrap, upstreamAuthHeaders, upstreamFetch, upstreamHealthy, upstreamInfo } from "./upstream.js";
 import { readBuildInfo } from "./build-info.js";
-import { isPairSession } from "./compact/pairs.js";
+import { createPairsCache, isPairSession, type PairInfo } from "./compact/pairs.js";
 import { getStaticAsset } from "./compact/static-assets.js";
 import { sendHtml } from "./html-response.js";
 import { shouldCompressUpstream } from "./proxy-compress.js";
@@ -37,6 +37,7 @@ import { cookieName, machineOrigin, prefixPath, requestBasePath } from "./base-p
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
 const remoteResetScript = `(() => {})();\n`;
+const pairsCache = createPairsCache<PairInfo[]>();
 const nativeMobileStyle = `<style data-remote-mobile>
 @media (max-width: 767px) {
   html { zoom: 1.2; }
@@ -1160,14 +1161,17 @@ async function handleListPairs(req: http.IncomingMessage, res: http.ServerRespon
     const archived = new URL(req.url ?? "/api/pairs", "http://localhost").searchParams.get("archived") === "1";
     const now = Date.now();
     const claudeArchivedOwners = await getClaudeArchivedOwners(now);
-    const [openPairs, piPairs] = await Promise.all([
-      buildPairsList({}, { includeArchived: archived, now, claudeArchivedOwners }),
-      listPiPairs().catch(() => []),
-    ]);
-    const pairs = [...openPairs, ...piPairs]
+    const rawPairs = await pairsCache.get(archived, async () => {
+      const buildNow = Date.now();
+      const [openPairs, piPairs] = await Promise.all([
+        buildPairsList({}, { now: buildNow, claudeArchivedOwners }),
+        listPiPairs().catch(() => []),
+      ]);
+      return [...openPairs, ...piPairs].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+    }, now);
+    const pairs = rawPairs
       .filter((pair) => pairArchived(pair, now, claudeArchivedOwners) === archived)
-      .map((pair) => ({ ...pair, archived: pairArchived(pair, now, claudeArchivedOwners) }))
-      .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+      .map((pair) => ({ ...pair, archived: pairArchived(pair, now, claudeArchivedOwners) }));
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",

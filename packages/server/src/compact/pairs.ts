@@ -336,6 +336,53 @@ export type BuildPairsOptions = {
   claudeArchivedOwners?: ReadonlySet<string>;
 };
 
+export const PAIRS_CACHE_FRESH_MS = 3 * 1000;
+export const PAIRS_CACHE_MAX_AGE_MS = 60 * 1000;
+
+type PairsCacheEntry<T> = { value: T; storedAt: number };
+
+export function createPairsCache<T>(clock: () => number = Date.now) {
+  const slots = new Map<boolean, { entry?: PairsCacheEntry<T>; refresh?: Promise<T | undefined> }>();
+
+  return {
+    async get(
+      archived: boolean,
+      build: () => Promise<T>,
+      now = clock(),
+    ): Promise<T> {
+      const slot = slots.get(archived) ?? {};
+      slots.set(archived, slot);
+      const age = slot.entry ? Math.max(0, now - slot.entry.storedAt) : Infinity;
+      if (slot.entry && age < PAIRS_CACHE_FRESH_MS) return slot.entry.value;
+
+      const startRefresh = (): Promise<T | undefined> => {
+        if (!slot.refresh) {
+          slot.refresh = build()
+            .then((value) => {
+              slot.entry = { value, storedAt: clock() };
+              return value;
+            })
+            .catch(() => undefined)
+            .finally(() => {
+              slot.refresh = undefined;
+            });
+        }
+        return slot.refresh;
+      };
+
+      if (slot.entry && age <= PAIRS_CACHE_MAX_AGE_MS) {
+        void startRefresh();
+        return slot.entry.value;
+      }
+
+      const refreshed = await startRefresh();
+      if (refreshed !== undefined) return refreshed;
+      if (slot.entry) return slot.entry.value;
+      throw new Error("pairs cache refresh failed");
+    },
+  };
+}
+
 export function pairArchived(pair: Pick<PairInfo, "status" | "owner" | "lastActivityAt">, now = Date.now(), claudeArchivedOwners?: ReadonlySet<string>): boolean {
   if (pair.status === "busy" || pair.status === "ask") return false;
   if (claudeArchivedOwners?.has(pair.owner)) return true;
