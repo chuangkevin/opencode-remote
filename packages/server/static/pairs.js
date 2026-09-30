@@ -7,6 +7,7 @@
 
 export { DASHBOARD_ACTIVE_MS, DASHBOARD_IDLE_MS, PAIR_ARCHIVE_MS, archivedPair, dashboardVisible, visiblePairs } from "./pairs-rules.js";
 import { visiblePairs } from "./pairs-rules.js";
+import { hubHostUrl } from "./hub-state.js";
 export const PAIRS_VIEW_KEY = "pairs-view";
 export const AGGREGATE_FETCH_TIMEOUT_MS = 15 * 1000;
 export const AGGREGATE_OFFLINE_COOLDOWN_MS = 60 * 1000;
@@ -183,8 +184,7 @@ if (typeof document !== "undefined") {
     if (push) history.pushState(null, "", pairsStateUrl({ host: selectedHost, view }, true, BASE_PATH));
     applyView();
     if (sessionsLink && AGGREGATE) {
-      const remote = remotes.find((r) => r.id === selectedHost) ?? AGG_DEFAULTS.find((r) => r.id === selectedHost);
-      sessionsLink.href = `${remote?.url.replace(/\/+$/, "") ?? "/sara"}/remote-sessions`;
+      sessionsLink.href = hubHostUrl(selectedHost);
     }
     lastRenderedSig = new Map();
     grid.innerHTML = "";
@@ -499,8 +499,7 @@ if (typeof document !== "undefined") {
     view = next.view;
     applyView();
     if (sessionsLink && AGGREGATE) {
-      const remote = remotes.find((r) => r.id === selectedHost) ?? AGG_DEFAULTS.find((r) => r.id === selectedHost);
-      sessionsLink.href = `${remote?.url.replace(/\/+$/, "") ?? "/sara"}/remote-sessions`;
+      sessionsLink.href = hubHostUrl(selectedHost);
     }
     lastRenderedSig = new Map();
     grid.innerHTML = "";
@@ -509,8 +508,7 @@ if (typeof document !== "undefined") {
 
   applyView();
   if (AGGREGATE && sessionsLink) {
-    const remote = remotes.find((r) => r.id === selectedHost) ?? AGG_DEFAULTS.find((r) => r.id === selectedHost);
-    sessionsLink.href = `${remote?.url.replace(/\/+$/, "") ?? "/sara"}/remote-sessions`;
+    sessionsLink.href = hubHostUrl(selectedHost);
   }
   for (const btn of hostButtons) btn.setAttribute("aria-pressed", btn.dataset.hostBtn === selectedHost ? "true" : "false");
   if (new URLSearchParams(location.search).has("view")) {

@@ -4,7 +4,7 @@
 
 ## 專案目的
 
-在 Windows 或核准的 macOS 電腦上運行 OpenCode headless server，並透過透明 HTTP proxy 將 OpenCode 的原生 Web UI 提供給受信任裝置。根網域 `/hub` 會導向 `/pairs`；其他 host 的根路徑行為不變。`/latest` 進入最近活躍的 session。Session 在伺服器端持久化，瀏覽器關閉不影響。
+在 Windows 或核准的 macOS 電腦上運行 OpenCode headless server，並透過透明 HTTP proxy 將 OpenCode 的原生 Web UI 提供給受信任裝置。根網域 `/` 顯示工作階段 Hub；Hub 的「夥伴」連結前往 `/pairs`。`/latest` 進入最近活躍的 session。Session 在伺服器端持久化，瀏覽器關閉不影響。
 
 ## 架構（2026-09-23 現況）
 
@@ -19,7 +19,7 @@ Desktop 起的 `opencode-cli serve --service` 提供，url／pid 寫在
 
 `packages/server/src/index.ts` — proxy 主程式：
 - `GET /` → 302 redirect 到 `/remote-sessions`
-- `GET /hub`／`/hub/` → 僅當 Host 或 `X-Forwarded-Host` 是 `opencode.sisihome.org` 且沒有 `X-Forwarded-Prefix` 時，302 到 `/pairs`；其餘 host 顯示 Hub 外殼
+- `GET /hub`／`/hub/` → 顯示 Hub 外殼；不依 host 導向 `/pairs`
 - `GET /latest` → 302 到最近 session 的 2.x SPA URL（見下）
 - `GET /remote-sessions` — 工作階段列表（`pair·` 開頭的夥伴 session 不列，見 /pairs）
 - `GET /pairs` ＋ `GET /api/pairs` — 夥伴 session 儀表板＋列表；根網域彙總頁有 Mac／L390／Home 分頁，host/view 狀態存在 query string（見「/pairs 頁」）
@@ -347,7 +347,7 @@ HTML + 單一 vanilla ES module，無 build step。
 
 ### /pairs 頁
 
-根網域彙總頁支援 Mac／L390／Home 分頁。`host` 缺省為 `mac`、`view` 缺省為 `dashboard`；query string 可還原分頁與檢視，瀏覽器上一頁／下一頁可切回狀態。`pairs-view` localStorage 只在 URL 未帶 `view` 時作初始預設。卡片與「工作階段」連結使用根網域的 `/sara/`、`/l390/`、`/home/` 前綴；只有「在原生介面打開」會離開彙總站。
+根網域 `/` 是工作階段 Hub，支援 Mac／L390／Home 分頁；`host` 缺省為 `mac`，網址有有效 `host` 時優先，否則使用 localStorage。切換分頁會以 `pushState` 更新 `/?host=<mac|l390|home>`，瀏覽器上一頁／下一頁可切回分頁。點「夥伴」會導向 `/pairs`。`/pairs` 彙總頁的 `host` 缺省為 `mac`、`view` 缺省為 `dashboard`；query string 可還原分頁與檢視，`pairs-view` localStorage 只在 URL 未帶 `view` 時作初始預設。卡片連結使用根網域的 `/sara/`、`/l390/`、`/home/` 前綴。
 
 儀表板與歸檔規則（Kevin 2026-09-30 拍板；歸檔只分類，不刪 session 或資料）：
 

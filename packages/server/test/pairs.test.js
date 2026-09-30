@@ -33,7 +33,7 @@ import {
   parsePairsState,
   pairsStateUrl,
 } from "../static/pairs.js";
-import { hubPairsRedirect } from "../dist/base-path.js";
+import { hubHostUrl, parseHubHost, rewriteHubSessionHref } from "../static/hub-state.js";
 
 function assistant({ text = "", tokens = undefined, created = 1000, completed = 1000, error = undefined, flat = false } = {}) {
   // flat:true emits the real 2.x shape (no info wrapper).
@@ -343,13 +343,20 @@ test("pairs URL parses and serializes host/view state, with legacy view fallback
   assert.equal(pairsStateUrl({ host: "mac", view: "list" }, true, "/sara"), "/sara/pairs?view=list");
 });
 
-test("only the canonical root host redirects /hub to /pairs", () => {
-  assert.equal(hubPairsRedirect({ host: "opencode.sisihome.org" }, "/hub"), "/pairs");
-  assert.equal(hubPairsRedirect({ host: "127.0.0.1:9223", "x-forwarded-host": "opencode.sisihome.org" }, "/hub/"), "/pairs");
-  assert.equal(hubPairsRedirect({ host: "opencode.sisihome.org", "x-forwarded-prefix": "/sara" }, "/hub"), undefined);
-  assert.equal(hubPairsRedirect({ host: "opencode.sisihome.org", "x-forwarded-prefix": "/unexpected" }, "/hub"), undefined);
-  assert.equal(hubPairsRedirect({ host: "opencode-sara.sisihome.org" }, "/hub"), undefined);
-  assert.equal(hubPairsRedirect({ host: "opencode.sisihome.org" }, "/hub/child"), undefined);
+test("Hub host state parses URL before storage and serializes a shareable URL", () => {
+  assert.equal(parseHubHost("?host=l390", "home"), "l390");
+  assert.equal(parseHubHost("?host=invalid", "home"), "home");
+  assert.equal(parseHubHost("", "invalid"), "mac");
+  assert.equal(parseHubHost("?host=mac", "home"), "mac");
+  assert.equal(hubHostUrl("l390"), "/?host=l390");
+  assert.equal(hubHostUrl("invalid"), "/?host=mac");
+});
+
+test("Hub session links rewrite to the selected root-domain machine prefix", () => {
+  assert.equal(rewriteHubSessionHref("/sara/c/session/ses_mac", "/sara"), "/sara/c/session/ses_mac");
+  assert.equal(rewriteHubSessionHref("https://opencode-l390.sisihome.org/server/abc/session/ses_l390", "/l390"), "/l390/server/abc/session/ses_l390");
+  assert.equal(rewriteHubSessionHref("/c/session/ses_x?from=hub#chat", "/home"), "/home/c/session/ses_x?from=hub#chat");
+  assert.equal(rewriteHubSessionHref("/remote-sessions", "/sara"), undefined);
 });
 
 test("aggregate cards stay under the matching root-domain machine prefix", () => {
@@ -424,6 +431,7 @@ test("pairs-rules.js serves the single dashboard rule set", async () => {
   const { readFile } = await import("node:fs/promises");
   const assets = await readFile(new URL("../src/compact/static-assets.ts", import.meta.url), "utf8");
   assert.match(assets, /"pairs-rules\.js": "application\/javascript; charset=utf-8"/);
+  assert.match(assets, /"hub-state\.js": "application\/javascript; charset=utf-8"/);
 });
 
 test("sessions badge counts dashboard-visible pairs client-side", async () => {
@@ -438,7 +446,9 @@ test("sessions badge counts dashboard-visible pairs client-side", async () => {
   assert.match(page, /visiblePairs\(pairs, "dashboard"\)\.length/);
   assert.match(page, /fetch\("\$\{basePath\}\/api\/pairs"/);
   // /pairs header links back.
-  assert.match(source, /path\("\/remote-sessions"\)/);
+  assert.match(source, /href="\/\?host=mac/);
+  const pairsClient = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
+  assert.match(pairsClient, /sessionsLink\.href = hubHostUrl\(selectedHost\)/);
 });
 
 test("api pairs allows cross-origin GET for the aggregate page", async () => {
@@ -472,12 +482,25 @@ test("pairs aggregate mode merges remotes with host tags", async () => {
   assert.match(client, /location\.hostname === "opencode\.sisihome\.org"/);
 });
 
-test("/hub applies the host-scoped redirect before serving the Hub shell", async () => {
+test("/hub serves the Hub shell without a host-scoped /pairs redirect", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
-  assert.match(source, /const hubRedirect = hubPairsRedirect\(req\.headers, requestPath\)/);
-  assert.match(source, /res\.writeHead\(302, \{ Location: hubRedirect, "Cache-Control": "no-store" \}\)/);
-  assert.ok(source.indexOf("if (hubRedirect)") < source.indexOf('handleCompactStatic(Object.assign(req, { url: "/c/static/hub.html" })'));
+  assert.doesNotMatch(source, /hubPairsRedirect|hubRedirect/);
+  assert.match(source, /handleCompactStatic\(Object\.assign\(req, \{ url: "\/c\/static\/hub\.html" \}\), res\)/);
+});
+
+test("Hub exposes shareable tabs, a /pairs link, and top-level prefixed session navigation", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const hub = await readFile(new URL("../static/hub.html", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  assert.match(hub, /href="\/pairs">夥伴<\/a>/);
+  assert.match(hub, /history\.pushState\(null, "", hubHostUrl\(active\)\)/);
+  assert.match(hub, /parseHubHost\(location\.search, load\(KEY_ACTIVE, "mac"\)\)/);
+  assert.match(hub, /frameDocument\?\.addEventListener\("click"/);
+  assert.match(source, /href="\$\{nativePath\}" target="_top"/);
+  assert.match(source, /href="\$\{compactPath\}" target="_top"/);
+  assert.match(hub, /#tabs \{[^}]*min-width: 0;[^}]*overflow-x: auto/s);
+  assert.match(hub, /body \{[^}]*overflow: hidden/s);
 });
 
 test("pairs cards show owner, model, and labelled context bar", async () => {

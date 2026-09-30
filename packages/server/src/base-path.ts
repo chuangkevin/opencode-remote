@@ -8,21 +8,6 @@ export const FORWARDED_PREFIXES = Object.freeze({
 
 export type Machine = keyof typeof FORWARDED_PREFIXES;
 
-export function hubPairsRedirect(
-  headers: Partial<Pick<http.IncomingHttpHeaders, "host" | "x-forwarded-host" | "x-forwarded-prefix">>,
-  path: string,
-): string | undefined {
-  if (path !== "/hub" && path !== "/hub/") return undefined;
-  const forwardedPrefix = headers["x-forwarded-prefix"];
-  if (forwardedPrefix) return undefined;
-  const hosts = [headers.host, headers["x-forwarded-host"]]
-    .flatMap((value) => (Array.isArray(value) ? value : [value]))
-    .filter((value): value is string => typeof value === "string")
-    .flatMap((value) => value.split(","))
-    .map((value) => value.trim().toLowerCase().replace(/:\d+$/, ""));
-  return hosts.includes("opencode.sisihome.org") ? "/pairs" : undefined;
-}
-
 const MACHINE_ORIGINS: Record<Machine, string> = Object.freeze({
   sara: "https://opencode-sara.sisihome.org",
   l390: "https://opencode-l390.sisihome.org",

@@ -32,7 +32,7 @@ import { sendHtml } from "./html-response.js";
 import { shouldCompressUpstream } from "./proxy-compress.js";
 import { rejectPromptWhileQuiesced } from "./update-quiesce.js";
 import { resolveOpenCodeCommand } from "./opencode-command.js";
-import { cookieName, hubPairsRedirect, machineOrigin, prefixPath, requestBasePath } from "./base-path.js";
+import { cookieName, machineOrigin, prefixPath, requestBasePath } from "./base-path.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -1015,9 +1015,7 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
 
     const items = ordered.map((session) => {
       const nativePath = origin
-        ? basePath
-          ? `${origin}/server/${encodeServerKey(origin)}/session/${session.id}`
-          : `/server/${encodeServerKey(origin)}/session/${session.id}`
+        ? path(`/server/${encodeServerKey(origin)}/session/${session.id}`)
         : path(`/c/session/${session.id}`);
       const compactPath = path(`/c/session/${session.id}`);
       const title = session.title || session.slug || session.id;
@@ -1029,11 +1027,11 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
         : "";
       return `<div class="session${pinned ? " is-pinned" : ""}" data-session-id="${session.id}"${directoryAttribute}>
         <button class="${pinClass}" type="button" data-pin-toggle="${session.id}" data-pinned="${pinned ? "1" : "0"}" aria-label="${pinLabel}" title="${pinLabel}">📌</button>
-        <a class="session-link" href="${nativePath}">
+        <a class="session-link" href="${nativePath}" target="_top">
           <strong><span class="running-indicator" hidden title="執行中" aria-label="執行中" role="img"></span><span class="session-title">${escapeHtml(title)}</span></strong>
           <small>${escapeHtml(formatTime(session.time.updated))}</small>
         </a>
-        <a class="compact-btn" href="${compactPath}" title="開啟 compact 視圖">Compact</a>
+        <a class="compact-btn" href="${compactPath}" target="_top" title="開啟 compact 視圖">Compact</a>
       </div>`;
     }).join("");
 
@@ -1329,7 +1327,7 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
         <body data-view="dashboard">
           <header>
             <h1>夥伴 Sessions</h1>
-            <a class="pairs-btn" href="${path("/remote-sessions")}" style="display: inline-flex; align-items: center; min-height: 44px; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 999px; background: var(--surface); color: var(--text); border: 1px solid var(--border); text-decoration: none; line-height: 1; white-space: nowrap;">工作階段</a>
+            <a class="pairs-btn" href="/?host=mac" style="display: inline-flex; align-items: center; min-height: 44px; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 999px; background: var(--surface); color: var(--text); border: 1px solid var(--border); text-decoration: none; line-height: 1; white-space: nowrap;">工作階段</a>
             <div class="view-toggle" role="group" aria-label="檢視切換">
               <button type="button" data-view-btn="dashboard" aria-pressed="true">儀表板</button>
               <button type="button" data-view-btn="list" aria-pressed="false">列表</button>
@@ -1482,12 +1480,6 @@ const server = http.createServer((req, res) => {
   }
 
   if ((req.method === "GET" || req.method === "HEAD") && (req.url === "/hub" || req.url === "/hub/")) {
-    const hubRedirect = hubPairsRedirect(req.headers, requestPath);
-    if (hubRedirect) {
-      res.writeHead(302, { Location: hubRedirect, "Cache-Control": "no-store" });
-      res.end();
-      return;
-    }
     handleCompactStatic(Object.assign(req, { url: "/c/static/hub.html" }), res);
     return;
   }
@@ -2197,7 +2189,7 @@ async function main(): Promise<void> {
       server.listen(config.port, config.bindAddress, () => {
         server.off("error", onStartupError);
         console.log(`[opencode-remote] proxy listening on http://${config.bindAddress}:${config.port}`);
-        console.log("[opencode-remote] → redirecting / to /remote-sessions");
+        console.log("[opencode-remote] → serving root Hub through /hub rewrite; / redirects to /remote-sessions");
         console.log(`[opencode-remote] → redirecting /latest to ${activeSessionPath}`);
         resolve();
       });

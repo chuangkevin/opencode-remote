@@ -23,7 +23,7 @@
   body { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
   header { flex: 0 0 auto; display: flex; align-items: stretch; gap: 4px; padding: 6px 8px 0;
     padding-top: calc(6px + env(safe-area-inset-top)); border-bottom: 1px solid var(--line); background: var(--panel); }
-  #tabs { flex: 1 1 auto; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  #tabs { flex: 1 1 auto; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
   #tabs::-webkit-scrollbar { display: none; }
   .tab { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; height: var(--tab-h); padding: 0 14px;
     border: 1px solid transparent; border-bottom: none; border-radius: 10px 10px 0 0; background: transparent;
@@ -34,6 +34,7 @@
   .iconbtn { flex: 0 0 auto; width: var(--tab-h); height: var(--tab-h); border: none; background: transparent; color: var(--muted);
     font-size: 20px; cursor: pointer; border-radius: 10px; -webkit-tap-highlight-color: transparent; }
   .iconbtn:active { background: var(--accent-bg); }
+  .partner-link { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; min-height: var(--tab-h); padding: 0 12px; border-radius: 10px 10px 0 0; color: var(--accent); background: var(--accent-bg); border: 1px solid var(--line); text-decoration: none; white-space: nowrap; }
   main { flex: 1 1 auto; position: relative; min-height: 0; }
   iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); display: none; }
   iframe.active { display: block; }
@@ -62,6 +63,7 @@
 <body>
 <header>
   <div id="tabs" role="tablist"></div>
+  <a class="partner-link" href="/pairs">夥伴</a>
   <button class="iconbtn" id="reloadBtn" title="重新載入這個分頁" aria-label="重新載入">↻</button>
   <button class="iconbtn" id="settingsBtn" title="設定" aria-label="設定">⚙</button>
 </header>
@@ -84,7 +86,8 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+import { hubHostUrl, parseHubHost, rewriteHubSessionHref } from "/c/static/hub-state.js";
 (() => {
   const base = (() => { const value = document.querySelector('meta[name="opencode-base"]')?.content || ""; return /^\/(sara|l390|home)$/.test(value) ? value : ""; })();
   const ownKey = (key) => `${key}${base ? `:${base.slice(1)}` : ""}`;
@@ -113,7 +116,7 @@
     if (JSON.stringify(migrated) !== JSON.stringify(remotes)) { remotes = migrated; save(KEY_REMOTES, remotes); }
   }
   if (!Array.isArray(remotes) || remotes.length === 0) remotes = DEFAULTS.map((r) => ({ ...r }));
-  let active = load(KEY_ACTIVE, null);
+  let active = parseHubHost(location.search, load(KEY_ACTIVE, "mac"));
   const frames = new Map(); // id → iframe
   const lastDot = new Map(); // id → { cls, title }: survives tab re-render
 
@@ -127,6 +130,20 @@
     f.title = r.name;
     f.src = normalizeUrl(r.url) + "/remote-sessions";
     f.setAttribute("allow", "clipboard-read; clipboard-write");
+    f.addEventListener("load", () => {
+      try {
+        const frameDocument = f.contentDocument;
+        frameDocument?.addEventListener("click", (event) => {
+          const anchor = event.target?.closest?.("a[href]");
+          if (!anchor) return;
+          const prefix = r.id === "mac" ? "/sara" : (["/l390", "/home"].includes(`/${r.id}`) ? `/${r.id}` : "");
+          const destination = rewriteHubSessionHref(anchor.href, prefix);
+          if (!destination) return;
+          event.preventDefault();
+          window.location.assign(destination);
+        }, true);
+      } catch { /* a custom remote may be cross-origin */ }
+    });
     mainEl.appendChild(f);
     frames.set(r.id, f);
     return f;
@@ -143,7 +160,11 @@
       b.setAttribute("role", "tab");
       b.dataset.id = r.id;
       b.innerHTML = `<span class="dot" data-dot="${r.id}"></span><span>${escapeHtml(r.name)}</span>`;
-      b.addEventListener("click", () => { active = r.id; render(); });
+      b.addEventListener("click", () => {
+        active = r.id;
+        if (["mac", "l390", "home"].includes(active)) history.pushState(null, "", hubHostUrl(active));
+        render();
+      });
       tabsEl.appendChild(b);
       // Rebuilt buttons lose their dot state; re-apply the last known one
       // immediately instead of waiting for the next 20s refreshStatus tick.
