@@ -142,7 +142,7 @@ test("buildPairsList assembles fields and isolates per-session failures", async 
   }
 });
 
-test("dashboard shows busy/ask/error always; idle 2h; accepted 30m", () => {
+test("dashboard shows busy/ask; idle 2h; accepted 30m; errors are archived", () => {
   const now = 1_000_000_000;
   const H = 3600_000;
   const M = 60_000;
@@ -155,7 +155,7 @@ test("dashboard shows busy/ask/error always; idle 2h; accepted 30m", () => {
   const accepted40m = { id: "acc40", status: "idle", lastActivityAt: now - 40 * M, acceptedAt: now - 50 * M };
   assert.equal(dashboardVisible(busyIdle10h, now), true);
   assert.equal(dashboardVisible(askIdle10h, now), true);
-  assert.equal(dashboardVisible(errorUnaccepted10h, now), true);
+  assert.equal(dashboardVisible(errorUnaccepted10h, now), false);
   assert.equal(dashboardVisible(idle1h, now), true);
   assert.equal(dashboardVisible(idle3h, now), false);
   assert.equal(dashboardVisible(accepted20m, now), true);
@@ -164,27 +164,43 @@ test("dashboard shows busy/ask/error always; idle 2h; accepted 30m", () => {
   assert.equal(dashboardVisible({ id: "x", status: "busy", lastActivityAt: now - 10 * H, acceptedAt: now - 10 * H }, now), true);
   assert.deepEqual(
     visiblePairs([accepted40m, idle3h, idle1h, accepted20m, errorUnaccepted10h, askIdle10h, busyIdle10h], "dashboard", now).map((p) => p.id),
-    ["acc20", "idle1", "err", "ask", "busy"],
+    ["acc20", "idle1", "ask", "busy"],
   );
   // list view excludes archived pairs, but keeps newest-first order.
   assert.deepEqual(
     visiblePairs([accepted40m, idle3h, idle1h], "list", now).map((p) => p.id),
-    ["acc40", "idle1", "idle3"],
+    ["acc40", "idle1"],
   );
 });
 
-test("pairs archive eligible statuses strictly after 24 hours", () => {
+test("pairs archive errors immediately and idle pairs after 2 hours", () => {
   const now = 1_000_000_000;
-  const day = 24 * 3600_000;
-  const atBoundary = { id: "boundary", status: "idle", lastActivityAt: now - day };
-  const afterBoundary = { id: "after", status: "idle", lastActivityAt: now - day - 1 };
-  assert.equal(archivedPair(atBoundary, now), false);
-  assert.equal(archivedPair(afterBoundary, now), true);
-  assert.equal(archivedPair({ ...afterBoundary, status: "error" }, now), true);
-  assert.equal(archivedPair({ ...afterBoundary, acceptedAt: now - day }, now), true);
-  assert.equal(archivedPair({ ...afterBoundary, status: "busy" }, now), false);
-  assert.equal(archivedPair({ ...afterBoundary, status: "ask" }, now), false);
-  assert.deepEqual(visiblePairs([afterBoundary, atBoundary], "archived", now).map((p) => p.id), ["after"]);
+  const hour = 3600_000;
+  const idle2h01 = { id: "idle2h01", status: "idle", lastActivityAt: now - 2 * hour - 1 };
+  const idle1h59 = { id: "idle1h59", status: "idle", lastActivityAt: now - 2 * hour + 1 };
+  assert.equal(archivedPair({ id: "error", status: "error", lastActivityAt: now }, now), true);
+  assert.equal(archivedPair(idle2h01, now), true);
+  assert.equal(archivedPair(idle1h59, now), false);
+  assert.equal(archivedPair({ ...idle2h01, status: "busy" }, now), false);
+  assert.equal(archivedPair({ ...idle2h01, status: "ask" }, now), false);
+  assert.deepEqual(visiblePairs([idle2h01, idle1h59], "archived", now).map((p) => p.id), ["idle2h01"]);
+});
+
+test("buildPairsList skips expensive message/context reads for stale idle sessions", async () => {
+  const now = 1_000_000_000;
+  let messages = 0;
+  let contexts = 0;
+  const pairs = await buildPairsList({
+    listPairSessions: async () => [{ id: "ses_old", title: "pair·o·old", time: { updated: now - 2 * 3600_000 - 1 } }],
+    fetchBusySet: async () => new Set(),
+    fetchForm: async () => [],
+    fetchMessages: async () => { messages += 1; return []; },
+    fetchContextLimit: async () => { contexts += 1; return 100; },
+  }, { includeArchived: true, now });
+  assert.equal(pairs.length, 1);
+  assert.equal(pairs[0].lastActivityAt, now - 2 * 3600_000 - 1);
+  assert.equal(messages, 0);
+  assert.equal(contexts, 0);
 });
 
 test("partnerLabel identifies Pi and defaults legacy pairs to OpenCode", () => {
@@ -301,6 +317,8 @@ test("api pairs allows cross-origin GET for the aggregate page", async () => {
   const pairsBlock = source.slice(source.indexOf("async function handleListPairs"), source.indexOf("const PAIR_ACCEPT_PATH_RE"));
   assert.match(pairsBlock, /Access-Control-Allow-Origin/);
   assert.match(source, /req\.url === "\/api\/pairs"\)/);
+  assert.match(source, /searchParams\.get\("archived"\) === "1"/);
+  assert.match(source, /includeArchived: archived/);
   assert.match(source, /\/api\/session\/active" \|\| req\.url === "\/api\/pairs"/);
 });
 

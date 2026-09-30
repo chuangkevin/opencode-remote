@@ -1153,15 +1153,20 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
   }
 }
 
-async function handleListPairs(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+async function handleListPairs(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
-    const { buildPairsList } = await import("./compact/pairs.js");
+    const { archivedPair, buildPairsList } = await import("./compact/pairs.js");
     const { listPiPairs } = await import("./compact/pi-pairs.js");
+    const archived = new URL(req.url ?? "/api/pairs", "http://localhost").searchParams.get("archived") === "1";
+    const now = Date.now();
     const [openPairs, piPairs] = await Promise.all([
-      buildPairsList(),
+      buildPairsList({}, { includeArchived: archived, now }),
       listPiPairs().catch(() => []),
     ]);
-    const pairs = [...openPairs, ...piPairs].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+    const pairs = [...openPairs, ...piPairs]
+      .filter((pair) => archivedPair(pair, now) === archived)
+      .map((pair) => ({ ...pair, archived: archivedPair(pair, now) }))
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
@@ -1440,7 +1445,18 @@ const server = http.createServer((req, res) => {
   // /api/session/active on every remote from another origin; answer its CORS
   // preflight and mark those read-only endpoints as cross-origin readable.
   // /api/pairs is also read-only GET (accept POST/DELETE stay same-origin).
+  const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
   if (req.method === "OPTIONS" && (req.url === "/remote-health" || req.url === "/api/session/active" || req.url === "/api/pairs")) {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Headers": "content-type",
+      "Access-Control-Max-Age": "600",
+    });
+    res.end();
+    return;
+  }
+  if (req.method === "OPTIONS" && requestPath === "/api/pairs") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -1552,6 +1568,10 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/api/pairs") {
+    void handleListPairs(req, res);
+    return;
+  }
+  if (req.method === "GET" && new URL(req.url ?? "/", "http://localhost").pathname === "/api/pairs") {
     void handleListPairs(req, res);
     return;
   }

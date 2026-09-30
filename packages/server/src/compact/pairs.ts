@@ -10,6 +10,12 @@ import { join } from "node:path";
 import { config as appConfig } from "../config.js";
 import { unwrap, upstreamFetch, upstreamJson } from "../upstream.js";
 import { normalizeSession } from "../session.js";
+// The browser asset is the shared source of truth for archive/dashboard rules.
+// @ts-expect-error static assets do not have a TypeScript declaration.
+import { archivedPair, PAIR_ARCHIVE_MS } from "../../static/pairs-rules.js";
+
+// @ts-expect-error static assets do not have a TypeScript declaration.
+export { archivedPair } from "../../static/pairs-rules.js";
 
 export const PAIR_TITLE_PREFIX = "pair·";
 const SESSION_ID_RE = /^ses_[A-Za-z0-9]+$/;
@@ -129,6 +135,7 @@ export type PairSessionLite = {
   id: string;
   title: string;
   model?: { providerID?: string; id?: string; modelID?: string; variant?: string };
+  time?: { updated?: number };
 };
 
 export type ChatMessage = {
@@ -208,6 +215,7 @@ export function computePairInfo(
     messages: ChatMessage[];
     contextLimit?: number;
     acceptedAt?: number;
+    lastActivityAt?: number;
   },
 ): PairInfo {
   const parsed = parsePairTitle(session.title) ?? { owner: "", task: "" };
@@ -219,7 +227,7 @@ export function computePairInfo(
   else if (ctx.formPending) status = "ask";
   else if (newestAssistant && messageError(newestAssistant)) status = "error";
 
-  let lastActivityAt = 0;
+  let lastActivityAt = ctx.lastActivityAt ?? 0;
   for (const m of ctx.messages) lastActivityAt = Math.max(lastActivityAt, messageTime(m));
 
   let contextPct: number | null = null;
@@ -272,12 +280,17 @@ export type PairsDeps = {
   messageLimit?: number;
 };
 
+export type BuildPairsOptions = {
+  includeArchived?: boolean;
+  now?: number;
+};
+
 async function defaultListPairSessions(): Promise<PairSessionLite[]> {
   const list = await upstreamJson<any[]>(`/session?limit=200&order=desc&parentID=null`);
   return (Array.isArray(list) ? list : [])
     .map((raw) => normalizeSession(raw))
     .filter((s) => isPairSession(s))
-    .map((s) => ({ id: s.id, title: s.title, model: s.model as PairSessionLite["model"] }));
+    .map((s) => ({ id: s.id, title: s.title, model: s.model as PairSessionLite["model"], time: s.time }));
 }
 
 async function defaultFetchBusySet(): Promise<Set<string>> {
@@ -334,7 +347,10 @@ async function defaultFetchContextLimit(providerID: string, modelID: string): Pr
   }
 }
 
-export async function buildPairsList(deps: PairsDeps = {}): Promise<PairInfo[]> {
+export async function buildPairsList(deps: PairsDeps = {}, options: BuildPairsOptions = {}): Promise<PairInfo[]> {
+  const now = options.now ?? Date.now();
+  const filterArchive = options.includeArchived !== undefined;
+  const includeArchived = options.includeArchived ?? false;
   const sessions = await (deps.listPairSessions ?? defaultListPairSessions)();
   const messageLimit = deps.messageLimit ?? 40;
   const [busySet, accepted] = await Promise.all([
@@ -348,6 +364,24 @@ export async function buildPairsList(deps: PairsDeps = {}): Promise<PairInfo[]> 
 
   const settled = await Promise.allSettled(
     sessions.map(async (session): Promise<PairInfo> => {
+      const sessionLastActivity = session.time?.updated ?? 0;
+      const staleNonBusy = !busySet.has(session.id)
+        && sessionLastActivity > 0
+        && now - sessionLastActivity > PAIR_ARCHIVE_MS;
+      // Old non-busy sessions cannot become visible unless they have a pending
+      // question. Avoid message/context fan-out for the common archived case.
+      if (staleNonBusy) {
+        const formResult = await fetchForm(session.id).catch(() => []);
+        if (formResult.length === 0) {
+          return computePairInfo(session, {
+            busy: false,
+            formPending: false,
+            messages: [],
+            acceptedAt: accepted[session.id],
+            lastActivityAt: sessionLastActivity,
+          });
+        }
+      }
       const [formResult, messagesResult] = await Promise.allSettled([
         fetchForm(session.id),
         fetchMessages(session.id),
@@ -376,5 +410,5 @@ export async function buildPairsList(deps: PairsDeps = {}): Promise<PairInfo[]> 
   }
   // Newest activity first.
   pairs.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-  return pairs;
+  return filterArchive ? pairs.filter((pair) => includeArchived === archivedPair(pair, now)) : pairs;
 }

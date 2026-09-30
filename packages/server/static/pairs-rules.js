@@ -6,20 +6,19 @@
 //
 // Dashboard shows pairs that still need attention:
 //   1. status busy / ask -> always visible
-//   2. accepted (acceptedAt set) -> visible only if active within 30 min
-//   3. unaccepted error -> always visible
-//   4. other unaccepted (idle) -> visible only if active within 2 hours
+//   2. error -> archived immediately
+//   3. non-busy/non-ask idle -> archived after 2 hours
+//   4. accepted -> visible only if active within 30 min (unless archived)
 // The list view shows everything newest first.
 
 export const DASHBOARD_ACTIVE_MS = 30 * 60 * 1000;
 export const DASHBOARD_IDLE_MS = 2 * 60 * 60 * 1000;
-export const PAIR_ARCHIVE_MS = 24 * 60 * 60 * 1000;
+export const PAIR_ARCHIVE_MS = DASHBOARD_IDLE_MS;
 
 export function archivedPair(pair, now = Date.now()) {
   if (pair.status === "busy" || pair.status === "ask") return false;
-  const eligible = pair.status === "error" || pair.status === "idle"
-    || (pair.acceptedAt !== undefined && pair.acceptedAt !== null);
-  return eligible && now - pair.lastActivityAt > PAIR_ARCHIVE_MS;
+  if (pair.status === "error") return true;
+  return now - pair.lastActivityAt > PAIR_ARCHIVE_MS;
 }
 
 export function dashboardVisible(pair, now = Date.now()) {

@@ -300,7 +300,9 @@ if (typeof document !== "undefined") {
   async function poll() {
     try {
       if (!AGGREGATE) {
-        const res = await fetch(ownPath("/api/pairs"));
+        const res = view === "archived"
+          ? await fetch(ownPath("/api/pairs?archived=1"), { cache: "no-store" })
+          : await fetch(ownPath("/api/pairs"));
         if (!res.ok) return;
         const pairs = await res.json();
         if (!Array.isArray(pairs)) return;
@@ -311,7 +313,8 @@ if (typeof document !== "undefined") {
       // Aggregate: fan out to every remote, merge, keep the rest on failure.
       const results = await Promise.allSettled(
         remotes.map(async (r) => {
-          const res = await fetch(r.url.replace(/\/+$/, "") + "/api/pairs", { cache: "no-store" });
+          const query = view === "archived" ? "?archived=1" : "";
+          const res = await fetch(r.url.replace(/\/+$/, "") + `/api/pairs${query}`, { cache: "no-store" });
           if (!res.ok) throw new Error(`GET ${r.url}/api/pairs returned ${res.status}`);
           const list = await res.json();
           if (!Array.isArray(list)) throw new Error("invalid pairs payload");
@@ -404,7 +407,7 @@ if (typeof document !== "undefined") {
       applyView();
       lastRenderedSig = new Map();
       grid.innerHTML = "";
-      render([...pairsById.values()]);
+      void poll();
     });
   }
 

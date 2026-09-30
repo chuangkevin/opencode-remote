@@ -340,20 +340,21 @@ HTML + 單一 vanilla ES module，無 build step。
 | `GET /c/session/:id/latest-user-model` | server 端分頁掃描最新 user message，只回 model metadata |
 | `GET /c/session-status?directory=<absolute-path>` | 僅接受 `OPENCODE_DIRECTORY` 或其子目錄，合併 service mode 共用 upstream 與 macOS Desktop sidecar 的 session status；一般 UI 任一來源失敗時使用另一來源，`strict=1` 則要求 Remote 與所有有效 live Desktop 來源都成功 |
 | `GET /pairs` | 夥伴 session 頁（儀表板＋列表，見「/pairs 頁」）|
-| `GET /api/pairs` | 夥伴 session JSON（唯讀，帶 `Access-Control-Allow-Origin: *` 供彙總模式跨台讀）|
+| `GET /api/pairs` | 夥伴 session JSON（唯讀；預設只回未歸檔，`?archived=1` 只回已歸檔；帶 `Access-Control-Allow-Origin: *` 供彙總模式跨台讀）|
 | `POST /api/pairs/:id/accept` | 驗收標記（記 acceptedAt，存 `<OPENCODE_DIRECTORY>/.opencode-remote/pairs-accept.json`，原子寫檔）|
 | `DELETE /api/pairs/:id/accept` | 取消驗收 |
 
 ### /pairs 頁
 
-儀表板顯示規則（Kevin 2026-09-24 拍板；列表檢視照舊列全部）：
+儀表板與歸檔規則（Kevin 2026-09-30 拍板；歸檔只分類，不刪 session 或資料）：
 
 1. status 是 busy 或 ask → 永遠顯示
 2. 已驗收（acceptedAt 有值）→ lastActivityAt 在 30 分鐘內才顯示
-3. 未驗收且 status 是 error → 永遠顯示
-4. 未驗收的其他卡（閒置）→ lastActivityAt 在 2 小時內才顯示
+3. status 是 error → 立刻歸檔
+4. 非 busy／ask／error 的卡閒置超過 2 小時 → 歸檔
+5. `busy`／`ask` 永遠不歸檔；已驗收也套用 2 小時歸檔，儀表板仍取 30 分鐘較短顯示規則
 
-常數：`DASHBOARD_ACTIVE_MS`（30 分鐘，已驗收用）、`DASHBOARD_IDLE_MS`（2 小時，未驗收閒置用），見 `packages/server/static/pairs.js` 的 `dashboardVisible`。
+常數集中在 `packages/server/static/pairs-rules.js`；`DASHBOARD_ACTIVE_MS`（30 分鐘）與 `DASHBOARD_IDLE_MS`／`PAIR_ARCHIVE_MS`（2 小時）由前端與 server 共用。儀表板與列表首屏呼叫未歸檔 API；點 `已歸檔` 才呼叫 `GET /api/pairs?archived=1`。
 | `GET /c/static/<file>` | 服 `compact.js` / `compact.css` / `theme.js` / `marked.min.js`（白名單檢查）|
 | `POST /c/new-session` | 新建 session（**不帶 title** 讓 OpenCode 自動命名）+ 套 trust ruleset + 303 redirect |
 | `GET /c/pins` | 列出已釘選的 sessionID（從 `<OPENCODE_DIRECTORY>/.opencode-remote/pins.json` 讀）|
