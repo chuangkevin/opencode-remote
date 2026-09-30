@@ -268,6 +268,7 @@ echo "Verifying runtime allowlist covers every relative import..."
 import pathlib, re, subprocess, sys
 
 archive, dist_dir = sys.argv[1], pathlib.Path(sys.argv[2]).resolve()
+server_dir = dist_dir.parent
 packed = set(subprocess.run(["/usr/bin/tar", "-tf", archive],
                             capture_output=True, text=True, check=True).stdout.split())
 missing = []
@@ -275,7 +276,16 @@ for js in dist_dir.rglob("*.js"):
     body = js.read_text(encoding="utf-8", errors="replace")
     for spec in re.findall(r'from\s+"(\.{1,2}/[^"]+)"', body):
         target = (js.parent / spec).resolve()
-        rel = "packages/server/dist/" + target.relative_to(dist_dir).as_posix()
+        if target.is_relative_to(dist_dir):
+            rel = "packages/server/dist/" + target.relative_to(dist_dir).as_posix()
+        elif target.is_relative_to(server_dir):
+            # Runtime assets intentionally live beside dist and are packed by
+            # the explicit packages/server/static allowlist entry.
+            rel = "packages/server/" + target.relative_to(server_dir).as_posix()
+        else:
+            missing.append("%s imports %s -> %s outside packages/server"
+                           % (js.relative_to(dist_dir), spec, target))
+            continue
         if rel not in packed:
             missing.append("%s imports %s -> %s not packed"
                            % (js.relative_to(dist_dir), spec, rel))
