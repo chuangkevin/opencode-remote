@@ -32,7 +32,7 @@ import { sendHtml } from "./html-response.js";
 import { shouldCompressUpstream } from "./proxy-compress.js";
 import { rejectPromptWhileQuiesced } from "./update-quiesce.js";
 import { resolveOpenCodeCommand } from "./opencode-command.js";
-import { cookieName, machineOrigin, prefixPath, requestBasePath } from "./base-path.js";
+import { cookieName, isHubRequest, machineOrigin, prefixPath, requestBasePath } from "./base-path.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -1479,7 +1479,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if ((req.method === "GET" || req.method === "HEAD") && (req.url === "/hub" || req.url === "/hub/")) {
+  if ((req.method === "GET" || req.method === "HEAD") && isHubRequest(req.url)) {
     handleCompactStatic(Object.assign(req, { url: "/c/static/hub.html" }), res);
     return;
   }

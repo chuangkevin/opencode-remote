@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   FORWARDED_PREFIXES,
   cookieName,
+  isHubRequest,
   machineForBasePath,
   machineOrigin,
   prefixPath,
@@ -13,6 +14,15 @@ import { getBasePath, migrateRemoteUrl } from "../static/pairs.js";
 import { renderCompactShell } from "../dist/compact/shell.js";
 
 const request = (prefix) => ({ headers: prefix === undefined ? {} : { "x-forwarded-prefix": prefix } });
+
+test("Hub route matches /hub pathname regardless of query string or trailing slash", () => {
+  assert.equal(isHubRequest("/hub?host=l390"), true);
+  assert.equal(isHubRequest("/hub"), true);
+  assert.equal(isHubRequest("/hub/"), true);
+  assert.equal(isHubRequest("/hub/?host=home"), true);
+  assert.equal(isHubRequest("/hub/child?host=l390"), false);
+  assert.equal(isHubRequest(undefined), false);
+});
 
 test("only the allowlisted forwarded prefixes are accepted", () => {
   assert.deepEqual(FORWARDED_PREFIXES, { sara: "/sara", l390: "/l390", home: "/home" });

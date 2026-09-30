@@ -486,7 +486,10 @@ test("/hub serves the Hub shell without a host-scoped /pairs redirect", async ()
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /hubPairsRedirect|hubRedirect/);
+  assert.match(source, /isHubRequest\(req\.url\)/);
   assert.match(source, /handleCompactStatic\(Object\.assign\(req, \{ url: "\/c\/static\/hub\.html" \}\), res\)/);
+  // /pairs already dispatches from the parsed pathname, so query state is accepted.
+  assert.match(source, /new URL\(req\.url \?\? "\/pairs", "http:\/\/localhost"\)\.pathname === "\/pairs"/);
 });
 
 test("Hub exposes shareable tabs, a /pairs link, and top-level prefixed session navigation", async () => {

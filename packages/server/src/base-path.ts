@@ -8,6 +8,16 @@ export const FORWARDED_PREFIXES = Object.freeze({
 
 export type Machine = keyof typeof FORWARDED_PREFIXES;
 
+export function isHubRequest(url: string | undefined): boolean {
+  if (typeof url !== "string") return false;
+  try {
+    const pathname = new URL(url, "http://localhost").pathname;
+    return pathname === "/hub" || pathname === "/hub/";
+  } catch {
+    return false;
+  }
+}
+
 const MACHINE_ORIGINS: Record<Machine, string> = Object.freeze({
   sara: "https://opencode-sara.sisihome.org",
   l390: "https://opencode-l390.sisihome.org",
