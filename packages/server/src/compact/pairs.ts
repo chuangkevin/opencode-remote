@@ -6,6 +6,7 @@
 // and assembling GET /api/pairs payloads.
 
 import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { config as appConfig } from "../config.js";
 import { unwrap, upstreamFetch, upstreamJson } from "../upstream.js";
@@ -19,6 +20,55 @@ export { archivedPair } from "../../static/pairs-rules.js";
 
 export const PAIR_TITLE_PREFIX = "pair·";
 const SESSION_ID_RE = /^ses_[A-Za-z0-9]+$/;
+const CLAUDE_SESSION_DIR = join(homedir(), "Library", "Application Support", "Claude", "claude-code-sessions");
+const CLAUDE_ARCHIVE_CACHE_MS = 30 * 1000;
+
+let claudeSessionDirOverride: string | null = null;
+let claudeArchiveCache: { expiresAt: number; owners: Set<string> } | null = null;
+
+/** Test hook: use a fake Claude session directory without reading the real one. */
+export function _setClaudeSessionDir(dir: string | null): void {
+  claudeSessionDirOverride = dir;
+  claudeArchiveCache = null;
+}
+
+async function listJsonFiles(dir: string): Promise<string[]> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...await listJsonFiles(path));
+    else if (entry.isFile() && entry.name.endsWith(".json")) files.push(path);
+  }
+  return files;
+}
+
+export async function getClaudeArchivedOwners(now = Date.now()): Promise<Set<string>> {
+  if (claudeArchiveCache && claudeArchiveCache.expiresAt > now) return new Set(claudeArchiveCache.owners);
+  const owners = new Set<string>();
+  const titleCounts = new Map<string, number>();
+  try {
+    const files = await listJsonFiles(claudeSessionDirOverride ?? CLAUDE_SESSION_DIR);
+    for (const file of files) {
+      try {
+        const data = JSON.parse(await fs.readFile(file, "utf8")) as { title?: unknown; isArchived?: unknown };
+        if (typeof data.title === "string" && data.title) {
+          titleCounts.set(data.title, (titleCounts.get(data.title) ?? 0) + 1);
+          if (data.isArchived === true) owners.add(data.title);
+        }
+      } catch {
+        // A malformed or unreadable Claude session must not affect /api/pairs.
+      }
+    }
+  } catch {
+    // Claude's local session store is optional (for example on L390).
+  }
+  for (const [title, count] of titleCounts) {
+    if (count !== 1) owners.delete(title);
+  }
+  claudeArchiveCache = { expiresAt: now + CLAUDE_ARCHIVE_CACHE_MS, owners };
+  return new Set(owners);
+}
 
 export function parsePairTitle(title: string): { owner: string; task: string } | undefined {
   if (!title.startsWith(PAIR_TITLE_PREFIX)) return undefined;
@@ -283,7 +333,14 @@ export type PairsDeps = {
 export type BuildPairsOptions = {
   includeArchived?: boolean;
   now?: number;
+  claudeArchivedOwners?: ReadonlySet<string>;
 };
+
+export function pairArchived(pair: Pick<PairInfo, "status" | "owner" | "lastActivityAt">, now = Date.now(), claudeArchivedOwners?: ReadonlySet<string>): boolean {
+  if (pair.status === "busy" || pair.status === "ask") return false;
+  if (claudeArchivedOwners?.has(pair.owner)) return true;
+  return archivedPair(pair, now);
+}
 
 async function defaultListPairSessions(): Promise<PairSessionLite[]> {
   const list = await upstreamJson<any[]>(`/session?limit=200&order=desc&parentID=null`);
@@ -351,6 +408,7 @@ export async function buildPairsList(deps: PairsDeps = {}, options: BuildPairsOp
   const now = options.now ?? Date.now();
   const filterArchive = options.includeArchived !== undefined;
   const includeArchived = options.includeArchived ?? false;
+  const claudeArchivedOwners = options.claudeArchivedOwners;
   const sessions = await (deps.listPairSessions ?? defaultListPairSessions)();
   const messageLimit = deps.messageLimit ?? 40;
   const [busySet, accepted] = await Promise.all([
@@ -410,5 +468,5 @@ export async function buildPairsList(deps: PairsDeps = {}, options: BuildPairsOp
   }
   // Newest activity first.
   pairs.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-  return filterArchive ? pairs.filter((pair) => includeArchived === archivedPair(pair, now)) : pairs;
+  return filterArchive ? pairs.filter((pair) => includeArchived === pairArchived(pair, now, claudeArchivedOwners)) : pairs;
 }

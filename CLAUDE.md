@@ -354,7 +354,7 @@ HTML + 單一 vanilla ES module，無 build step。
 4. 非 busy／ask／error 的卡閒置超過 2 小時 → 歸檔
 5. `busy`／`ask` 永遠不歸檔；已驗收也套用 2 小時歸檔，儀表板仍取 30 分鐘較短顯示規則
 
-常數集中在 `packages/server/static/pairs-rules.js`；`DASHBOARD_ACTIVE_MS`（30 分鐘）與 `DASHBOARD_IDLE_MS`／`PAIR_ARCHIVE_MS`（2 小時）由前端與 server 共用。儀表板與列表首屏呼叫未歸檔 API；點 `已歸檔` 才呼叫 `GET /api/pairs?archived=1`。
+常數集中在 `packages/server/static/pairs-rules.js`；`DASHBOARD_ACTIVE_MS`（30 分鐘）與 `DASHBOARD_IDLE_MS`／`PAIR_ARCHIVE_MS`（2 小時）由前端與 server 共用。儀表板與列表首屏呼叫未歸檔 API；點 `已歸檔` 才呼叫 `GET /api/pairs?archived=1`。根網域彙總頁對三台 remote 先到先畫；單台請求逾時 1.5 秒，失敗後 60 秒內不重打並顯示「連不上，只顯示其他台」。Mac proxy 另外唯讀掃描 Claude session JSON（30 秒快取）：唯一 `title` 對到且 `isArchived=true` 時歸檔該 owner；找不到、標題重複、格式錯或目錄不存在都不套用規則，`busy`／`ask` 仍不歸檔。
 | `GET /c/static/<file>` | 服 `compact.js` / `compact.css` / `theme.js` / `marked.min.js`（白名單檢查）|
 | `POST /c/new-session` | 新建 session（**不帶 title** 讓 OpenCode 自動命名）+ 套 trust ruleset + 303 redirect |
 | `GET /c/pins` | 列出已釘選的 sessionID（從 `<OPENCODE_DIRECTORY>/.opencode-remote/pins.json` 讀）|

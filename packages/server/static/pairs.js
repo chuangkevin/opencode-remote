@@ -8,6 +8,27 @@
 export { DASHBOARD_ACTIVE_MS, DASHBOARD_IDLE_MS, PAIR_ARCHIVE_MS, archivedPair, dashboardVisible, visiblePairs } from "./pairs-rules.js";
 import { visiblePairs } from "./pairs-rules.js";
 export const PAIRS_VIEW_KEY = "pairs-view";
+export const AGGREGATE_FETCH_TIMEOUT_MS = 1500;
+export const AGGREGATE_OFFLINE_COOLDOWN_MS = 60 * 1000;
+
+export function mergeAggregatePairs(remoteLists) {
+  const byId = new Map();
+  for (const list of remoteLists) {
+    for (const pair of list) {
+      const prev = byId.get(pair.id);
+      if (!prev || (pair.lastActivityAt ?? 0) > (prev.lastActivityAt ?? 0)) byId.set(pair.id, pair);
+    }
+  }
+  return [...byId.values()].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
+}
+
+export function remoteOfflineUntil(lastFailureAt, now = Date.now(), cooldown = AGGREGATE_OFFLINE_COOLDOWN_MS) {
+  return lastFailureAt === undefined ? 0 : lastFailureAt + cooldown;
+}
+
+export function remoteIsOffline(lastFailureAt, now = Date.now(), cooldown = AGGREGATE_OFFLINE_COOLDOWN_MS) {
+  return remoteOfflineUntil(lastFailureAt, now, cooldown) > now;
+}
 
 export function getBasePath(documentObject = globalThis.document) {
   const value = documentObject?.querySelector('meta[name="opencode-base"]')?.content || "";
@@ -113,6 +134,8 @@ if (typeof document !== "undefined") {
   viewButtons.push(archivedButton);
   let pairsById = new Map();
   let lastRenderedSig = new Map();
+  const remoteFailures = new Map();
+  let aggregateGeneration = 0;
 
   function applyView() {
     document.body.dataset.view = view;
@@ -310,44 +333,42 @@ if (typeof document !== "undefined") {
         render(pairs);
         return;
       }
-      // Aggregate: fan out to every remote, merge, keep the rest on failure.
-      const results = await Promise.allSettled(
-        remotes.map(async (r) => {
+      // Aggregate: start all remotes together, but render each successful result
+      // immediately instead of waiting for the slowest remote.
+      const generation = ++aggregateGeneration;
+      const remoteLists = new Map();
+      const updateAggregate = () => {
+        if (generation !== aggregateGeneration) return;
+        const pairs = mergeAggregatePairs([...remoteLists.values()]);
+        pairsById = new Map(pairs.map((p) => [`${p.hostUrl}${p.id}`, p]));
+        const down = remotes.filter((r) => remoteIsOffline(remoteFailures.get(r.id))).map((r) => r.name);
+        if (aggNote) {
+          aggNote.hidden = down.length === 0;
+          if (down.length > 0) aggNote.classList.add("show");
+          else aggNote.classList.remove("show");
+          aggNote.textContent = down.length > 0 ? `${down.join("、")} 連不上，只顯示其他台` : "";
+        }
+        renderAggregate(pairs);
+      };
+      await Promise.allSettled(remotes.map(async (r) => {
+        if (remoteIsOffline(remoteFailures.get(r.id))) return;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), AGGREGATE_FETCH_TIMEOUT_MS);
+        try {
           const query = view === "archived" ? "?archived=1" : "";
-          const res = await fetch(r.url.replace(/\/+$/, "") + `/api/pairs${query}`, { cache: "no-store" });
+          const res = await fetch(r.url.replace(/\/+$/, "") + `/api/pairs${query}`, { cache: "no-store", signal: controller.signal });
           if (!res.ok) throw new Error(`GET ${r.url}/api/pairs returned ${res.status}`);
           const list = await res.json();
           if (!Array.isArray(list)) throw new Error("invalid pairs payload");
-          return list.map((p) => ({ ...p, hostName: r.name, hostUrl: r.url }));
-        }),
-      );
-      const merged = [];
-      const down = [];
-      results.forEach((result, i) => {
-        if (result.status === "fulfilled") merged.push(...result.value);
-        else down.push(remotes[i].name);
-      });
-      if (aggNote) {
-        if (down.length > 0) {
-          aggNote.hidden = false;
-          aggNote.classList.add("show");
-          aggNote.textContent = `${down.join("、")} 連不上，只顯示其他台`;
-        } else {
-          aggNote.hidden = true;
-          aggNote.classList.remove("show");
-          aggNote.textContent = "";
+          remoteFailures.delete(r.id);
+          remoteLists.set(r.id, list.map((p) => ({ ...p, hostName: r.name, hostUrl: r.url })));
+        } catch {
+          remoteFailures.set(r.id, Date.now());
+        } finally {
+          clearTimeout(timeout);
         }
-      }
-      // Same id on two remotes: keep the fresher activity.
-      const byId = new Map();
-      for (const p of merged) {
-        const prev = byId.get(p.id);
-        if (!prev || (p.lastActivityAt ?? 0) > (prev.lastActivityAt ?? 0)) byId.set(p.id, p);
-      }
-      const pairs = [...byId.values()];
-      pairsById = new Map(pairs.map((p) => [`${p.hostUrl}${p.id}`, p]));
-      // Aggregate cards key off host+id (same session id can exist twice).
-      renderAggregate(pairs);
+        updateAggregate();
+      }));
     } catch {
       // next tick retries
     }

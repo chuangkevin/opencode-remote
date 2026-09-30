@@ -1155,17 +1155,18 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
 
 async function handleListPairs(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
-    const { archivedPair, buildPairsList } = await import("./compact/pairs.js");
+    const { buildPairsList, getClaudeArchivedOwners, pairArchived } = await import("./compact/pairs.js");
     const { listPiPairs } = await import("./compact/pi-pairs.js");
     const archived = new URL(req.url ?? "/api/pairs", "http://localhost").searchParams.get("archived") === "1";
     const now = Date.now();
+    const claudeArchivedOwners = await getClaudeArchivedOwners(now);
     const [openPairs, piPairs] = await Promise.all([
-      buildPairsList({}, { includeArchived: archived, now }),
+      buildPairsList({}, { includeArchived: archived, now, claudeArchivedOwners }),
       listPiPairs().catch(() => []),
     ]);
     const pairs = [...openPairs, ...piPairs]
-      .filter((pair) => archivedPair(pair, now) === archived)
-      .map((pair) => ({ ...pair, archived: archivedPair(pair, now) }))
+      .filter((pair) => pairArchived(pair, now, claudeArchivedOwners) === archived)
+      .map((pair) => ({ ...pair, archived: pairArchived(pair, now, claudeArchivedOwners) }))
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",

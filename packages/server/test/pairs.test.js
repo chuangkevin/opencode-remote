@@ -1,19 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
   _setPairsStoreDir,
+  _setClaudeSessionDir,
   acceptPair,
   buildPairsList,
   computePairInfo,
+  getClaudeArchivedOwners,
   getAcceptedAt,
   isPairSession,
   listAccepted,
   parsePairTitle,
   unacceptPair,
+  pairArchived,
 } from "../dist/compact/pairs.js";
 import {
   archivedPair,
@@ -23,6 +26,8 @@ import {
   partnerLabel,
   visiblePairs,
   withBase,
+  mergeAggregatePairs,
+  remoteIsOffline,
 } from "../static/pairs.js";
 
 function assistant({ text = "", tokens = undefined, created = 1000, completed = 1000, error = undefined, flat = false } = {}) {
@@ -201,6 +206,44 @@ test("buildPairsList skips expensive message/context reads for stale idle sessio
   assert.equal(pairs[0].lastActivityAt, now - 2 * 3600_000 - 1);
   assert.equal(messages, 0);
   assert.equal(contexts, 0);
+});
+
+test("Claude archive lookup is cached, conservative, and never archives busy pairs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "claude-pairs-"));
+  await mkdir(join(dir, "nested"));
+  await writeFile(join(dir, "archived.json"), JSON.stringify({ title: "OpencodeRemote_0930_1", isArchived: true }));
+  await writeFile(join(dir, "active.json"), JSON.stringify({ title: "OpencodeRemote_0930_2", isArchived: false }));
+  await writeFile(join(dir, "duplicate-a.json"), JSON.stringify({ title: "Ambiguous", isArchived: true }));
+  await writeFile(join(dir, "duplicate-b.json"), JSON.stringify({ title: "Ambiguous", isArchived: false }));
+  await writeFile(join(dir, "nested", "broken.json"), "not json");
+  _setClaudeSessionDir(dir);
+  try {
+    const owners = await getClaudeArchivedOwners(1_000);
+    assert.equal(owners.has("OpencodeRemote_0930_1"), true);
+    assert.equal(owners.has("OpencodeRemote_0930_2"), false);
+    assert.equal(owners.has("Missing"), false);
+    assert.equal(owners.has("Ambiguous"), false);
+    assert.equal(pairArchived({ owner: "OpencodeRemote_0930_1", status: "idle", lastActivityAt: 1_000 }, 1_000, owners), true);
+    assert.equal(pairArchived({ owner: "OpencodeRemote_0930_1", status: "busy", lastActivityAt: 1_000 }, 1_000, owners), false);
+  } finally {
+    _setClaudeSessionDir(null);
+  }
+  _setClaudeSessionDir(join(dir, "does-not-exist"));
+  try {
+    assert.deepEqual([...await getClaudeArchivedOwners(2_000)], []);
+  } finally {
+    _setClaudeSessionDir(null);
+  }
+});
+
+test("aggregate helpers merge freshest cards and keep offline state for its cooldown", () => {
+  const merged = mergeAggregatePairs([
+    [{ id: "same", hostUrl: "https://a", lastActivityAt: 1 }, { id: "old", hostUrl: "https://a", lastActivityAt: 1 }],
+    [{ id: "same", hostUrl: "https://b", lastActivityAt: 2 }],
+  ]);
+  assert.deepEqual(merged.map((pair) => pair.id), ["same", "old"]);
+  assert.equal(remoteIsOffline(1_000, 1_000 + 59_999), true);
+  assert.equal(remoteIsOffline(1_000, 1_000 + 60_000), false);
 });
 
 test("partnerLabel identifies Pi and defaults legacy pairs to OpenCode", () => {
