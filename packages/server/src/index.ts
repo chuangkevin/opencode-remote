@@ -26,7 +26,7 @@ import { ensureSessionTrust } from "./compact/trust.js";
 import { handleMergedSessionStatus, isMergedSessionStatusPath, isPathWithinRoot } from "./compact/session-status.js";
 import { unwrap, upstreamAuthHeaders, upstreamFetch, upstreamHealthy, upstreamInfo } from "./upstream.js";
 import { readBuildInfo } from "./build-info.js";
-import { createPairsCache, isPairSession, type PairInfo } from "./compact/pairs.js";
+import { createPairsCache, isPairSession, startPairsCacheRefresh, type PairInfo } from "./compact/pairs.js";
 import { getStaticAsset } from "./compact/static-assets.js";
 import { sendHtml } from "./html-response.js";
 import { shouldCompressUpstream } from "./proxy-compress.js";
@@ -1154,21 +1154,27 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
   }
 }
 
+async function buildPairsCacheEntry(
+  now = Date.now(),
+  archivedOwners?: ReadonlySet<string>,
+): Promise<PairInfo[]> {
+  const { buildPairsList, getClaudeArchivedOwners } = await import("./compact/pairs.js");
+  const { listPiPairs } = await import("./compact/pi-pairs.js");
+  const owners = archivedOwners ?? await getClaudeArchivedOwners(now);
+  const [openPairs, piPairs] = await Promise.all([
+    buildPairsList({}, { now, claudeArchivedOwners: owners }),
+    listPiPairs().catch(() => []),
+  ]);
+  return [...openPairs, ...piPairs].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+}
+
 async function handleListPairs(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
-    const { buildPairsList, getClaudeArchivedOwners, pairArchived } = await import("./compact/pairs.js");
-    const { listPiPairs } = await import("./compact/pi-pairs.js");
+    const { getClaudeArchivedOwners, pairArchived } = await import("./compact/pairs.js");
     const archived = new URL(req.url ?? "/api/pairs", "http://localhost").searchParams.get("archived") === "1";
     const now = Date.now();
     const claudeArchivedOwners = await getClaudeArchivedOwners(now);
-    const rawPairs = await pairsCache.get(archived, async () => {
-      const buildNow = Date.now();
-      const [openPairs, piPairs] = await Promise.all([
-        buildPairsList({}, { now: buildNow, claudeArchivedOwners }),
-        listPiPairs().catch(() => []),
-      ]);
-      return [...openPairs, ...piPairs].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-    }, now);
+    const rawPairs = await pairsCache.get(archived, () => buildPairsCacheEntry(Date.now(), claudeArchivedOwners), now);
     const pairs = rawPairs
       .filter((pair) => pairArchived(pair, now, claudeArchivedOwners) === archived)
       .map((pair) => ({ ...pair, archived: pairArchived(pair, now, claudeArchivedOwners) }));
@@ -2191,6 +2197,7 @@ async function main(): Promise<void> {
       server.listen(config.port, config.bindAddress, () => {
         server.off("error", onStartupError);
         console.log(`[opencode-remote] proxy listening on http://${config.bindAddress}:${config.port}`);
+        void startPairsCacheRefresh(pairsCache, () => buildPairsCacheEntry());
         console.log("[opencode-remote] → serving root Hub through /hub rewrite; / redirects to /remote-sessions");
         console.log(`[opencode-remote] → redirecting /latest to ${activeSessionPath}`);
         resolve();

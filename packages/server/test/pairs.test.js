@@ -11,6 +11,8 @@ import {
   buildPairsList,
   computePairInfo,
   createPairsCache,
+  PAIRS_CACHE_REFRESH_INTERVAL_MS,
+  startPairsCacheRefresh,
   getClaudeArchivedOwners,
   getAcceptedAt,
   isPairSession,
@@ -305,6 +307,65 @@ test("pairs cache keeps stale data after refresh failure and waits on first fail
   }), /pairs cache refresh failed/);
 });
 
+test("pairs cache warmup builds both views, refreshes serially, and swallows failures", async () => {
+  const calls = [];
+  const built = [];
+  const releases = [];
+  let active = 0;
+  let maxActive = 0;
+  let tick;
+  let configuredInterval;
+  let unrefCalled = false;
+  let clearCalled = false;
+  let shouldFail = false;
+  const cache = {
+    async refresh(archived, build) {
+      calls.push(archived);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      try {
+        if (!shouldFail) await new Promise((resolve) => releases.push(resolve));
+        else if (!archived) throw new Error("refresh failed");
+        await build();
+      } finally {
+        active -= 1;
+      }
+    },
+  };
+  const refresher = startPairsCacheRefresh(
+    cache,
+    async () => { built.push(true); return []; },
+    PAIRS_CACHE_REFRESH_INTERVAL_MS,
+    (callback, delay) => {
+      tick = callback;
+      configuredInterval = delay;
+      return { unref: () => { unrefCalled = true; } };
+    },
+    () => { clearCalled = true; },
+  );
+
+  assert.deepEqual(calls, [false]);
+  assert.equal(configuredInterval, 15_000);
+  assert.equal(unrefCalled, true);
+  tick(); // A timer tick during startup joins the one active run.
+  assert.deepEqual(calls, [false]);
+  releases.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [false, true]);
+  tick();
+  assert.deepEqual(calls, [false, true]);
+  releases.shift()();
+  await refresher.warmup;
+  assert.equal(maxActive, 1);
+  assert.equal(built.length, 2);
+
+  shouldFail = true;
+  await assert.doesNotReject(refresher.refreshNow());
+  assert.deepEqual(calls, [false, true, false, true]);
+  refresher.stop();
+  assert.equal(clearCalled, true);
+});
+
 test("partnerLabel identifies Pi and defaults legacy pairs to OpenCode", () => {
   assert.equal(partnerLabel({ partner: "pi" }), "Pi");
   assert.equal(partnerLabel({ partner: "opencode" }), "OpenCode");
@@ -504,6 +565,16 @@ test("Hub exposes shareable tabs, a /pairs link, and top-level prefixed session 
   assert.match(source, /href="\$\{compactPath\}" target="_top"/);
   assert.match(hub, /#tabs \{[^}]*min-width: 0;[^}]*overflow-x: auto/s);
   assert.match(hub, /body \{[^}]*overflow: hidden/s);
+  assert.match(hub, /@media \(max-width: 480px\) \{[^}]*header \{ flex-wrap: wrap;/s);
+  assert.match(hub, /#tabs \{ flex: 1 0 100%; width: 100%; \}/);
+  assert.match(hub, /\.partner-link \{ margin-left: auto;[^}]*\}/);
+  // The /pairs header controls do not shrink; its host tab strip scrolls independently.
+  const pairsPage = source.slice(source.indexOf("async function handlePairsPage"), source.indexOf("async function handleListPins"));
+  assert.match(pairsPage, /header \.pairs-btn \{ flex-shrink: 0;/);
+  assert.match(pairsPage, /\.view-toggle \{ flex-shrink: 0; \}/);
+  assert.match(pairsPage, /\.font-scale-toggle, \.theme-toggle \{ width: 36px; height: 36px; flex: 0 0 36px;/);
+  assert.match(pairsPage, /\.host-tabs \{ display: flex; gap: 6px; overflow-x: auto; max-width: 100%/);
+  assert.match(pairsPage, /body \{[^}]*overflow-x: hidden/s);
 });
 
 test("pairs cards show owner, model, and labelled context bar", async () => {

@@ -338,11 +338,31 @@ export type BuildPairsOptions = {
 
 export const PAIRS_CACHE_FRESH_MS = 3 * 1000;
 export const PAIRS_CACHE_MAX_AGE_MS = 60 * 1000;
+export const PAIRS_CACHE_REFRESH_INTERVAL_MS = 15 * 1000;
 
 type PairsCacheEntry<T> = { value: T; storedAt: number };
 
+type PairsCacheRefreshStore<T> = {
+  refresh(archived: boolean, build: () => Promise<T>): Promise<void>;
+};
+
 export function createPairsCache<T>(clock: () => number = Date.now) {
   const slots = new Map<boolean, { entry?: PairsCacheEntry<T>; refresh?: Promise<T | undefined> }>();
+
+  const startRefresh = (slot: { entry?: PairsCacheEntry<T>; refresh?: Promise<T | undefined> }, build: () => Promise<T>): Promise<T | undefined> => {
+    if (!slot.refresh) {
+      slot.refresh = build()
+        .then((value) => {
+          slot.entry = { value, storedAt: clock() };
+          return value;
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          slot.refresh = undefined;
+        });
+    }
+    return slot.refresh;
+  };
 
   return {
     async get(
@@ -355,32 +375,52 @@ export function createPairsCache<T>(clock: () => number = Date.now) {
       const age = slot.entry ? Math.max(0, now - slot.entry.storedAt) : Infinity;
       if (slot.entry && age < PAIRS_CACHE_FRESH_MS) return slot.entry.value;
 
-      const startRefresh = (): Promise<T | undefined> => {
-        if (!slot.refresh) {
-          slot.refresh = build()
-            .then((value) => {
-              slot.entry = { value, storedAt: clock() };
-              return value;
-            })
-            .catch(() => undefined)
-            .finally(() => {
-              slot.refresh = undefined;
-            });
-        }
-        return slot.refresh;
-      };
-
       if (slot.entry && age <= PAIRS_CACHE_MAX_AGE_MS) {
-        void startRefresh();
+        void startRefresh(slot, build);
         return slot.entry.value;
       }
 
-      const refreshed = await startRefresh();
+      const refreshed = await startRefresh(slot, build);
       if (refreshed !== undefined) return refreshed;
       if (slot.entry) return slot.entry.value;
       throw new Error("pairs cache refresh failed");
     },
+    async refresh(archived: boolean, build: () => Promise<T>): Promise<void> {
+      const slot = slots.get(archived) ?? {};
+      slots.set(archived, slot);
+      await startRefresh(slot, build);
+    },
   };
+}
+
+export function startPairsCacheRefresh<T>(
+  cache: PairsCacheRefreshStore<T>,
+  build: () => Promise<T>,
+  intervalMs = PAIRS_CACHE_REFRESH_INTERVAL_MS,
+  setIntervalFn: typeof setInterval = setInterval,
+  clearIntervalFn: typeof clearInterval = clearInterval,
+): { warmup: Promise<void>; refreshNow: () => Promise<void>; stop: () => void } {
+  let activeRun: Promise<void> | undefined;
+  const refreshNow = (): Promise<void> => {
+    if (activeRun) return activeRun;
+    activeRun = (async () => {
+      for (const archived of [false, true]) {
+        try {
+          await cache.refresh(archived, build);
+        } catch {
+          // Best-effort warmup/refresh; a failed mode does not block the other.
+        }
+      }
+    })().finally(() => {
+      activeRun = undefined;
+    });
+    return activeRun;
+  };
+
+  const warmup = refreshNow();
+  const timer = setIntervalFn(() => { void refreshNow(); }, intervalMs);
+  timer.unref?.();
+  return { warmup, refreshNow, stop: () => clearIntervalFn(timer) };
 }
 
 export function pairArchived(pair: Pick<PairInfo, "status" | "owner" | "lastActivityAt">, now = Date.now(), claudeArchivedOwners?: ReadonlySet<string>): boolean {
