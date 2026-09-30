@@ -101,7 +101,7 @@ https://opencode.sisihome.org/remote-sessions
 ```
 
 這是 `opencode-remote` 提供的輕量 session picker，點選任一項會進入對應 OpenCode session。
-所有 User-Agent 打開 `/` 時，`opencode-remote` 都會導到 `/remote-sessions`，避免 OpenCode 原生 mobile layout 看不到工作階段列表。`/latest` 才會導到最近 active session。
+根網域 `https://opencode.sisihome.org/` 經 Caddy 會先到 `/hub`，app 只對該 host 將 `/hub` 導向 `/pairs`。其他 host（含單機子網域與直連 `:9223`）的 `/hub` 行為不變。手機工作階段列表可直接開 `/remote-sessions`；`/latest` 會導到最近 active session。
 
 ## macOS LaunchAgent（MBA-Kevin.local）
 
@@ -742,7 +742,7 @@ OpenCode 原生 SPA 在手機橫向 / 雙螢幕不可用，因此提供獨立 co
 
 ### `/pairs` 歸檔、快取、首屏（2026-09-30）
 
-Kevin 的入口是 `https://opencode.sisihome.org/pairs`（根網域 `/` 維持 Hub 外殼頁，不轉）。
+Kevin 的入口是 `https://opencode.sisihome.org/pairs`；根網域 `/hub` 會轉到此頁，其他 host 的 `/hub` 仍顯示 Hub 外殼頁。
 
 歸檔規則（`packages/server/static/pairs-rules.js`，server 與前端共用同一份）：
 

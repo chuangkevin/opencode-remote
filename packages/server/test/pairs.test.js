@@ -30,7 +30,10 @@ import {
   mergeAggregatePairs,
   aggregateLoading,
   remoteIsOffline,
+  parsePairsState,
+  pairsStateUrl,
 } from "../static/pairs.js";
+import { hubPairsRedirect } from "../dist/base-path.js";
 
 function assistant({ text = "", tokens = undefined, created = 1000, completed = 1000, error = undefined, flat = false } = {}) {
   // flat:true emits the real 2.x shape (no info wrapper).
@@ -330,6 +333,32 @@ test("base paths only prefix root-relative URLs", () => {
   assert.equal(withBase("", ""), "");
 });
 
+test("pairs URL parses and serializes host/view state, with legacy view fallback only when omitted", () => {
+  assert.deepEqual(parsePairsState("?host=l390&view=archived", "list"), { host: "l390", view: "archived" });
+  assert.deepEqual(parsePairsState("?host=invalid", "list"), { host: "mac", view: "list" });
+  assert.deepEqual(parsePairsState("?view=invalid", "archived"), { host: "mac", view: "dashboard" });
+  assert.equal(pairsStateUrl({ host: "mac", view: "dashboard" }), "/pairs");
+  assert.equal(pairsStateUrl({ host: "l390", view: "archived" }), "/pairs?host=l390&view=archived");
+  assert.equal(pairsStateUrl({ host: "mac", view: "dashboard" }, true), "/pairs?view=dashboard");
+  assert.equal(pairsStateUrl({ host: "mac", view: "list" }, true, "/sara"), "/sara/pairs?view=list");
+});
+
+test("only the canonical root host redirects /hub to /pairs", () => {
+  assert.equal(hubPairsRedirect({ host: "opencode.sisihome.org" }, "/hub"), "/pairs");
+  assert.equal(hubPairsRedirect({ host: "127.0.0.1:9223", "x-forwarded-host": "opencode.sisihome.org" }, "/hub/"), "/pairs");
+  assert.equal(hubPairsRedirect({ host: "opencode.sisihome.org", "x-forwarded-prefix": "/sara" }, "/hub"), undefined);
+  assert.equal(hubPairsRedirect({ host: "opencode.sisihome.org", "x-forwarded-prefix": "/unexpected" }, "/hub"), undefined);
+  assert.equal(hubPairsRedirect({ host: "opencode-sara.sisihome.org" }, "/hub"), undefined);
+  assert.equal(hubPairsRedirect({ host: "opencode.sisihome.org" }, "/hub/child"), undefined);
+});
+
+test("aggregate cards stay under the matching root-domain machine prefix", () => {
+  const ownPath = (path) => path;
+  assert.equal(pairCardUrl({ hostUrl: "https://opencode.sisihome.org/sara", url: "/c/session/ses_mac" }, true, ownPath), "https://opencode.sisihome.org/sara/c/session/ses_mac");
+  assert.equal(pairCardUrl({ hostUrl: "https://opencode.sisihome.org/l390", url: "/c/session/ses_l390" }, true, ownPath), "https://opencode.sisihome.org/l390/c/session/ses_l390");
+  assert.equal(pairCardUrl({ hostUrl: "https://opencode.sisihome.org/home", url: "/c/session/ses_home" }, true, ownPath), "https://opencode.sisihome.org/home/c/session/ses_home");
+});
+
 test("relative time ticks in Chinese units", () => {
   const now = 1_000_000;
   assert.equal(formatRelative(now - 5000, now), "5 秒前");
@@ -379,6 +408,9 @@ test("pairs phone dashboard is one row per card", async () => {
   assert.match(client, /: ownPath\(pair\.url\)/);
   assert.match(client, /fetch\(ownPath\("\/api\/pairs"\)\)/);
   assert.match(client, /card-row/);
+  assert.match(page, /\.host-tabs \{ display: flex; gap: 6px; overflow-x: auto;/);
+  assert.match(page, /\.host-tabs \{[^}]*max-width: 100%/);
+  assert.match(page, /body \{[^}]*overflow-x: hidden/s);
 });
 
 test("pairs-rules.js serves the single dashboard rule set", async () => {
@@ -438,6 +470,14 @@ test("pairs aggregate mode merges remotes with host tags", async () => {
   assert.match(client, /host-tag/);
   assert.match(client, /連不上，只顯示其他台/);
   assert.match(client, /location\.hostname === "opencode\.sisihome\.org"/);
+});
+
+test("/hub applies the host-scoped redirect before serving the Hub shell", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  assert.match(source, /const hubRedirect = hubPairsRedirect\(req\.headers, requestPath\)/);
+  assert.match(source, /res\.writeHead\(302, \{ Location: hubRedirect, "Cache-Control": "no-store" \}\)/);
+  assert.ok(source.indexOf("if (hubRedirect)") < source.indexOf('handleCompactStatic(Object.assign(req, { url: "/c/static/hub.html" })'));
 });
 
 test("pairs cards show owner, model, and labelled context bar", async () => {

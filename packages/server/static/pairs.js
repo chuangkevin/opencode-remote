@@ -83,6 +83,26 @@ export function pairCardUrl(pair, aggregate, ownPath) {
   return aggregate && pair.hostUrl ? pair.hostUrl.replace(/\/+$/, "") + pair.url : ownPath(pair.url);
 }
 
+const PAIR_HOSTS = Object.freeze(["mac", "l390", "home"]);
+const PAIR_VIEWS = Object.freeze(["dashboard", "list", "archived"]);
+
+export function parsePairsState(search, storedView = "dashboard") {
+  const params = new URLSearchParams(search);
+  const host = PAIR_HOSTS.includes(params.get("host")) ? params.get("host") : "mac";
+  const view = params.has("view")
+    ? (PAIR_VIEWS.includes(params.get("view")) ? params.get("view") : "dashboard")
+    : (PAIR_VIEWS.includes(storedView) ? storedView : "dashboard");
+  return { host, view };
+}
+
+export function pairsStateUrl(state, explicitView = false, basePath = "") {
+  const params = new URLSearchParams();
+  if (state.host !== "mac") params.set("host", state.host);
+  if (state.view !== "dashboard" || explicitView) params.set("view", state.view);
+  const query = params.toString();
+  return `${basePath}/pairs${query ? `?${query}` : ""}`;
+}
+
 if (typeof document !== "undefined") {
   const BASE_PATH = getBasePath();
   const ownPath = (path) => withBase(BASE_PATH, path);
@@ -90,7 +110,8 @@ if (typeof document !== "undefined") {
   const grid = document.getElementById("pairGrid");
   const viewButtons = [...document.querySelectorAll("[data-view-btn]")];
   const aggNote = document.getElementById("aggNote");
-  const sessionsLink = document.querySelector('a.pairs-btn[href="/remote-sessions"]');
+  const sessionsLink = document.querySelector("a.pairs-btn");
+  const hostButtons = [...document.querySelectorAll("[data-host-btn]")];
   const reducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // ── Aggregate mode: opencode.sisihome.org/pairs (or ?all=1) merges every
@@ -114,7 +135,8 @@ if (typeof document !== "undefined") {
       }
     } catch { /* keep defaults */ }
     document.body.dataset.agg = "1";
-    if (sessionsLink) sessionsLink.setAttribute("href", "/");
+  } else {
+    document.querySelector(".host-tabs")?.setAttribute("hidden", "");
   }
 
   function aggHostTag(url) {
@@ -124,11 +146,12 @@ if (typeof document !== "undefined") {
       return String(url);
     }
   }
-  let view = "dashboard";
+  let storedView = "dashboard";
   try {
     const stored = localStorage.getItem(PAIRS_VIEW_KEY);
-    if (stored === "list" || stored === "dashboard" || stored === "archived") view = stored;
+    if (PAIR_VIEWS.includes(stored)) storedView = stored;
   } catch { /* private mode: keep default */ }
+  let { host: selectedHost, view } = parsePairsState(location.search, storedView);
   const archivedButton = document.createElement("button");
   archivedButton.type = "button";
   archivedButton.dataset.viewBtn = "archived";
@@ -145,12 +168,27 @@ if (typeof document !== "undefined") {
 
   function applyView() {
     document.body.dataset.view = view;
+    document.body.dataset.host = selectedHost;
     for (const btn of viewButtons) {
       btn.setAttribute("aria-pressed", btn.dataset.viewBtn === view ? "true" : "false");
     }
     try {
     localStorage.setItem(ownKey(PAIRS_VIEW_KEY), view);
     } catch { /* ignore */ }
+  }
+
+  function setState(next, push = true) {
+    selectedHost = next.host;
+    view = next.view;
+    if (push) history.pushState(null, "", pairsStateUrl({ host: selectedHost, view }, true, BASE_PATH));
+    applyView();
+    if (sessionsLink && AGGREGATE) {
+      const remote = remotes.find((r) => r.id === selectedHost) ?? AGG_DEFAULTS.find((r) => r.id === selectedHost);
+      sessionsLink.href = `${remote?.url.replace(/\/+$/, "") ?? "/sara"}/remote-sessions`;
+    }
+    lastRenderedSig = new Map();
+    grid.innerHTML = "";
+    void poll();
   }
 
   function cardSignature(pair) {
@@ -361,7 +399,16 @@ if (typeof document !== "undefined") {
           else aggNote.classList.remove("show");
           aggNote.textContent = down.length > 0 ? `${down.join("、")} 連不上，只顯示其他台` : "";
         }
-        renderAggregate(pairs, aggregateLoading(pairs.length, pending.size));
+        for (const btn of hostButtons) {
+          const id = btn.dataset.hostBtn;
+          const remote = remotes.find((r) => r.id === id);
+          const count = pairs.filter((pair) => pair.hostId === id).length;
+          const offline = remote && remoteIsOffline(remoteFailures.get(id));
+          const countEl = btn.querySelector("[data-host-count]");
+          if (countEl) countEl.textContent = `${count}${offline ? " · 離線" : ""}`;
+          btn.setAttribute("aria-pressed", id === selectedHost ? "true" : "false");
+        }
+        renderAggregate(pairs.filter((pair) => pair.hostId === selectedHost), aggregateLoading(pairs.length, pending.size));
       };
       await Promise.allSettled(remotes.map(async (r) => {
         if (!pending.has(r.id)) return;
@@ -375,7 +422,7 @@ if (typeof document !== "undefined") {
           if (!Array.isArray(list)) throw new Error("invalid pairs payload");
           if (generation === aggregateGeneration) {
             remoteFailures.delete(r.id);
-            remoteData.set(r.id, list.map((p) => ({ ...p, hostName: r.name, hostUrl: r.url })));
+            remoteData.set(r.id, list.map((p) => ({ ...p, hostId: r.id, hostName: r.name, hostUrl: r.url })));
           }
         } catch {
           if (generation === aggregateGeneration) remoteFailures.set(r.id, Date.now());
@@ -440,15 +487,35 @@ if (typeof document !== "undefined") {
 
   for (const btn of viewButtons) {
     btn.addEventListener("click", () => {
-      view = btn.dataset.viewBtn === "archived" ? "archived" : btn.dataset.viewBtn === "list" ? "list" : "dashboard";
-      applyView();
-      lastRenderedSig = new Map();
-      grid.innerHTML = "";
-      void poll();
+      const nextView = btn.dataset.viewBtn === "archived" ? "archived" : btn.dataset.viewBtn === "list" ? "list" : "dashboard";
+      setState({ host: selectedHost, view: nextView });
     });
   }
 
+  for (const btn of hostButtons) btn.addEventListener("click", () => setState({ host: btn.dataset.hostBtn, view }));
+  window.addEventListener("popstate", () => {
+    const next = parsePairsState(location.search, storedView);
+    selectedHost = next.host;
+    view = next.view;
+    applyView();
+    if (sessionsLink && AGGREGATE) {
+      const remote = remotes.find((r) => r.id === selectedHost) ?? AGG_DEFAULTS.find((r) => r.id === selectedHost);
+      sessionsLink.href = `${remote?.url.replace(/\/+$/, "") ?? "/sara"}/remote-sessions`;
+    }
+    lastRenderedSig = new Map();
+    grid.innerHTML = "";
+    void poll();
+  });
+
   applyView();
+  if (AGGREGATE && sessionsLink) {
+    const remote = remotes.find((r) => r.id === selectedHost) ?? AGG_DEFAULTS.find((r) => r.id === selectedHost);
+    sessionsLink.href = `${remote?.url.replace(/\/+$/, "") ?? "/sara"}/remote-sessions`;
+  }
+  for (const btn of hostButtons) btn.setAttribute("aria-pressed", btn.dataset.hostBtn === selectedHost ? "true" : "false");
+  if (new URLSearchParams(location.search).has("view")) {
+    history.replaceState(null, "", pairsStateUrl({ host: selectedHost, view }, true, BASE_PATH));
+  }
   void poll();
   setInterval(poll, 3000);
   document.addEventListener("visibilitychange", () => {

@@ -32,7 +32,7 @@ import { sendHtml } from "./html-response.js";
 import { shouldCompressUpstream } from "./proxy-compress.js";
 import { rejectPromptWhileQuiesced } from "./update-quiesce.js";
 import { resolveOpenCodeCommand } from "./opencode-command.js";
-import { cookieName, machineOrigin, prefixPath, requestBasePath } from "./base-path.js";
+import { cookieName, hubPairsRedirect, machineOrigin, prefixPath, requestBasePath } from "./base-path.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -1257,6 +1257,10 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
             .view-toggle { display: flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
             .view-toggle button { min-height: 44px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; padding: 6px 14px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+            .host-tabs { display: flex; gap: 6px; overflow-x: auto; max-width: 100%; padding: 2px 0 6px; scrollbar-width: thin; }
+            .host-tabs button { min-height: 40px; flex: 0 0 auto; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; white-space: nowrap; }
+            .host-tabs button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+            .host-count { margin-left: 5px; font-size: 11px; opacity: .8; }
             @media (max-width: 480px) { header { gap: 6px; padding: 6px 8px; } h1 { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } header .pairs-btn { flex-shrink: 0; padding: 6px 8px; font-size: 11px; } .view-toggle { flex-shrink: 0; } .view-toggle button { padding: 6px 10px; font-size: 11px; } .font-scale-toggle, .theme-toggle { width: 36px; height: 36px; flex: 0 0 36px; font-size: 14px; } }
             .view-toggle button[aria-pressed="true"] { background: var(--accent); color: #fff; }
             .font-scale-toggle, .theme-toggle { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-size: 17px; cursor: pointer; }
@@ -1334,6 +1338,11 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
           </header>
           <div class="agg-note" id="aggNote" hidden></div>
+          <nav class="host-tabs" aria-label="主機"${basePath ? " hidden" : ""}>
+            <button type="button" data-host-btn="mac" aria-pressed="true">Mac <span class="host-count" data-host-count>載入中</span></button>
+            <button type="button" data-host-btn="l390" aria-pressed="false">L390 <span class="host-count" data-host-count>載入中</span></button>
+            <button type="button" data-host-btn="home" aria-pressed="false">Home <span class="host-count" data-host-count>載入中</span></button>
+          </nav>
           <div class="grid" id="pairGrid"><div class="empty">載入中…</div></div>
           <script type="module" src="${path(`/c/static/font-scale.js?v=${fontScaleHash}`)}"></script>
           <script type="module" src="${path(`/c/static/theme.js?v=${themeHash}`)}"></script>
@@ -1473,6 +1482,12 @@ const server = http.createServer((req, res) => {
   }
 
   if ((req.method === "GET" || req.method === "HEAD") && (req.url === "/hub" || req.url === "/hub/")) {
+    const hubRedirect = hubPairsRedirect(req.headers, requestPath);
+    if (hubRedirect) {
+      res.writeHead(302, { Location: hubRedirect, "Cache-Control": "no-store" });
+      res.end();
+      return;
+    }
     handleCompactStatic(Object.assign(req, { url: "/c/static/hub.html" }), res);
     return;
   }
