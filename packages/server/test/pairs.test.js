@@ -33,6 +33,9 @@ import {
   aggregateLoading,
   remoteIsOffline,
   aggregateHostCountLabel,
+  aggregateHostCountState,
+  recentRemoteFailureTimestamp,
+  remoteFailureStorageKey,
   createInFlightRequestDeduper,
   parsePairsState,
   pairsStateUrl,
@@ -269,6 +272,19 @@ test("aggregate host count labels resolve loading, success, failure, and cooldow
   assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 59_999, count: 4, hasData: true, now }), "離線");
   assert.equal(aggregateHostCountLabel({ pending: true, failedAt: now - 1, count: 4, hasData: true, now }), "離線");
   assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 60_000, count: 2, hasData: true, now }), "2");
+});
+
+test("aggregate host status carries dot state and persisted offline time is bounded to five minutes", () => {
+  const now = 300_000;
+  assert.deepEqual(aggregateHostCountState({ pending: true, failedAt: undefined, count: 0, now }), { label: "載入中", state: "loading" });
+  assert.deepEqual(aggregateHostCountState({ pending: false, failedAt: undefined, count: 3, now, hasData: true }), { label: "3", state: "ok" });
+  assert.deepEqual(aggregateHostCountState({ pending: true, failedAt: now - 2_000, count: 0, now }), { label: "離線", state: "offline" });
+  assert.deepEqual(aggregateHostCountState({ pending: false, failedAt: now - 1, count: 0, now }), { label: "離線", state: "offline" });
+  assert.equal(recentRemoteFailureTimestamp(String(now - 299_999), now), now - 299_999);
+  assert.equal(recentRemoteFailureTimestamp(String(now - 300_000), now), undefined);
+  assert.equal(recentRemoteFailureTimestamp(String(now + 1), now), undefined);
+  assert.equal(recentRemoteFailureTimestamp("garbage", now), undefined);
+  assert.equal(remoteFailureStorageKey("home"), "pairs-remote-failure:home");
 });
 
 test("aggregate polls share in-flight requests per host and view, then permit retries", async () => {
@@ -568,6 +584,7 @@ test("api pairs allows cross-origin GET for the aggregate page", async () => {
 test("pairs aggregate mode merges remotes with host tags", async () => {
   const { readFile } = await import("node:fs/promises");
   const client = await readFile(new URL("../static/pairs.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
   assert.match(client, /opencode-hub:remotes/);
   assert.match(client, /https:\/\/opencode-sara\.sisihome\.org/);
   assert.match(client, /https:\/\/opencode-l390\.sisihome\.org/);
@@ -584,10 +601,19 @@ test("pairs aggregate mode merges remotes with host tags", async () => {
   assert.match(client, /location\.hostname === "opencode\.sisihome\.org"/);
   assert.match(client, /if \(!pending\.has\(r\.id\)\) \{\s*if \(generation === aggregateGeneration\) updateHostCount\(r\.id, false\)/);
   assert.match(client, /finally \{\s*pending\.delete\(r\.id\);\s*if \(generation === aggregateGeneration\) \{\s*updateHostCount\(r\.id, false\);\s*updateAggregate\(\);/);
-  assert.match(client, /if \(countEl\?\.textContent === "載入中"\) countEl\.textContent = "離線"/);
+  assert.match(client, /if \(countEl\?\.textContent === "載入中"\) \{\s*countEl\.textContent = "離線";\s*countEl\.dataset\.state = "offline"/);
   assert.match(client, /loadRemotePairs\(`\$\{r\.id\}:\$\{requestedView\}`/);
   assert.match(client, /count: visiblePairs\(remoteData\.get\(id\) \?\? \[\], view, now\)\.length/);
   assert.match(client, /hasData: remoteData\.has\(id\)/);
+  assert.match(client, /countEl\.dataset\.state = state\.state/);
+  assert.match(client, /localStorage\.setItem\(ownKey\(remoteFailureStorageKey\(r\.id\)\), String\(failedAt\)\)/);
+  assert.match(client, /persistedFailureHosts\.has\(r\.id\) \|\| !remoteIsOffline/);
+  assert.match(client, /localStorage\.removeItem\(ownKey\(remoteFailureStorageKey\(r\.id\)\)\)/);
+  assert.match(source, /\.host-count\[data-state="offline"\]::before \{ background: #ef4444;/);
+  assert.match(source, /\.host-count\[data-state="ok"\]::before \{ background: #22c55e;/);
+  assert.match(source, /\.host-count\[data-state="loading"\]::before \{ background: #b8b8c2;/);
+  assert.match(source, /header \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto auto;/);
+  assert.match(source, /\.grid \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(min\(100%, 320px\), 1fr\)\); gap: 8px; min-width: 0; \}/);
 });
 
 test("/hub serves the Hub shell without a host-scoped /pairs redirect", async () => {
@@ -617,11 +643,15 @@ test("Hub exposes shareable tabs, a /pairs link, and top-level prefixed session 
   assert.match(hub, /\.partner-link \{ margin-left: auto;[^}]*\}/);
   // The /pairs header controls do not shrink; its host tab strip scrolls independently.
   const pairsPage = source.slice(source.indexOf("async function handlePairsPage"), source.indexOf("async function handleListPins"));
-  assert.match(pairsPage, /header \.pairs-btn \{ flex-shrink: 0;/);
+  assert.match(pairsPage, /header \.pairs-btn \{ grid-column: 3; grid-row: 1; flex: 0 0 auto;/);
   assert.match(pairsPage, /\.view-toggle \{ flex-shrink: 0; \}/);
   assert.match(pairsPage, /\.font-scale-toggle, \.theme-toggle \{ width: 36px; height: 36px; flex: 0 0 36px;/);
   assert.match(pairsPage, /\.host-tabs \{ display: flex; gap: 6px; overflow-x: auto; max-width: 100%/);
   assert.match(pairsPage, /body \{[^}]*overflow-x: hidden/s);
+  const sessionsPage = source.slice(source.indexOf("async function handleRemoteSessions"), source.indexOf("async function handleListPairs"));
+  assert.match(sessionsPage, /@media \(max-width: 767px\) \{ header \{ gap: 4px; flex-wrap: wrap;/);
+  assert.match(sessionsPage, /body \{[^}]*overflow-x: hidden/s);
+  assert.match(hub, /body \{[^}]*overflow: hidden/s);
 });
 
 test("pairs cards show owner, model, and labelled context bar", async () => {

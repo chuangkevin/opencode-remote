@@ -11,6 +11,7 @@ import { hubHostUrl } from "./hub-state.js";
 export const PAIRS_VIEW_KEY = "pairs-view";
 export const AGGREGATE_FETCH_TIMEOUT_MS = 15 * 1000;
 export const AGGREGATE_OFFLINE_COOLDOWN_MS = 60 * 1000;
+export const REMOTE_FAILURE_STORAGE_TTL_MS = 5 * 60 * 1000;
 
 export function mergeAggregatePairs(remoteLists) {
   const byId = new Map();
@@ -31,10 +32,24 @@ export function remoteIsOffline(lastFailureAt, now = Date.now(), cooldown = AGGR
   return remoteOfflineUntil(lastFailureAt, now, cooldown) > now;
 }
 
-export function aggregateHostCountLabel({ pending, failedAt, count, now, hasData = false }) {
-  if (failedAt !== undefined && remoteIsOffline(failedAt, now)) return "離線";
-  if (pending && !hasData) return "載入中";
-  return String(count);
+export function recentRemoteFailureTimestamp(value, now = Date.now(), ttl = REMOTE_FAILURE_STORAGE_TTL_MS) {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const failedAt = Number(value);
+  return Number.isFinite(failedAt) && failedAt <= now && now - failedAt < ttl ? failedAt : undefined;
+}
+
+export function remoteFailureStorageKey(hostID) {
+  return `pairs-remote-failure:${hostID}`;
+}
+
+export function aggregateHostCountState({ pending, failedAt, count, now, hasData = false, persistedFailure = false }) {
+  if (persistedFailure || (failedAt !== undefined && remoteIsOffline(failedAt, now))) return { label: "離線", state: "offline" };
+  if (pending && !hasData) return { label: "載入中", state: "loading" };
+  return { label: String(count), state: "ok" };
+}
+
+export function aggregateHostCountLabel(input) {
+  return aggregateHostCountState(input).label;
 }
 
 export function createInFlightRequestDeduper() {
@@ -184,6 +199,22 @@ if (typeof document !== "undefined") {
   let pairsById = new Map();
   let lastRenderedSig = new Map();
   const remoteFailures = new Map();
+  const persistedFailureHosts = new Set();
+  if (AGGREGATE) {
+    for (const remote of remotes) {
+      const key = ownKey(remoteFailureStorageKey(remote.id));
+      try {
+        const raw = localStorage.getItem(key);
+        const failedAt = recentRemoteFailureTimestamp(raw);
+        if (failedAt !== undefined) {
+          remoteFailures.set(remote.id, failedAt);
+          persistedFailureHosts.add(remote.id);
+        } else if (raw !== null) {
+          localStorage.removeItem(key);
+        }
+      } catch { /* storage unavailable: probe normally */ }
+    }
+  }
   const remoteData = new Map();
   const loadRemotePairs = createInFlightRequestDeduper();
   let aggregateDataView = view;
@@ -408,7 +439,7 @@ if (typeof document !== "undefined") {
       }
       const pending = new Set();
       for (const r of remotes) {
-        if (!remoteIsOffline(remoteFailures.get(r.id))) pending.add(r.id);
+        if (persistedFailureHosts.has(r.id) || !remoteIsOffline(remoteFailures.get(r.id))) pending.add(r.id);
       }
       const updateHostCount = (id, isPending, now = Date.now()) => {
         const button = hostButtons.find((item) => item.dataset.hostBtn === id);
@@ -416,13 +447,16 @@ if (typeof document !== "undefined") {
         const countEl = button.querySelector("[data-host-count]");
         if (!countEl) return;
         const configured = remotes.some((remote) => remote.id === id);
-        countEl.textContent = aggregateHostCountLabel({
+        const state = aggregateHostCountState({
           pending: isPending,
           failedAt: configured ? remoteFailures.get(id) : now,
           count: visiblePairs(remoteData.get(id) ?? [], view, now).length,
           now,
           hasData: remoteData.has(id),
+          persistedFailure: persistedFailureHosts.has(id),
         });
+        countEl.textContent = state.label;
+        countEl.dataset.state = state.state;
         button.setAttribute("aria-pressed", id === selectedHost ? "true" : "false");
       };
       for (const button of hostButtons) {
@@ -465,10 +499,17 @@ if (typeof document !== "undefined") {
           });
           if (generation === aggregateGeneration) {
             remoteFailures.delete(r.id);
+            persistedFailureHosts.delete(r.id);
+            try { localStorage.removeItem(ownKey(remoteFailureStorageKey(r.id))); } catch { /* storage unavailable */ }
             remoteData.set(r.id, list.map((p) => ({ ...p, hostId: r.id, hostName: r.name, hostUrl: r.url })));
           }
         } catch {
-          if (generation === aggregateGeneration) remoteFailures.set(r.id, Date.now());
+          if (generation === aggregateGeneration) {
+            const failedAt = Date.now();
+            remoteFailures.set(r.id, failedAt);
+            persistedFailureHosts.delete(r.id);
+            try { localStorage.setItem(ownKey(remoteFailureStorageKey(r.id)), String(failedAt)); } catch { /* storage unavailable */ }
+          }
         } finally {
           pending.delete(r.id);
           if (generation === aggregateGeneration) {
@@ -481,7 +522,10 @@ if (typeof document !== "undefined") {
       if (AGGREGATE) {
         for (const button of hostButtons) {
           const countEl = button.querySelector("[data-host-count]");
-          if (countEl?.textContent === "載入中") countEl.textContent = "離線";
+          if (countEl?.textContent === "載入中") {
+            countEl.textContent = "離線";
+            countEl.dataset.state = "offline";
+          }
         }
       }
       // next tick retries

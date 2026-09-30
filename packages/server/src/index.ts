@@ -1058,7 +1058,7 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
             :root[data-theme="light"] { color-scheme: light; --bg: #f7f7f5; --surface: #ffffff; --surface-hi: #f0f0ed; --header-bg: rgba(247,247,245,.94); --border: #d7d7d2; --text: #202023; --muted: #686970; --accent: #4f46e5; --accent-active: #4338ca; --pinned-bg: #eeecff; --pinned-border: #8179e7; --pill-bg: #e8e7ff; --pill-text: #3730a3; --running: #15803d; --running-glow: rgba(21,128,61,.18); --running-glow-wide: rgba(21,128,61,.12); }
             * { box-sizing: border-box; }
             body { margin: 0; background: var(--bg); color: var(--text); padding: max(8px, env(safe-area-inset-top)) 10px max(14px, env(safe-area-inset-bottom)); font-size: calc(14px * var(--font-scale)); line-height: 1.4; overflow-x: hidden; }
-            header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 6px 12px; min-height: 52px; background: var(--header-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+            header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 6px 12px; min-height: 52px; background: var(--header-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; min-width: 0; }
             h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
             .window-label { color: var(--muted); font-size: 12px; font-weight: 500; margin-left: 3px; }
             .new-btn { min-height: 44px; background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; text-decoration: none; line-height: 1; }
@@ -1086,7 +1086,7 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
             .compact-btn:active { background: var(--accent-active); color: #fff; }
             .empty { padding: 24px 12px; color: var(--muted); font-size: calc(13px * var(--font-scale)); text-align: center; }
             .pairs-btn { display: inline-flex; align-items: center; min-height: 44px; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 999px; background: var(--surface); color: var(--text); border: 1px solid var(--border); text-decoration: none; line-height: 1; white-space: nowrap; }
-            @media (max-width: 767px) { header { gap: 4px; } .session-link { gap: 5px; padding-right: 82px; } .session-link small { display: none; } h1 { font-size: 14px; } .window-label { display: none; } .pairs-btn { padding: 6px 8px; font-size: 11px; } }
+            @media (max-width: 767px) { header { gap: 4px; flex-wrap: wrap; } .session-link { gap: 5px; padding-right: 82px; } .session-link small { display: none; } h1 { font-size: 14px; min-width: 0; } .window-label { display: none; } .pairs-btn { padding: 6px 8px; font-size: 11px; flex: 0 0 auto; } }
             @media (min-width: 768px) and (max-width: 1023px) { body { padding-inline: 16px; } header { margin-inline: -16px; } }
           </style>
         </head>
@@ -1259,18 +1259,32 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
             :root[data-theme="light"] { color-scheme: light; --bg: #f7f7f5; --surface: #ffffff; --surface-hi: #f0f0ed; --header-bg: rgba(247,247,245,.94); --border: #d7d7d2; --text: #202023; --muted: #686970; --accent: #4f46e5; --accent-active: #4338ca; --pinned-bg: #eeecff; --pill-bg: #e8e7ff; --pill-text: #3730a3; --partner-pi-bg: #fff7ed; --partner-pi-text: #c2410c; --running: #15803d; }
             * { box-sizing: border-box; }
             body { margin: 0; background: var(--bg); color: var(--text); padding: max(8px, env(safe-area-inset-top)) 10px max(14px, env(safe-area-inset-bottom)); font-size: calc(14px * var(--font-scale)); line-height: 1.4; overflow-x: hidden; }
-            header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 6px 12px; min-height: 52px; background: var(--header-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+            header { position: sticky; top: 0; z-index: 1; margin: -8px -10px 8px; padding: 6px 12px; min-height: 52px; background: var(--header-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; min-width: 0; }
             h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
             .view-toggle { display: flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
             .view-toggle button { min-height: 44px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; padding: 6px 14px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
             .host-tabs { display: flex; gap: 6px; overflow-x: auto; max-width: 100%; padding: 2px 0 6px; scrollbar-width: thin; }
             .host-tabs button { min-height: 40px; flex: 0 0 auto; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; white-space: nowrap; }
             .host-tabs button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
-            .host-count { margin-left: 5px; font-size: 11px; opacity: .8; }
-            @media (max-width: 480px) { header { gap: 6px; padding: 6px 8px; } h1 { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } header .pairs-btn { flex-shrink: 0; padding: 6px 8px; font-size: 11px; } .view-toggle { flex-shrink: 0; } .view-toggle button { padding: 6px 10px; font-size: 11px; } .font-scale-toggle, .theme-toggle { width: 36px; height: 36px; flex: 0 0 36px; font-size: 14px; } }
+            .host-count { display: inline-flex; align-items: center; gap: 5px; margin-left: 5px; font-size: 11px; }
+            .host-count::before { content: ""; width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #85858f; box-shadow: 0 0 0 1px rgba(255,255,255,.24); }
+            .host-count[data-state="loading"]::before { background: #b8b8c2; }
+            .host-count[data-state="ok"]::before { background: #22c55e; }
+            .host-count[data-state="offline"]::before { background: #ef4444; }
+            @media (max-width: 480px) {
+              header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; padding: 6px 8px; }
+              header h1 { grid-column: 1 / 3; grid-row: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+              header .pairs-btn { grid-column: 3; grid-row: 1; flex: 0 0 auto; padding: 6px 8px; font-size: 11px; }
+              header .view-toggle { grid-column: 1; grid-row: 2; min-width: 0; width: max-content; }
+              header .font-scale-toggle { grid-column: 2; grid-row: 2; }
+              header .theme-toggle { grid-column: 3; grid-row: 2; }
+              .view-toggle { flex-shrink: 0; }
+              .view-toggle button { padding: 6px 10px; }
+              .font-scale-toggle, .theme-toggle { width: 36px; height: 36px; flex: 0 0 36px; font-size: 14px; }
+            }
             .view-toggle button[aria-pressed="true"] { background: var(--accent); color: #fff; }
             .font-scale-toggle, .theme-toggle { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-size: 17px; cursor: pointer; }
-            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; }
+            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 8px; min-width: 0; }
             @media (min-width: 768px) and (max-width: 1023px) { .grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); } }
             /* 手機一行一筆版也要看得到派工者、context % */
             @media (max-width: 767px) {
@@ -1345,9 +1359,9 @@ async function handlePairsPage(req: http.IncomingMessage, res: http.ServerRespon
           </header>
           <div class="agg-note" id="aggNote" hidden></div>
           <nav class="host-tabs" aria-label="主機"${basePath ? " hidden" : ""}>
-            <button type="button" data-host-btn="mac" aria-pressed="true">Mac <span class="host-count" data-host-count>載入中</span></button>
-            <button type="button" data-host-btn="l390" aria-pressed="false">L390 <span class="host-count" data-host-count>載入中</span></button>
-            <button type="button" data-host-btn="home" aria-pressed="false">Home <span class="host-count" data-host-count>載入中</span></button>
+            <button type="button" data-host-btn="mac" aria-pressed="true">Mac <span class="host-count" data-state="loading" data-host-count>載入中</span></button>
+            <button type="button" data-host-btn="l390" aria-pressed="false">L390 <span class="host-count" data-state="loading" data-host-count>載入中</span></button>
+            <button type="button" data-host-btn="home" aria-pressed="false">Home <span class="host-count" data-state="loading" data-host-count>載入中</span></button>
           </nav>
           <div class="grid" id="pairGrid"><div class="empty">載入中…</div></div>
           <script type="module" src="${path(`/c/static/font-scale.js?v=${fontScaleHash}`)}"></script>
