@@ -120,6 +120,39 @@ export function encodeServerKey(origin: string): string {
     .replace(/=+$/, "");
 }
 
+const MAX_SESSION_MESSAGE_STRING_LENGTH = 120_000;
+
+function isImagePayloadString(key: string | undefined, parent: unknown): boolean {
+  if (key !== "data" && key !== "url") return false;
+  if (!parent || typeof parent !== "object") return false;
+  const part = parent as Record<string, unknown>;
+  if (part.type === "image") return true;
+  const mime = typeof part.mime === "string" ? part.mime : part.mimeType;
+  return typeof mime === "string" && mime.startsWith("image/");
+}
+
+export function truncateLargeSessionValue(
+  value: unknown,
+  stats: { truncated: number },
+  key?: string,
+  parent?: unknown,
+): unknown {
+  if (typeof value === "string") {
+    if (isImagePayloadString(key, parent) || value.length <= MAX_SESSION_MESSAGE_STRING_LENGTH) return value;
+    stats.truncated += 1;
+    return `${value.slice(0, MAX_SESSION_MESSAGE_STRING_LENGTH)}\n\n[opencode-remote: truncated ${value.length - MAX_SESSION_MESSAGE_STRING_LENGTH} characters from an oversized session message field]`;
+  }
+  if (Array.isArray(value)) return value.map((item) => truncateLargeSessionValue(item, stats));
+  if (value && typeof value === "object") {
+    const next: Record<string, unknown> = {};
+    for (const [childKey, item] of Object.entries(value as Record<string, unknown>)) {
+      next[childKey] = truncateLargeSessionValue(item, stats, childKey, value);
+    }
+    return next;
+  }
+  return value;
+}
+
 export function nativeSessionUrl(origin: string, sessionID: string): string {
   return `${origin}/server/${encodeServerKey(origin)}/session/${sessionID}`;
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { compactImageSource, prefixCompactImageUrl, prefixMarkdownImageUrls, toolOutputImageParts } from "../static/compact-image.js";
+import { truncateLargeSessionValue } from "../dist/session.js";
 
 // compact.js runs against document at import; extract the pure converter by
 // slicing its source and evaluating it in a sandbox with stubbed deps.
@@ -78,6 +79,31 @@ test("compact history keeps image file/image parts and their machine-prefixed UR
   const missingDataMime = toCompactMessage({ id: "u3", type: "user", files: [{ url: "data:;base64,YWJj" }] });
   assert.equal(missingDataMime.parts[0].imageExpected, true);
   assert.equal(missingDataMime.parts[0].url, undefined);
+});
+
+test("empty-text user image attachments retain full base64 through session-message sanitization", async () => {
+  const data = "A".repeat(600_000);
+  const original = {
+    data: { messages: [{ type: "user", text: "", files: [{ mime: "image/jpeg", name: "large.jpg", source: { type: "inline" }, data }] }] },
+  };
+  const stats = { truncated: 0 };
+  const sanitized = truncateLargeSessionValue(original, stats);
+  assert.equal(stats.truncated, 0);
+  assert.equal(sanitized.data.messages[0].files[0].data.length, data.length);
+
+  const toCompactMessage = await loadConverter();
+  const compact = toCompactMessage(sanitized.data.messages[0]);
+  assert.equal(compact.parts.length, 1);
+  assert.equal(compact.parts[0].type, "file");
+  assert.equal(compact.parts[0].url, `data:image/jpeg;base64,${data}`);
+});
+
+test("session-message sanitizer still truncates oversized non-image tool output", () => {
+  const output = "x".repeat(600_000);
+  const stats = { truncated: 0 };
+  const sanitized = truncateLargeSessionValue({ content: [{ type: "tool", state: { output } }] }, stats);
+  assert.equal(stats.truncated, 1);
+  assert.ok(sanitized.content[0].state.output.length < output.length);
 });
 
 test("compact reconciles streaming state against /api/session/active", async () => {

@@ -19,7 +19,7 @@ import {
   initialHealthWatchdogState,
   nextHealthState,
 } from "./health-watchdog.js";
-import { RECENT_SESSION_WINDOW_MS, encodeServerKey, listSessionPickerSessions, mergePinnedSessions, nativeSessionUrl, prefixedNativeSessionRedirectTarget, requestOrigin, resolveActiveSessionPath } from "./session.js";
+import { RECENT_SESSION_WINDOW_MS, encodeServerKey, listSessionPickerSessions, mergePinnedSessions, nativeSessionUrl, prefixedNativeSessionRedirectTarget, requestOrigin, resolveActiveSessionPath, truncateLargeSessionValue } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
@@ -112,8 +112,6 @@ type OpenCodeMessage = {
   };
   parts?: unknown[];
 };
-
-const maxSessionMessageStringLength = 120_000;
 
 const remoteDebugEntries: RemoteDebugEntry[] = [];
 let nextRemoteDebugID = 1;
@@ -211,34 +209,6 @@ function isSessionMessageRequest(req: http.IncomingMessage, upstreamPath: string
   } catch {
     return false;
   }
-}
-
-function isImageFileUrl(key: string | undefined, value: string, parent: unknown): boolean {
-  if (key !== "url") return false;
-  if (!value.startsWith("data:image/")) return false;
-  if (!parent || typeof parent !== "object") return false;
-  const part = parent as Record<string, unknown>;
-  return part.type === "file" && typeof part.mime === "string" && part.mime.startsWith("image/");
-}
-
-function truncateLargeSessionValue(value: unknown, stats: { truncated: number }, key?: string, parent?: unknown): unknown {
-  if (typeof value === "string") {
-    if (isImageFileUrl(key, value, parent)) return value;
-    if (value.length <= maxSessionMessageStringLength) return value;
-    stats.truncated += 1;
-    return `${value.slice(0, maxSessionMessageStringLength)}\n\n[opencode-remote: truncated ${value.length - maxSessionMessageStringLength} characters from an oversized session message field]`;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => truncateLargeSessionValue(item, stats));
-  }
-  if (value && typeof value === "object") {
-    const next: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      next[key] = truncateLargeSessionValue(item, stats, key, value);
-    }
-    return next;
-  }
-  return value;
 }
 
 function sanitizeSessionMessageBody(body: Buffer, req: http.IncomingMessage, upstreamPath: string): Buffer {
