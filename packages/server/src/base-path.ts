@@ -37,6 +37,11 @@ export function machineForBasePath(basePath: string): Machine | undefined {
   return undefined;
 }
 
+export function pairsHrefForBasePath(basePath: string): string {
+  const machine = machineForBasePath(basePath);
+  return machine && machine !== "sara" ? `/pairs?host=${machine}` : "/pairs";
+}
+
 export function prefixPath(basePath: string, path: string): string {
   if (!basePath || !path.startsWith("/")) return path;
   return `${basePath}${path}`;

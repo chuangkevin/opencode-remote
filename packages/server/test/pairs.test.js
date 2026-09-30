@@ -440,7 +440,7 @@ test("sessions badge counts dashboard-visible pairs client-side", async () => {
   const page = source.slice(source.indexOf("async function handleRemoteSessions"), source.indexOf("async function handleListPairs"));
   // Server renders 夥伴 without a number; the client fills it from /api/pairs
   // with the same dashboard rules, so the count matches the dashboard.
-  assert.match(page, /<a class="pairs-btn" id="pairsBtn" href="\$\{path\("\/pairs"\)\}">夥伴<\/a>/);
+  assert.match(page, /<a class="pairs-btn" id="pairsBtn" href="\$\{pairsHref\}"\$\{topLevelTarget\}>夥伴<\/a>/);
   assert.doesNotMatch(page, /pairCount/);
   assert.match(page, /import \{ visiblePairs \} from "\$\{path\(`\/c\/static\/pairs-rules\.js\?v=\$\{pairsRulesHash\}`\)\}"/);
   assert.match(page, /visiblePairs\(pairs, "dashboard"\)\.length/);

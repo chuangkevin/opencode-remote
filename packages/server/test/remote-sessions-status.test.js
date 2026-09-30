@@ -221,3 +221,19 @@ test("remote sessions HTML wires an accessible reduced-motion-safe indicator", a
   assert.match(client, /addEventListener\("pagehide", handlePageHide\)/);
   assert.match(client, /addEventListener\("pageshow", handlePageShow\)/);
 });
+
+test("Hub-embedded remote session navigation leaves the iframe with the matching host URL", async () => {
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  const handlers = await readFile(new URL("../src/compact/handlers.ts", import.meta.url), "utf8");
+  const client = await readFile(new URL("../static/remote-sessions.js", import.meta.url), "utf8");
+  assert.match(source, /const pairsHref = basePath \? pairsHrefForBasePath\(basePath\) : path\("\/pairs"\)/);
+  assert.match(source, /href="\$\{pairsHref\}"\$\{topLevelTarget\}>夥伴<\/a>/);
+  assert.match(source, /<form method="post" action="\$\{path\("\/c\/new-session"\)\}"\$\{topLevelTarget\}/);
+  assert.match(source, /href="\$\{nativePath\}" target="_top"/);
+  assert.match(source, /href="\$\{compactPath\}" target="_top"/);
+  assert.match(handlers, /Location: prefixPath\(requestBasePath\(req\), `\/c\/session\/\$\{session\.id\}`\)/);
+  // Pinning and load-more are fetch actions, not links/navigation; pinning reloads only the current document.
+  assert.match(source, /fetch\("\$\{basePath\}\/c\/pins\/" \+ id/);
+  assert.match(source, /window\.location\.reload\(\)/);
+  assert.match(client, /const response = await fetch\(remoteSessionsUrl\(nextWindow\)\)/);
+});

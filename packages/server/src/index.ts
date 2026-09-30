@@ -32,7 +32,7 @@ import { sendHtml } from "./html-response.js";
 import { shouldCompressUpstream } from "./proxy-compress.js";
 import { rejectPromptWhileQuiesced } from "./update-quiesce.js";
 import { resolveOpenCodeCommand } from "./opencode-command.js";
-import { cookieName, isHubRequest, machineOrigin, prefixPath, requestBasePath } from "./base-path.js";
+import { cookieName, isHubRequest, machineOrigin, pairsHrefForBasePath, prefixPath, requestBasePath } from "./base-path.js";
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
 
@@ -1008,6 +1008,8 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
     const basePath = requestBasePath(req);
     const origin = machineOrigin(basePath, requestOrigin(req));
     const path = (value: string) => prefixPath(basePath, value);
+    const pairsHref = basePath ? pairsHrefForBasePath(basePath) : path("/pairs");
+    const topLevelTarget = basePath ? ' target="_top"' : "";
     const asset = (value: string) => path(value);
     const windowLabel = remoteSessionsWindowLabel(windowKey);
     const nextWindow = remoteSessionsNextWindow(windowKey);
@@ -1091,10 +1093,10 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
         <body data-window="${windowKey}">
           <header>
             <h1>工作階段<span class="window-label">（${windowLabel}）</span></h1>
-            <a class="pairs-btn" id="pairsBtn" href="${path("/pairs")}">夥伴</a>
+            <a class="pairs-btn" id="pairsBtn" href="${pairsHref}"${topLevelTarget}>夥伴</a>
             <button class="font-scale-toggle" type="button" data-font-scale-cycle aria-label="切換字級">Aa</button>
             <button class="theme-toggle" type="button" data-theme-toggle aria-label="切換配色"></button>
-            <form method="post" action="${path("/c/new-session")}" style="margin:0;">
+            <form method="post" action="${path("/c/new-session")}"${topLevelTarget} style="margin:0;">
               <button class="new-btn" type="submit">+ 新</button>
             </form>
           </header>

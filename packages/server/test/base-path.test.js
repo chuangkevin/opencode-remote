@@ -7,6 +7,7 @@ import {
   isHubRequest,
   machineForBasePath,
   machineOrigin,
+  pairsHrefForBasePath,
   prefixPath,
   requestBasePath,
 } from "../dist/base-path.js";
@@ -39,6 +40,13 @@ test("prefix helpers preserve legacy paths without a prefix", () => {
   assert.equal(prefixPath("/sara", "/api/pairs"), "/sara/api/pairs");
   assert.equal(cookieName("", "opencode_remote_session"), "opencode_remote_session");
   assert.equal(cookieName("/sara", "opencode_remote_session"), "opencode_remote_session_sara");
+});
+
+test("remote session partner links retain the selected root-domain host", () => {
+  assert.equal(pairsHrefForBasePath("/sara"), "/pairs");
+  assert.equal(pairsHrefForBasePath("/l390"), "/pairs?host=l390");
+  assert.equal(pairsHrefForBasePath("/home"), "/pairs?host=home");
+  assert.equal(pairsHrefForBasePath(""), "/pairs");
 });
 
 test("native interface uses the machine subdomain mapping", () => {
