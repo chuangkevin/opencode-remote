@@ -738,4 +738,33 @@ OpenCode 原生 SPA 在手機橫向 / 雙螢幕不可用，因此提供獨立 co
 - 「在原生介面打開」仍連各機子網域（`opencode-sara`、`opencode-l390`、Home 用 `opencode.sisihome.org`）。
 - `/pairs` 儀表板：`error` 立刻歸檔；非 `busy`／`ask` 的卡閒置超過 2 小時歸檔，`busy`／`ask` 永不歸檔。歸檔只分類、不刪 session 或資料；首屏只讀未歸檔，點「已歸檔」才讀 `GET /api/pairs?archived=1`。
 - 部署：`./deploy/deploy-all.sh <sara|l390|home|all>`；Home 健康檢查打 `http://100.83.112.20:9223/remote-health`（tailnet 直連）。
-- 已知：`/sara/` 之後 app 的 302 會落到無前綴的 `/remote-sessions`；新路由沒有 Caddy active health check。
+- 已知：新路由沒有 Caddy active health check。`/sara/`、`/l390/` 的 302 現況帶前綴（`/sara/remote-sessions`，2026-09-30 實測）。
+
+### `/pairs` 歸檔、快取、首屏（2026-09-30）
+
+Kevin 的入口是 `https://opencode.sisihome.org/pairs`（根網域 `/` 維持 Hub 外殼頁，不轉）。
+
+歸檔規則（`packages/server/static/pairs-rules.js`，server 與前端共用同一份）：
+
+| 卡片狀態 | 改動前 | 改動後 |
+|---|---|---|
+| `error` | 24 小時後歸檔 | 立刻歸檔 |
+| 閒置（非 `busy`／`ask`／`error`） | 24 小時後歸檔 | 超過 2 小時歸檔 |
+| `busy`／`ask` | 永不歸檔 | 永不歸檔 |
+| 派工 Claude session 已封存 | 不看 | 歸檔（`busy`／`ask` 除外） |
+
+- 派工 Claude session 已封存：Mac proxy 唯讀掃 `~/Library/Application Support/Claude/claude-code-sessions` 底下 json 的 `title`＋`isArchived`，快取 30 秒；`title` 對到卡片 `owner` 且只有一筆才算。對不到、重名、目錄不存在（L390）、檔案壞掉都不歸檔、不報錯。
+- 只是分類，不刪 session、不刪資料。
+
+`GET /api/pairs`：
+- 預設只回未歸檔；`?archived=1` 才回已歸檔；每筆多一個 `archived` 布林。
+- 回應快取（`packages/server/src/compact/pairs.ts` `createPairsCache`）：3 秒內直接回；3～60 秒先回舊資料並背景重算（同時只一個重算）；超過 60 秒或沒有快取才等重算；重算失敗且有舊資料就繼續回舊資料。歸檔分類在回應當下依當時時間算。
+- 起因：Mac 負載高時每次現算偶發 8～20 秒。
+
+首屏（根網域 `/pairs` 彙總模式，`pairs.js`）：
+- Mac／L390／Home 各自非同步載入，先回來先畫；還有台在載入時顯示「載入中…」，不顯示「目前沒有夥伴 session」。
+- 每台逾時 15 秒（1.5 秒會把慢的 Mac 誤判離線，已改）；失敗的台 60 秒內不重打，顯示「Home 連不上，只顯示其他台」；成功過的台單次失敗保留舊卡。
+- 「已歸檔」分頁點了才呼叫 `?archived=1`。
+- 實測（2026-09-30）：首屏 0.25～2.8 秒（2.8 為部署後冷啟）；本機 `:9223/api/pairs` 約 0.3～0.6 秒。
+
+部署：`deploy-local.sh` 的 runtime allowlist 檢查接受 `packages/server/static/*` 的相對 import（server 端引用 `static/pairs-rules.js`）。kevinhome 上線後補跑 `./deploy/deploy-all.sh home`。
