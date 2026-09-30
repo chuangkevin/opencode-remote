@@ -32,6 +32,8 @@ import {
   mergeAggregatePairs,
   aggregateLoading,
   remoteIsOffline,
+  aggregateHostCountLabel,
+  createInFlightRequestDeduper,
   parsePairsState,
   pairsStateUrl,
 } from "../static/pairs.js";
@@ -256,6 +258,43 @@ test("aggregate helpers merge freshest cards and keep offline state for its cool
   assert.equal(aggregateLoading(1, 2), false);
   // A failed refresh contributes no new list; the previous successful list remains renderable.
   assert.deepEqual(mergeAggregatePairs([merged]), merged);
+});
+
+test("aggregate host count labels resolve loading, success, failure, and cooldown", () => {
+  const now = 100_000;
+  assert.equal(aggregateHostCountLabel({ pending: true, failedAt: now - 1, count: 8, now }), "載入中");
+  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: undefined, count: 3, now }), "3");
+  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 1, count: 0, now }), "離線");
+  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 59_999, count: 4, now }), "離線");
+  assert.equal(aggregateHostCountLabel({ pending: false, failedAt: now - 60_000, count: 2, now }), "2");
+});
+
+test("aggregate polls share in-flight requests per host and view, then permit retries", async () => {
+  const dedupe = createInFlightRequestDeduper();
+  let resolveRequest;
+  let calls = 0;
+  const load = () => {
+    calls += 1;
+    return new Promise((resolve) => { resolveRequest = resolve; });
+  };
+  const first = dedupe("home:dashboard", load);
+  const overlap = dedupe("home:dashboard", load);
+  assert.equal(first, overlap);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+  resolveRequest([{ id: "success" }]);
+  assert.deepEqual(await first, [{ id: "success" }]);
+
+  const archived = dedupe("home:archived", async () => { calls += 1; return []; });
+  assert.deepEqual(await archived, []);
+  const retry = dedupe("home:dashboard", async () => { calls += 1; return [{ id: "retry" }]; });
+  assert.deepEqual(await retry, [{ id: "retry" }]);
+  assert.equal(calls, 3);
+
+  await assert.rejects(dedupe("home:failed", async () => { throw new Error("502"); }), /502/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(await dedupe("home:failed", async () => { calls += 1; return [{ id: "recovered" }]; }), [{ id: "recovered" }]);
+  assert.equal(calls, 4);
 });
 
 test("pairs cache serves fresh data, revalidates stale data once, and isolates archived views", async () => {
@@ -541,6 +580,11 @@ test("pairs aggregate mode merges remotes with host tags", async () => {
   assert.match(client, /host-tag/);
   assert.match(client, /連不上，只顯示其他台/);
   assert.match(client, /location\.hostname === "opencode\.sisihome\.org"/);
+  assert.match(client, /if \(!pending\.has\(r\.id\)\) \{\s*if \(generation === aggregateGeneration\) updateHostCount\(r\.id, false\)/);
+  assert.match(client, /finally \{\s*pending\.delete\(r\.id\);\s*if \(generation === aggregateGeneration\) \{\s*updateHostCount\(r\.id, false\);\s*updateAggregate\(\);/);
+  assert.match(client, /if \(countEl\?\.textContent === "載入中"\) countEl\.textContent = "離線"/);
+  assert.match(client, /loadRemotePairs\(`\$\{r\.id\}:\$\{requestedView\}`/);
+  assert.match(client, /count: visiblePairs\(remoteData\.get\(id\) \?\? \[\], view, now\)\.length/);
 });
 
 test("/hub serves the Hub shell without a host-scoped /pairs redirect", async () => {

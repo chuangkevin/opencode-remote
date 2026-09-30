@@ -31,6 +31,27 @@ export function remoteIsOffline(lastFailureAt, now = Date.now(), cooldown = AGGR
   return remoteOfflineUntil(lastFailureAt, now, cooldown) > now;
 }
 
+export function aggregateHostCountLabel({ pending, failedAt, count, now }) {
+  if (pending) return "載入中";
+  if (failedAt !== undefined && remoteIsOffline(failedAt, now)) return "離線";
+  return String(count);
+}
+
+export function createInFlightRequestDeduper() {
+  const requests = new Map();
+  return (key, load) => {
+    const existing = requests.get(key);
+    if (existing) return existing;
+    const request = Promise.resolve().then(load);
+    requests.set(key, request);
+    const clear = () => {
+      if (requests.get(key) === request) requests.delete(key);
+    };
+    request.then(clear, clear);
+    return request;
+  };
+}
+
 export function aggregateLoading(pairCount, pendingCount) {
   return pairCount === 0 && pendingCount > 0;
 }
@@ -164,6 +185,7 @@ if (typeof document !== "undefined") {
   let lastRenderedSig = new Map();
   const remoteFailures = new Map();
   const remoteData = new Map();
+  const loadRemotePairs = createInFlightRequestDeduper();
   let aggregateDataView = view;
   let aggregateGeneration = 0;
 
@@ -388,6 +410,23 @@ if (typeof document !== "undefined") {
       for (const r of remotes) {
         if (!remoteIsOffline(remoteFailures.get(r.id))) pending.add(r.id);
       }
+      const updateHostCount = (id, isPending, now = Date.now()) => {
+        const button = hostButtons.find((item) => item.dataset.hostBtn === id);
+        if (!button) return;
+        const countEl = button.querySelector("[data-host-count]");
+        if (!countEl) return;
+        const configured = remotes.some((remote) => remote.id === id);
+        countEl.textContent = aggregateHostCountLabel({
+          pending: isPending,
+          failedAt: configured ? remoteFailures.get(id) : now,
+          count: visiblePairs(remoteData.get(id) ?? [], view, now).length,
+          now,
+        });
+        button.setAttribute("aria-pressed", id === selectedHost ? "true" : "false");
+      };
+      for (const button of hostButtons) {
+        updateHostCount(button.dataset.hostBtn, pending.has(button.dataset.hostBtn));
+      }
       const updateAggregate = () => {
         if (generation !== aggregateGeneration) return;
         const pairs = mergeAggregatePairs([...remoteData.values()]);
@@ -399,27 +438,30 @@ if (typeof document !== "undefined") {
           else aggNote.classList.remove("show");
           aggNote.textContent = down.length > 0 ? `${down.join("、")} 連不上，只顯示其他台` : "";
         }
-        for (const btn of hostButtons) {
-          const id = btn.dataset.hostBtn;
-          const remote = remotes.find((r) => r.id === id);
-          const count = pairs.filter((pair) => pair.hostId === id).length;
-          const offline = remote && remoteIsOffline(remoteFailures.get(id));
-          const countEl = btn.querySelector("[data-host-count]");
-          if (countEl) countEl.textContent = `${count}${offline ? " · 離線" : ""}`;
-          btn.setAttribute("aria-pressed", id === selectedHost ? "true" : "false");
-        }
         renderAggregate(pairs.filter((pair) => pair.hostId === selectedHost), aggregateLoading(pairs.length, pending.size));
       };
       await Promise.allSettled(remotes.map(async (r) => {
-        if (!pending.has(r.id)) return;
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), AGGREGATE_FETCH_TIMEOUT_MS);
+        if (!pending.has(r.id)) {
+          if (generation === aggregateGeneration) updateHostCount(r.id, false);
+          return;
+        }
         try {
-          const query = view === "archived" ? "?archived=1" : "";
-          const res = await fetch(r.url.replace(/\/+$/, "") + `/api/pairs${query}`, { cache: "no-store", signal: controller.signal });
-          if (!res.ok) throw new Error(`GET ${r.url}/api/pairs returned ${res.status}`);
-          const list = await res.json();
-          if (!Array.isArray(list)) throw new Error("invalid pairs payload");
+          const requestedView = view;
+          const list = await loadRemotePairs(`${r.id}:${requestedView}`, async () => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), AGGREGATE_FETCH_TIMEOUT_MS);
+            try {
+              const query = requestedView === "archived" ? "?archived=1" : "";
+              const url = r.url.replace(/\/+$/, "") + `/api/pairs${query}`;
+              const res = await fetch(url, { cache: "no-store", signal: controller.signal });
+              if (!res.ok) throw new Error(`GET ${url} returned ${res.status}`);
+              const payload = await res.json();
+              if (!Array.isArray(payload)) throw new Error("invalid pairs payload");
+              return payload;
+            } finally {
+              clearTimeout(timeout);
+            }
+          });
           if (generation === aggregateGeneration) {
             remoteFailures.delete(r.id);
             remoteData.set(r.id, list.map((p) => ({ ...p, hostId: r.id, hostName: r.name, hostUrl: r.url })));
@@ -427,12 +469,20 @@ if (typeof document !== "undefined") {
         } catch {
           if (generation === aggregateGeneration) remoteFailures.set(r.id, Date.now());
         } finally {
-          clearTimeout(timeout);
           pending.delete(r.id);
+          if (generation === aggregateGeneration) {
+            updateHostCount(r.id, false);
+            updateAggregate();
+          }
         }
-        updateAggregate();
       }));
     } catch {
+      if (AGGREGATE) {
+        for (const button of hostButtons) {
+          const countEl = button.querySelector("[data-host-count]");
+          if (countEl?.textContent === "載入中") countEl.textContent = "離線";
+        }
+      }
       // next tick retries
     }
   }
