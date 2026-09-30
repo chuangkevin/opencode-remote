@@ -470,9 +470,15 @@ test("Hub host state parses URL before storage and serializes a shareable URL", 
   assert.equal(hubHostUrl("invalid"), "/?host=mac");
 });
 
-test("Hub session links rewrite to the selected root-domain machine prefix", () => {
+test("Hub compact links keep their prefix and native SPA links leave the root domain", () => {
   assert.equal(rewriteHubSessionHref("/sara/c/session/ses_mac", "/sara"), "/sara/c/session/ses_mac");
-  assert.equal(rewriteHubSessionHref("https://opencode-l390.sisihome.org/server/abc/session/ses_l390", "/l390"), "/l390/server/abc/session/ses_l390");
+  const l390Origin = "https://opencode-l390.sisihome.org";
+  const l390Key = Buffer.from(l390Origin).toString("base64url");
+  assert.equal(rewriteHubSessionHref("https://opencode-l390.sisihome.org/server/old/session/ses_l390/sub?x=1", "/l390"), `${l390Origin}/server/${l390Key}/session/ses_l390/sub?x=1`);
+  const saraOrigin = "https://opencode-sara.sisihome.org";
+  assert.equal(rewriteHubSessionHref("https://opencode.sisihome.org/sara/server/old/session/ses_mac", "/sara"), `${saraOrigin}/server/${Buffer.from(saraOrigin).toString("base64url")}/session/ses_mac`);
+  const homeOrigin = "https://opencode-home.sisihome.org";
+  assert.equal(rewriteHubSessionHref("https://opencode.sisihome.org/home/server/old/session/ses_home", "/home"), `${homeOrigin}/server/${Buffer.from(homeOrigin).toString("base64url")}/session/ses_home`);
   assert.equal(rewriteHubSessionHref("/c/session/ses_x?from=hub#chat", "/home"), "/home/c/session/ses_x?from=hub#chat");
   assert.equal(rewriteHubSessionHref("/remote-sessions", "/sara"), undefined);
 });

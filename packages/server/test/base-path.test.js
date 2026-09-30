@@ -13,6 +13,7 @@ import {
 } from "../dist/base-path.js";
 import { getBasePath, migrateRemoteUrl } from "../static/pairs.js";
 import { renderCompactShell } from "../dist/compact/shell.js";
+import { nativeSessionUrl, prefixedNativeSessionRedirectTarget } from "../dist/session.js";
 
 const request = (prefix) => ({ headers: prefix === undefined ? {} : { "x-forwarded-prefix": prefix } });
 
@@ -50,11 +51,35 @@ test("remote session partner links retain the selected root-domain host", () => 
 });
 
 test("native interface uses the machine subdomain mapping", () => {
+  const origins = {
+    sara: "https://opencode-sara.sisihome.org",
+    l390: "https://opencode-l390.sisihome.org",
+    home: "https://opencode-home.sisihome.org",
+  };
   assert.equal(machineForBasePath("/sara"), "sara");
-  assert.equal(machineOrigin("/sara", "https://wrong.example"), "https://opencode-sara.sisihome.org");
-  assert.equal(machineOrigin("/l390", "https://wrong.example"), "https://opencode-l390.sisihome.org");
-  assert.equal(machineOrigin("/home", "https://wrong.example"), "https://opencode.sisihome.org");
+  assert.equal(machineOrigin("/sara", "https://wrong.example"), origins.sara);
+  assert.equal(machineOrigin("/l390", "https://wrong.example"), origins.l390);
+  assert.equal(machineOrigin("/home", "https://wrong.example"), origins.home);
   assert.equal(machineOrigin("", "https://current.example"), "https://current.example");
+});
+
+test("prefixed native SPA links use machine origins and old prefixed URLs redirect with recomputed keys", () => {
+  const id = "ses_a1b2";
+  const encodedOrigin = (origin) => Buffer.from(origin).toString("base64url");
+  const cases = [
+    ["/sara", "https://opencode-sara.sisihome.org"],
+    ["/l390", "https://opencode-l390.sisihome.org"],
+    ["/home", "https://opencode-home.sisihome.org"],
+  ];
+  for (const [basePath, origin] of cases) {
+    const expected = `${origin}/server/${encodedOrigin(origin)}/session/${id}`;
+    assert.equal(nativeSessionUrl(origin, id), expected);
+    assert.equal(prefixedNativeSessionRedirectTarget(basePath, `/server/old/session/${id}`), expected);
+  }
+  const saraOrigin = cases[0][1];
+  assert.equal(prefixedNativeSessionRedirectTarget("/sara", `/server/old/session/${id}/part?x=1`), `${saraOrigin}/server/${encodedOrigin(saraOrigin)}/session/${id}/part?x=1`);
+  assert.equal(prefixedNativeSessionRedirectTarget("", `/server/old/session/${id}`), undefined);
+  assert.equal(prefixedNativeSessionRedirectTarget("/sara", "/remote-sessions"), undefined);
 });
 
 test("legacy aggregate remote URLs migrate to the shared-domain paths", () => {

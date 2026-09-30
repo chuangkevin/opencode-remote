@@ -107,6 +107,13 @@ test("static: unknown file returns 404", () => {
   assert.equal(status, 404);
 });
 
+test("static: compact image helpers are served as a JavaScript module", () => {
+  const { status, headers, body } = callStatic("/c/static/compact-image.js", { headers: {} });
+  assert.equal(status, 200);
+  assert.match(headers["Content-Type"], /application\/javascript/);
+  assert.match(body.toString("utf8"), /export function compactImageSource/);
+});
+
 test("static: tolerates a request object without headers", () => {
   let status;
   let headers;

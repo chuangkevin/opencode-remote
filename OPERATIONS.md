@@ -735,7 +735,7 @@ OpenCode 原生 SPA 在手機橫向 / 雙螢幕不可用，因此提供獨立 co
 
 - `https://opencode.sisihome.org/sara/…`、`/l390/…`、`/home/…`：GN100 Caddy（homelab-docs `infra/caddy/routes.caddyfile`）用 `handle_path` 去前綴後轉各機 `:9223`，並帶 `X-Forwarded-Prefix`。
 - app 只認 `X-Forwarded-Prefix` 為 `/sara`、`/l390`、`/home`（`packages/server/src/base-path.ts`）；沒有這個 header 時行為與舊版相同。
-- 「在原生介面打開」仍連各機子網域（`opencode-sara`、`opencode-l390`、Home 用 `opencode.sisihome.org`）。
+- 「在原生介面打開」仍連各機子網域（`opencode-sara`、`opencode-l390`、Home 用 `opencode-home.sisihome.org`）。
 - `/pairs` 儀表板：`error` 立刻歸檔；非 `busy`／`ask` 的卡閒置超過 2 小時歸檔，`busy`／`ask` 永不歸檔。歸檔只分類、不刪 session 或資料；首屏只讀未歸檔，點「已歸檔」才讀 `GET /api/pairs?archived=1`。
 - 部署：`./deploy/deploy-all.sh <sara|l390|home|all>`；Home 健康檢查打 `http://100.83.112.20:9223/remote-health`（tailnet 直連）。
 - 已知：新路由沒有 Caddy active health check。`/sara/`、`/l390/` 的 302 現況帶前綴（`/sara/remote-sessions`，2026-09-30 實測）。

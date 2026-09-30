@@ -1,6 +1,7 @@
 import type http from "node:http";
 import { config } from "./config.js";
 import { unwrap, upstreamFetch, upstreamJson } from "./upstream.js";
+import { machineOrigin } from "./base-path.js";
 
 // OpenCode 2.x session (GET /api/session/:id → data). `directory` is derived
 // from `location.directory` so the rest of the server keeps its 1.x field name.
@@ -117,6 +118,27 @@ export function encodeServerKey(origin: string): string {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
+}
+
+export function nativeSessionUrl(origin: string, sessionID: string): string {
+  return `${origin}/server/${encodeServerKey(origin)}/session/${sessionID}`;
+}
+
+export function prefixedNativeSessionRedirectTarget(basePath: string, requestTarget: string): string | undefined {
+  const origin = machineOrigin(basePath, undefined);
+  if (!origin) return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(requestTarget, "http://opencode-remote.local");
+  } catch {
+    return undefined;
+  }
+
+  const match = url.pathname.match(/^\/server\/[^/]+\/session\/([^/]+)(\/.*)?$/);
+  if (!match) return undefined;
+
+  return `${nativeSessionUrl(origin, match[1])}${match[2] ?? ""}${url.search}`;
 }
 
 /**

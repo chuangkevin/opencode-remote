@@ -11,6 +11,7 @@
   reconcileModelAfterInitialization,
 } from "./compact-model.js";
 import { getFontScale, setFontScale } from "./font-scale.js";
+import { compactImageSource, isImageMarkdown, prefixCompactImageUrl, prefixMarkdownImageUrls, toolOutputImageParts } from "./compact-image.js";
 
 // ─── State ─────────────────────────────────────────────────
 const sessionID = document.body.dataset.sessionId;
@@ -26,7 +27,7 @@ const nativeOrigin = BASE_PATH === "/sara"
   : BASE_PATH === "/l390"
     ? "https://opencode-l390.sisihome.org"
     : BASE_PATH === "/home"
-      ? "https://opencode.sisihome.org"
+      ? "https://opencode-home.sisihome.org"
       : location.origin;
 const els = {
   messages: document.getElementById("messages"),
@@ -89,7 +90,7 @@ function readSavedModel() {
 
 // ─── Markdown + safety ─────────────────────────────────────
 function renderMarkdown(text) {
-  return marked.parse(text || "");
+  return marked.parse(prefixMarkdownImageUrls(text || "", BASE_PATH));
 }
 
 // ─── API helpers ───────────────────────────────────────────
@@ -164,15 +165,29 @@ function toCompactMessage(m) {
     const text = m.text ?? m.metadata?.displayText ?? "";
     if (text) parts.push({ type: "text", text });
     for (const f of Array.isArray(m.files) ? m.files : []) {
-      // 2.x stores { data (base64) | url, mime, name }; rebuild a data: URL for <img>.
-      const url = f.url ?? (f.data && f.mime ? `data:${f.mime};base64,${f.data}` : undefined);
-      parts.push({ type: "file", mime: f.mime, url, filename: f.filename ?? f.name });
+      const mime = f.mime ?? f.mimeType;
+      parts.push({
+        type: "file",
+        mime,
+        url: compactImageSource(f, BASE_PATH),
+        filename: f.filename ?? f.name,
+        ...((typeof mime !== "string" || !mime.startsWith("image/")) && (typeof f.data === "string" || (typeof f.url === "string" && /^data:/i.test(f.url))) ? { imageExpected: true } : {}),
+      });
     }
   } else {
     for (const c of Array.isArray(m.content) ? m.content : []) {
       if (c.type === "text") parts.push({ type: "text", text: c.text ?? "" });
       else if (c.type === "tool") parts.push({ type: "tool", id: c.id, tool: c.name, state: c.state ?? {} });
-      else parts.push({ type: c.type ?? "unknown" });
+      else if (c.type === "image" || c.type === "file") {
+        const mime = c.mime ?? c.mimeType;
+        parts.push({
+          type: c.type,
+          mime,
+          url: compactImageSource(c, BASE_PATH),
+          filename: c.filename ?? c.name,
+          ...((c.type === "image" || (typeof mime !== "string" || !mime.startsWith("image/")) && (typeof c.data === "string" || (typeof c.url === "string" && /^data:/i.test(c.url)))) ? { imageExpected: true } : {}),
+        });
+      } else parts.push({ type: c.type ?? "unknown" });
     }
     // Assistant-level error (e.g. finish:"error" / error:{type,message} after
     // an interrupt): show it as a red line instead of an empty bubble.
@@ -303,6 +318,7 @@ function renderMessage(message) {
   if (aggregateText) {
     const md = document.createElement("div");
     md.innerHTML = renderMarkdown(aggregateText);
+    prepareMessageImages(md);
     body.appendChild(md);
     hasContent = true;
   }
@@ -317,6 +333,18 @@ function renderMessage(message) {
       row.innerHTML = `<span class="tool-icon">🔧</span><span class="tool-name">${escapeHTML(name)}</span><span class="tool-detail">${detail ? "· " + escapeHTML(detail) : ""}</span>`;
       body.appendChild(row);
       hasContent = true;
+      const output = part.state?.output;
+      if (typeof output === "string" && isImageMarkdown(output)) {
+        const rendered = document.createElement("div");
+        rendered.className = "tool-image-output";
+        rendered.innerHTML = renderMarkdown(output);
+        prepareMessageImages(rendered);
+        body.appendChild(rendered);
+      } else {
+        for (const item of toolOutputImageParts(output)) {
+          body.appendChild(createMessageImage(compactImageSource(item, BASE_PATH), item.name ?? item.filename ?? ""));
+        }
+      }
     } else if (part.type === "error") {
       const row = document.createElement("div");
       row.className = "msg-error";
@@ -324,16 +352,8 @@ function renderMessage(message) {
       body.appendChild(row);
       hasContent = true;
       if (name === "question") schedulePendingQuestionDrain();
-    } else if (part.type === "file" && (part.mime ?? "").startsWith("image/")) {
-      const img = document.createElement("img");
-      img.src = part.url;
-      img.alt = part.filename ?? "";
-      img.style.maxWidth = "240px";
-      img.style.maxHeight = "240px";
-      img.style.borderRadius = "8px";
-      img.style.margin = "6px 0";
-      img.style.display = "block";
-      body.appendChild(img);
+    } else if ((part.type === "file" || part.type === "image") && ((part.mime ?? "").startsWith("image/") || part.type === "image" || part.imageExpected)) {
+      body.appendChild(createMessageImage(part.url, part.filename ?? ""));
       hasContent = true;
     }
     // step-start / step-finish: pure metadata boundaries, no visible output.
@@ -356,6 +376,57 @@ function renderMessage(message) {
       return;
     }
   }
+}
+
+function openImageViewer(src, alt = "") {
+  if (!src) return;
+  let dialog = document.getElementById("imageViewer");
+  if (!dialog) {
+    dialog = document.createElement("dialog");
+    dialog.id = "imageViewer";
+    dialog.className = "image-viewer";
+    dialog.innerHTML = '<button type="button" class="image-viewer-close" aria-label="關閉圖片">×</button><img alt="">';
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog || event.target.closest(".image-viewer-close")) dialog.close();
+    });
+    document.body.appendChild(dialog);
+  }
+  const img = dialog.querySelector("img");
+  img.src = src;
+  img.alt = alt;
+  if (!dialog.open) dialog.showModal();
+}
+
+function prepareMessageImages(container) {
+  for (const img of container.querySelectorAll("img")) {
+    img.classList.add("message-image");
+    img.loading = "lazy";
+    img.addEventListener("click", () => openImageViewer(img.currentSrc || img.src, img.alt));
+    img.addEventListener("error", () => {
+      const fallback = document.createElement("span");
+      fallback.className = "image-load-error";
+      fallback.textContent = "圖片載入失敗";
+      img.replaceWith(fallback);
+    }, { once: true });
+  }
+}
+
+function createMessageImage(src, alt = "") {
+  const wrapper = document.createElement("div");
+  wrapper.className = "message-image-wrap";
+  if (!src) {
+    const fallback = document.createElement("span");
+    fallback.className = "image-load-error";
+    fallback.textContent = "圖片資料無法辨識";
+    wrapper.appendChild(fallback);
+    return wrapper;
+  }
+  const img = document.createElement("img");
+  img.src = prefixCompactImageUrl(src, BASE_PATH);
+  img.alt = alt;
+  wrapper.appendChild(img);
+  prepareMessageImages(wrapper);
+  return wrapper;
 }
 
 function summarizeTool(part) {
@@ -673,6 +744,7 @@ function applyDelta(props) {
     body.appendChild(streamEl);
   }
   streamEl.innerHTML = renderMarkdown(next);
+  prepareMessageImages(streamEl);
   maybeScrollOrShowChip();
 }
 
@@ -863,6 +935,7 @@ function renderQuestionRequest(req) {
       const txt = document.createElement("div");
       txt.className = "qblock-text";
       txt.innerHTML = renderMarkdown(q.question);
+      prepareMessageImages(txt);
       block.appendChild(txt);
     }
     const opts = document.createElement("div");
@@ -1042,18 +1115,11 @@ function renderQueueItem(item) {
   if (item.text) {
     const md = document.createElement("div");
     md.innerHTML = renderMarkdown(item.text);
+    prepareMessageImages(md);
     body.appendChild(md);
   }
   for (const a of item.attachments ?? []) {
-    const img = document.createElement("img");
-    img.src = a.dataUrl;
-    img.alt = a.name ?? "";
-    img.style.maxWidth = "240px";
-    img.style.maxHeight = "240px";
-    img.style.borderRadius = "8px";
-    img.style.margin = "6px 0";
-    img.style.display = "block";
-    body.appendChild(img);
+    body.appendChild(createMessageImage(a.dataUrl, a.name ?? ""));
   }
   node.append(head, body);
   els.messages.appendChild(node);
@@ -1114,18 +1180,11 @@ function renderOptimisticUserMessage(text, attachments) {
   if (text) {
     const md = document.createElement("div");
     md.innerHTML = renderMarkdown(text);
+    prepareMessageImages(md);
     body.appendChild(md);
   }
   for (const a of attachments ?? []) {
-    const img = document.createElement("img");
-    img.src = a.dataUrl;
-    img.alt = a.name ?? "";
-    img.style.maxWidth = "240px";
-    img.style.maxHeight = "240px";
-    img.style.borderRadius = "8px";
-    img.style.margin = "6px 0";
-    img.style.display = "block";
-    body.appendChild(img);
+    body.appendChild(createMessageImage(a.dataUrl, a.name ?? ""));
   }
   node.append(head, body);
   els.messages.appendChild(node);
@@ -1630,6 +1689,7 @@ function renderAttachments() {
     const thumb = document.createElement("div");
     thumb.className = "attach-thumb";
     thumb.innerHTML = `<img src="${a.dataUrl}" alt="" /><button class="x" type="button" data-i="${i}" aria-label="移除附件"><span aria-hidden="true">×</span></button>`;
+    prepareMessageImages(thumb);
     els.attachRow.appendChild(thumb);
   });
 }
@@ -2169,7 +2229,8 @@ function doNewSession() {
 async function doOpenNative() {
   // 2.x SPA server route: /server/<base64url(origin)>/session/<id>.
   const key = btoa(nativeOrigin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  window.open(`/server/${key}/session/${sessionID}`, "_blank");
+  const route = `/server/${key}/session/${sessionID}`;
+  window.open(BASE_PATH ? `${nativeOrigin}${route}` : route, "_blank");
 }
 
 async function doDeleteSession() {

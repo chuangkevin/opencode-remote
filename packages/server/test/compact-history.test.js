@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { compactImageSource, prefixCompactImageUrl, prefixMarkdownImageUrls, toolOutputImageParts } from "../static/compact-image.js";
 
 // compact.js runs against document at import; extract the pure converter by
 // slicing its source and evaluating it in a sandbox with stubbed deps.
@@ -10,7 +11,7 @@ async function loadConverter() {
   const end = src.indexOf("function toCompactMessages");
   assert.ok(start >= 0 && end > start);
   const body = src.slice(start, end);
-  const fn = new Function("sessionID", `${body}; return toCompactMessage;`)("ses_test");
+  const fn = new Function("sessionID", "compactImageSource", "BASE_PATH", `${body}; return toCompactMessage;`)("ses_test", compactImageSource, "/sara");
   return fn;
 }
 
@@ -51,6 +52,34 @@ test("model-switched and synthetic become grey divider lines", async () => {
   assert.equal(toCompactMessage({ id: "s3", type: "synthetic", text: "" }), null);
 });
 
+test("compact image URL helpers prefix machine paths and reject data URLs without image MIME", () => {
+  assert.equal(prefixCompactImageUrl("/file/image.png", "/sara"), "/sara/file/image.png");
+  assert.equal(prefixCompactImageUrl("file/image.png", "/sara"), "/sara/file/image.png");
+  assert.equal(prefixCompactImageUrl("../file/image.png", "/sara"), "/sara/file/image.png");
+  assert.equal(prefixCompactImageUrl("/sara/session/x/file", "/sara"), "/sara/session/x/file");
+  assert.equal(prefixCompactImageUrl("https://images.example/a.png", "/sara"), "https://images.example/a.png");
+  assert.equal(compactImageSource({ mime: "image/png", data: "YWJj" }, "/sara"), "data:image/png;base64,YWJj");
+  assert.equal(compactImageSource({ type: "image", url: "data:;base64,YWJj" }, "/sara"), undefined);
+  assert.equal(compactImageSource({ type: "file", mime: "image/jpeg", url: "/file/p.png" }, "/sara"), "/sara/file/p.png");
+  assert.equal(prefixMarkdownImageUrls("![photo](/file/photo.png)", "/sara"), "![photo](/sara/file/photo.png)");
+  assert.equal(prefixMarkdownImageUrls("![photo](https://images.example/photo.png)", "/sara"), "![photo](https://images.example/photo.png)");
+  assert.deepEqual(toolOutputImageParts({ content: [{ type: "image", mimeType: "image/png", data: "YWJj" }] }), [{ type: "image", mimeType: "image/png", data: "YWJj" }]);
+});
+
+test("compact history keeps image file/image parts and their machine-prefixed URLs", async () => {
+  const toCompactMessage = await loadConverter();
+  const user = toCompactMessage({ id: "u1", type: "user", files: [{ mime: "image/png", url: "/file/u.png", name: "u.png" }] });
+  assert.deepEqual(user.parts, [{ type: "file", mime: "image/png", url: "/sara/file/u.png", filename: "u.png" }]);
+  const assistant = toCompactMessage({ id: "a1", type: "assistant", content: [{ type: "image", mime: "image/jpeg", url: "/session/a1/file/a.jpg" }] });
+  assert.deepEqual(assistant.parts, [{ type: "image", mime: "image/jpeg", url: "/sara/session/a1/file/a.jpg", filename: undefined, imageExpected: true }]);
+  const missingMime = toCompactMessage({ id: "u2", type: "user", files: [{ data: "YWJj", name: "unknown" }] });
+  assert.equal(missingMime.parts[0].imageExpected, true);
+  assert.equal(missingMime.parts[0].url, undefined);
+  const missingDataMime = toCompactMessage({ id: "u3", type: "user", files: [{ url: "data:;base64,YWJj" }] });
+  assert.equal(missingDataMime.parts[0].imageExpected, true);
+  assert.equal(missingDataMime.parts[0].url, undefined);
+});
+
 test("compact reconciles streaming state against /api/session/active", async () => {
   const src = await readFile(new URL("../static/compact.js", import.meta.url), "utf8");
   assert.match(src, /ACTIVE_RECONCILE_MS = 15_000/);
@@ -63,6 +92,13 @@ test("compact styles dividers and error lines", async () => {
   assert.match(css, /\.divider-line::before/);
   assert.match(css, /\.msg-error/);
   assert.match(css, /\.divider-error/);
+  assert.match(css, /\.msg-body img,[\s\S]*?max-width: 100%;[\s\S]*?height: auto;/);
+  assert.match(css, /\.image-load-error/);
+  assert.match(css, /\.image-viewer/);
+  const src = await readFile(new URL("../static/compact.js", import.meta.url), "utf8");
+  assert.match(src, /BASE_PATH === "\/home"\s*\? "https:\/\/opencode-home\.sisihome\.org"/);
+  assert.match(src, /圖片載入失敗/);
+  assert.match(src, /img\.addEventListener\("click", \(\) => openImageViewer/);
 });
 
 test("stop button hidden attribute beats its display rule", async () => {

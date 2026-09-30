@@ -230,6 +230,9 @@ test("Hub-embedded remote session navigation leaves the iframe with the matching
   assert.match(source, /href="\$\{pairsHref\}"\$\{topLevelTarget\}>夥伴<\/a>/);
   assert.match(source, /<form method="post" action="\$\{path\("\/c\/new-session"\)\}"\$\{topLevelTarget\}/);
   assert.match(source, /href="\$\{nativePath\}" target="_top"/);
+  assert.match(source, /basePath \? nativeSessionUrl\(origin, session\.id\)/);
+  assert.match(source, /prefixedNativeSessionRedirectTarget\(requestBasePath\(req\), req\.url \?\? ""\)/);
+  assert.match(source, /res\.writeHead\(302, \{ Location: redirectTarget, "Cache-Control": "no-store" \}\)/);
   assert.match(source, /href="\$\{compactPath\}" target="_top"/);
   assert.match(handlers, /Location: prefixPath\(requestBasePath\(req\), `\/c\/session\/\$\{session\.id\}`\)/);
   // Pinning and load-more are fetch actions, not links/navigation; pinning reloads only the current document.

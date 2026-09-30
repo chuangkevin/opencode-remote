@@ -21,7 +21,7 @@ export function isHubRequest(url: string | undefined): boolean {
 const MACHINE_ORIGINS: Record<Machine, string> = Object.freeze({
   sara: "https://opencode-sara.sisihome.org",
   l390: "https://opencode-l390.sisihome.org",
-  home: "https://opencode.sisihome.org",
+  home: "https://opencode-home.sisihome.org",
 });
 
 export function requestBasePath(req: Pick<http.IncomingMessage, "headers">): string {

@@ -19,7 +19,7 @@ import {
   initialHealthWatchdogState,
   nextHealthState,
 } from "./health-watchdog.js";
-import { RECENT_SESSION_WINDOW_MS, encodeServerKey, listSessionPickerSessions, mergePinnedSessions, requestOrigin, resolveActiveSessionPath } from "./session.js";
+import { RECENT_SESSION_WINDOW_MS, encodeServerKey, listSessionPickerSessions, mergePinnedSessions, nativeSessionUrl, prefixedNativeSessionRedirectTarget, requestOrigin, resolveActiveSessionPath } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
 import { listPins, pinSession, unpinSession } from "./compact/pins.js";
 import { ensureSessionTrust } from "./compact/trust.js";
@@ -1017,7 +1017,7 @@ async function handleRemoteSessions(req: http.IncomingMessage, res: http.ServerR
 
     const items = ordered.map((session) => {
       const nativePath = origin
-        ? path(`/server/${encodeServerKey(origin)}/session/${session.id}`)
+        ? (basePath ? nativeSessionUrl(origin, session.id) : path(`/server/${encodeServerKey(origin)}/session/${session.id}`))
         : path(`/c/session/${session.id}`);
       const compactPath = path(`/c/session/${session.id}`);
       const title = session.title || session.slug || session.id;
@@ -1469,6 +1469,15 @@ async function handleLatestRedirect(req: http.IncomingMessage, res: http.ServerR
 
 const server = http.createServer((req, res) => {
   if (rejectPromptWhileQuiesced(req, res, config.updateQuiesceFile)) return;
+
+  if (req.method === "GET") {
+    const redirectTarget = prefixedNativeSessionRedirectTarget(requestBasePath(req), req.url ?? "");
+    if (redirectTarget) {
+      res.writeHead(302, { Location: redirectTarget, "Cache-Control": "no-store" });
+      res.end();
+      return;
+    }
+  }
 
   if (req.method === "GET" && req.url === "/remote-health") {
     void handleRemoteHealth(res);
