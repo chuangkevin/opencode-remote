@@ -34,7 +34,7 @@ export function readServiceState(): ServiceState | undefined {
     if (serviceCache && serviceCache.mtimeMs === mtimeMs) return serviceCache.state;
     const raw = JSON.parse(readFileSync(SERVICE_STATE_PATH, "utf8"));
     const state = typeof raw?.url === "string" && typeof raw?.password === "string"
-      ? { url: raw.url.replace(/\/+$/, ""), password: raw.password, pid: raw.pid, version: raw.version }
+      ? { url: raw.url.replace(/\/+$/, ""), password: raw.password, pid: Number.isSafeInteger(raw.pid) && raw.pid > 0 ? raw.pid as number : undefined, version: raw.version }
       : undefined;
     serviceCache = { mtimeMs, state };
     return state;
@@ -42,6 +42,12 @@ export function readServiceState(): ServiceState | undefined {
     serviceCache = undefined;
     return undefined;
   }
+}
+
+export function serviceStateFileStatus(): "present" | "absent" | "unknown" {
+  if (!serviceMode) return "absent";
+  try { return statSync(SERVICE_STATE_PATH).isFile() ? "present" : "unknown"; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unknown"; }
 }
 
 const defaultUpdateQuiesceFile = process.platform === "win32" && process.env.LOCALAPPDATA
