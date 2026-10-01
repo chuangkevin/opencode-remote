@@ -15,9 +15,12 @@ import {
   nodeKeyDriftDeps,
 } from "./key-drift.js";
 import {
+  evaluateHealthRecovery,
+  healthRecoveryPolicy,
+  fetchHealthRecoveryActivityStatus,
   healthRestartCooldownRemainingMs,
   initialHealthWatchdogState,
-  nextHealthState,
+  trackPromptRequest,
 } from "./health-watchdog.js";
 import { RECENT_SESSION_WINDOW_MS, encodeServerKey, listSessionPickerSessions, mergePinnedSessions, nativeSessionUrl, prefixedNativeSessionRedirectTarget, requestOrigin, resolveActiveSessionPath, truncateLargeSessionValue } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
@@ -413,6 +416,7 @@ function proxy(
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): void {
+  const releasePromptRequest = trackPromptRequest(req, res, activePromptRequests);
   const upstreamPath = sanitizeProxyPath(req.url);
   const debugRequest = shouldRecordProxyDebug(req.url, upstreamPath);
   const retryableRequest = debugRequest && (req.method === "GET" || req.method === "HEAD");
@@ -454,6 +458,7 @@ function proxy(
   const cleanup = (): void => {
     if (cleanedUp) return;
     cleanedUp = true;
+    releasePromptRequest();
     if (retryTimer) clearTimeout(retryTimer);
     proxyReq.destroy();
     proxyRes?.destroy();
@@ -492,6 +497,7 @@ function proxy(
       const isHead = req.method === "HEAD";
 
       upstreamRes.on("error", (err) => {
+        releasePromptRequest();
         if (retryProxyRequest(err)) return;
         if (!res.destroyed) res.destroy();
       });
@@ -650,6 +656,7 @@ function proxy(
     });
 
     proxyReq.on("error", (err) => {
+      releasePromptRequest();
       if (retryProxyRequest(err)) return;
       logProxyDebug({ status: 502, error: err.message });
       if (!res.headersSent && !res.destroyed) {
@@ -666,12 +673,16 @@ function proxy(
   };
 
   req.on("aborted", cleanup);
+  req.on("aborted", releasePromptRequest);
+  req.on("error", releasePromptRequest);
   req.on("close", () => {
     if (!req.complete) cleanup();
   });
   res.on("close", () => {
+    releasePromptRequest();
     if (!res.writableEnded) cleanup();
   });
+  res.on("finish", releasePromptRequest);
 
   startProxyRequest(true);
 }
@@ -1637,6 +1648,7 @@ const server = http.createServer((req, res) => {
 // ─── Dead stream watchdog ────────────────────────────────────────────────────
 
 const deadStreamAbortAttempts = new Map<string, number>();
+const activePromptRequests = new Set<symbol>();
 
 // 2.x: GET /api/session/active → { data: { <id>: { type: "running" } } }
 async function fetchBusySessionIDs(_directory: string): Promise<string[]> {
@@ -2057,7 +2069,37 @@ async function main(): Promise<void> {
       running = true;
       try {
         const probeOk = await probeOpenCodeHealth(config.healthWatchdogTimeoutMs);
-        const result = nextHealthState(state, probeOk, Date.now(), opts);
+        const originalState = state;
+        const wallNow = Date.now();
+        const monotonicNow = performance.now();
+        const recoveryThresholdReached = config.serviceMode && !probeOk &&
+          originalState.consecutiveFailures + 1 >= Math.max(1, opts.failures) &&
+          healthRestartCooldownRemainingMs(originalState, wallNow, opts) === 0;
+        let activityStatus: "busy" | "idle" | "unknown" = "unknown";
+        const ownedChildExited = childHasExited(oc);
+        const recoveryPolicy = healthRecoveryPolicy({
+          managed: config.serviceMode,
+          ownsOpenCodeProcess,
+          ownedChildExited,
+        });
+        if (recoveryThresholdReached && recoveryPolicy.lookupActivity) {
+          activityStatus = await fetchHealthRecoveryActivityStatus(
+            (signal) => upstreamFetch("/session/active", { signal }),
+            config.healthWatchdogTimeoutMs,
+          );
+        }
+        const result = evaluateHealthRecovery({
+          state: originalState,
+          probeOk,
+          wallNow,
+          monotonicNow,
+          options: opts,
+          activityStatus,
+          activePrompts: activePromptRequests.size,
+          ownedChildExited: recoveryPolicy.effectiveOwnedChildExited,
+          managed: config.serviceMode,
+          ownsOpenCodeProcess,
+        });
         state = result.state;
 
         if (result.action === "recovered") {
@@ -2071,6 +2113,10 @@ async function main(): Promise<void> {
           return;
         }
 
+        if (result.action === "deferred") {
+          console.warn(`[opencode-remote] unhealthy OpenCode recovery deferred; activePrompts=${activePromptRequests.size} status=${activityStatus}`);
+          return;
+        }
         if (result.action !== "restart") return;
 
         const failures = Math.max(1, config.healthWatchdogFailures);
