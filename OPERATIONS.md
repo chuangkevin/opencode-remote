@@ -336,6 +336,8 @@ cd D:\GitClone\_HomeProject\opencode-remote
 
 ### 自動重啟 watchdog
 
+Recovery policy and evidence limits: [`docs/watchdog-recovery.md`](docs/watchdog-recovery.md).
+
 `start-hidden.ps1` 會安裝 Windows Scheduled Task：`opencode-remote-watchdog`。
 
 ```powershell
