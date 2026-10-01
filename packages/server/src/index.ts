@@ -6,7 +6,7 @@ import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { config } from "./config.js";
+import { config, readServiceState, serviceStateFileStatus } from "./config.js";
 import {
   GLOBAL_CONFIG_PATH,
   detectKeyDrift,
@@ -21,6 +21,13 @@ import {
   healthRestartCooldownRemainingMs,
   initialHealthWatchdogState,
   trackPromptRequest,
+  decideManagedServiceRecovery,
+  probeLoopbackListener,
+  managedSpawnExitAction,
+  ownsManagedSpawn,
+  validateManagedServiceIdentity,
+  commitHealthRecoveryOutcome,
+  handleRestartReadinessFailure,
 } from "./health-watchdog.js";
 import { RECENT_SESSION_WINDOW_MS, encodeServerKey, listSessionPickerSessions, mergePinnedSessions, nativeSessionUrl, prefixedNativeSessionRedirectTarget, requestOrigin, resolveActiveSessionPath, truncateLargeSessionValue } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
@@ -1924,18 +1931,36 @@ async function refreshSessionPath(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  // 1. Spawn OpenCode headless server
-  let oc = spawnOpenCode();
+  // Managed mode must reuse an existing service and fail closed on ambiguous
+  // listener state. An absent descriptor plus absent listener is first boot.
+  const startupState = config.serviceMode ? readServiceState() : undefined;
+  let lastValidatedManagedIdentity = validateManagedServiceIdentity(startupState);
+  let oc: ChildProcess | undefined;
+  if (!config.serviceMode) {
+    oc = spawnOpenCode();
+  } else {
+    const port = config.opencodePort;
+    const listener = await probeLoopbackListener(port, config.healthWatchdogTimeoutMs);
+    const startupIdentity = validateManagedServiceIdentity(startupState);
+    const descriptorValid = startupIdentity?.port === port;
+    let pidState: boolean | "unknown" | undefined;
+    if (startupState?.pid) {
+      try { process.kill(startupState.pid, 0); pidState = true; }
+      catch (error) { pidState = (error as NodeJS.ErrnoException).code === "ESRCH" ? false : "unknown"; }
+    }
+    if (listener === "absent" && ((serviceStateFileStatus() === "absent" && !startupState) || (descriptorValid && pidState === false))) oc = spawnOpenCode();
+    else console.warn(`[opencode-remote] managed startup deferred; listener=${listener} descriptor=${descriptorValid ? "valid" : "unknown"} pid=${pidState ?? "unknown"}`);
+  }
   let shuttingDown = false;
   let restartingChild = false;
   let restartingChildRef: ChildProcess | undefined;
-  let ownsOpenCodeProcess = true;
+  let ownsOpenCodeProcess = oc !== undefined;
 
   const cleanupOpenCodeAfterStartupFailure = async (): Promise<void> => {
     if (process.platform === "win32") return;
 
     shuttingDown = true;
-    await terminateOpenCodeChild(oc, "startup failure");
+    if (oc && ownsOpenCodeProcess) await terminateOpenCodeChild(oc, "startup failure");
   };
 
   const attachOpenCodeExitHandler = (child: ChildProcess): void => {
@@ -1952,10 +1977,18 @@ async function main(): Promise<void> {
           return;
         }
       } catch { /* fall through */ }
+      const listener = config.serviceMode
+        ? await probeLoopbackListener(config.opencodePort, config.healthWatchdogTimeoutMs)
+        : "absent";
+      if (managedSpawnExitAction(config.serviceMode, listener) === "preserve-shared") {
+        ownsOpenCodeProcess = false;
+        console.warn("[opencode-remote] service-mode child exited while shared listener remains; preserving non-owned state");
+        return;
+      }
       process.exit(1);
     });
   };
-  attachOpenCodeExitHandler(oc);
+  if (oc) attachOpenCodeExitHandler(oc);
 
   const fetchLoadedProviderKeys = async (): Promise<Map<string, string>> => {
     const res = await upstreamFetch(`/provider?location[directory]=${encodeURIComponent(config.opencodeDirectory)}`);
@@ -1968,24 +2001,91 @@ async function main(): Promise<void> {
     return detectKeyDrift(expected, await fetchLoadedProviderKeys());
   };
 
-  const restartOpenCodeChild = async (reason: string): Promise<void> => {
+  const restartOpenCodeChild = async (reason: string): Promise<"owned-ready" | "shared-reused" | "skipped" | "failed"> => {
     if (restartingChild) throw new Error("opencode restart already in progress");
     restartingChild = true;
-    const previous = oc;
+      const previous = oc;
+      if (!previous || !ownsOpenCodeProcess) {
+        restartingChild = false;
+        console.warn(`[opencode-remote] skipped ${reason} restart; current OpenCode service is not owned`);
+        return "skipped";
+      }
+      if (config.serviceMode) {
+        const identity = validateManagedServiceIdentity(readServiceState());
+        const currentPort = config.opencodePort;
+        if (!identity || identity.pid !== previous.pid || identity.port !== currentPort || childHasExited(previous)) {
+          ownsOpenCodeProcess = false;
+          restartingChild = false;
+          console.warn(`[opencode-remote] skipped ${reason} restart; managed service identity changed`);
+          return "skipped";
+        }
+      }
     restartingChildRef = previous;
     try {
       await terminateOpenCodeChild(previous, `${reason} restart`);
+      if (config.serviceMode) {
+        const descriptor = readServiceState();
+        const status = serviceStateFileStatus();
+        const identity = validateManagedServiceIdentity(descriptor);
+        const retained = status === "absent" ? lastValidatedManagedIdentity : undefined;
+        const expected = identity ?? retained;
+        if (!expected || (identity && (identity.pid !== previous.pid || identity.port !== config.opencodePort)) ||
+          (retained && retained.pid !== previous.pid)) {
+          ownsOpenCodeProcess = false;
+          return "skipped";
+        }
+        const guard = await decideManagedServiceRecovery({
+          port: expected.port, pid: expected.pid, timeoutMs: config.healthWatchdogTimeoutMs,
+          getSnapshot: async () => {
+            const currentStatus = serviceStateFileStatus();
+            const current = readServiceState();
+            if (currentStatus === "absent") return retained;
+            if (currentStatus !== "present" || !current) return undefined;
+            return validateManagedServiceIdentity(current);
+          },
+        });
+        if (guard.action !== "spawn") { ownsOpenCodeProcess = false; return "skipped"; }
+      }
       oc = spawnOpenCode();
       attachOpenCodeExitHandler(oc);
 
       try {
-        await waitForOpenCode();
+          await waitForOpenCode();
       } catch (err) {
-        await terminateOpenCodeChild(oc, `failed ${reason} restart`);
-        console.error("[opencode-remote] fatal:", err);
-        process.exit(1);
-      }
-    } finally {
+        if (config.serviceMode) {
+          const listener = await probeLoopbackListener(config.opencodePort, config.healthWatchdogTimeoutMs);
+          if (listener !== "absent" && await upstreamHealthy()) {
+            ownsOpenCodeProcess = false;
+            return "shared-reused";
+          }
+        }
+        console.warn(`[opencode-remote] ${reason} restart readiness failed:`, err);
+        await handleRestartReadinessFailure({
+          serviceMode: config.serviceMode,
+          candidate: oc,
+          terminateCandidate: (candidate) => terminateOpenCodeChild(candidate, `${reason} startup failure`),
+          fatalExit: async () => process.exit(1),
+          managedFailure: async () => { ownsOpenCodeProcess = false; },
+        });
+        if (!config.serviceMode) ownsOpenCodeProcess = false;
+        return "failed";
+        }
+        if (config.serviceMode) {
+          const descriptor = readServiceState();
+          const identity = validateManagedServiceIdentity(descriptor);
+          ownsOpenCodeProcess = Boolean(identity && identity.port === config.opencodePort && ownsManagedSpawn(oc, oc, true, identity.pid));
+          if (!ownsOpenCodeProcess) {
+            const listener = await probeLoopbackListener(config.opencodePort, config.healthWatchdogTimeoutMs);
+            if (listener === "occupied" && await upstreamHealthy()) return "shared-reused";
+            return "failed";
+          }
+          if (identity) lastValidatedManagedIdentity = identity;
+        }
+        return "owned-ready";
+      } catch (err) {
+        console.warn(`[opencode-remote] ${reason} restart failed:`, err);
+        return "failed";
+      } finally {
       restartingChild = false;
       restartingChildRef = undefined;
     }
@@ -2030,7 +2130,8 @@ async function main(): Promise<void> {
             throw new Error(`provider keys still differ after reload (${remainingDrift.join(", ")}) and this proxy does not own the opencode process`);
           }
           console.warn(`[opencode-remote] provider keys still differ after reload (${remainingDrift.join(", ")}); restarting opencode serve`);
-          await restartOpenCodeChild("key drift");
+          const outcome = await restartOpenCodeChild("key drift");
+          if (outcome !== "owned-ready" && outcome !== "shared-reused") throw new Error(`provider keys still differ; restart outcome=${outcome}`);
           remainingDrift = await currentKeyDrift();
           if (remainingDrift.length > 0) {
             throw new Error(`provider keys still differ after restart: ${remainingDrift.join(", ")}`);
@@ -2069,6 +2170,10 @@ async function main(): Promise<void> {
       running = true;
       try {
         const probeOk = await probeOpenCodeHealth(config.healthWatchdogTimeoutMs);
+        if (probeOk && config.serviceMode) {
+          const identity = validateManagedServiceIdentity(readServiceState());
+          if (identity) lastValidatedManagedIdentity = identity;
+        }
         const originalState = state;
         const wallNow = Date.now();
         const monotonicNow = performance.now();
@@ -2076,7 +2181,7 @@ async function main(): Promise<void> {
           originalState.consecutiveFailures + 1 >= Math.max(1, opts.failures) &&
           healthRestartCooldownRemainingMs(originalState, wallNow, opts) === 0;
         let activityStatus: "busy" | "idle" | "unknown" = "unknown";
-        const ownedChildExited = childHasExited(oc);
+        const ownedChildExited = oc ? childHasExited(oc) : true;
         const recoveryPolicy = healthRecoveryPolicy({
           managed: config.serviceMode,
           ownsOpenCodeProcess,
@@ -2122,32 +2227,93 @@ async function main(): Promise<void> {
         const failures = Math.max(1, config.healthWatchdogFailures);
         if (!ownsOpenCodeProcess) {
           if (config.serviceMode) {
-            // The shared background service we were riding on (typically the one
-            // OpenCode Desktop started) is gone — e.g. Desktop was quit. Start our
-            // own so the phone keeps working; Desktop will reuse it when it returns.
+            const currentIdentity = validateManagedServiceIdentity(readServiceState());
+            const expectedIdentity = currentIdentity ?? (serviceStateFileStatus() === "absent" ? lastValidatedManagedIdentity : undefined);
+            if (!expectedIdentity) {
+              state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
+              return;
+            }
+            const guard = await decideManagedServiceRecovery({
+              port: expectedIdentity.port,
+              pid: expectedIdentity.pid,
+              timeoutMs: config.healthWatchdogTimeoutMs,
+              getSnapshot: async () => {
+                const descriptor = readServiceState();
+                if (serviceStateFileStatus() === "absent") return lastValidatedManagedIdentity;
+                return validateManagedServiceIdentity(descriptor);
+              },
+            });
+            if (guard.action !== "spawn") {
+              console.warn(`[opencode-remote] shared recovery deferred reason=${guard.reason}; remaining non-owned`);
+              state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
+              return;
+            }
             console.warn(
-              `[opencode-remote] shared opencode service unresponsive (${failures} consecutive health probe failures); starting our own`,
+              `[opencode-remote] shared service unavailable (${guard.reason}); attempting managed recovery`,
             );
-            oc = spawnOpenCode();
-            attachOpenCodeExitHandler(oc);
-            ownsOpenCodeProcess = true;
-            await waitForOpenCode();
+            const immediateGuard = await decideManagedServiceRecovery({
+              port: expectedIdentity.port, pid: expectedIdentity.pid,
+              timeoutMs: config.healthWatchdogTimeoutMs,
+              getSnapshot: async () => {
+                if (serviceStateFileStatus() === "absent") return lastValidatedManagedIdentity;
+                return validateManagedServiceIdentity(readServiceState());
+              },
+            });
+            if (immediateGuard.action !== "spawn") {
+              state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
+              return;
+            }
+            const candidate = spawnOpenCode();
+            oc = candidate;
+            restartingChildRef = candidate;
+            let spawnError: Error | undefined;
+            candidate.once("error", (error) => { spawnError = error; });
+            attachOpenCodeExitHandler(candidate);
+            try {
+              await waitForOpenCode();
+            } catch (err) {
+              const listener = await probeLoopbackListener(config.opencodePort, config.healthWatchdogTimeoutMs);
+              if ((spawnError || childHasExited(candidate)) && listener === "occupied") {
+                ownsOpenCodeProcess = false;
+                console.warn("[opencode-remote] managed spawn lost bind race; preserving shared listener and deferring recovery");
+                state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
+                return;
+              }
+              state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
+              throw err;
+            } finally {
+              restartingChildRef = undefined;
+            }
+            const confirmedDescriptor = readServiceState();
+            const confirmedIdentity = validateManagedServiceIdentity(confirmedDescriptor);
+            ownsOpenCodeProcess = Boolean(confirmedIdentity && confirmedIdentity.port === config.opencodePort && ownsManagedSpawn(candidate, oc, true, confirmedIdentity.pid));
+            if (ownsOpenCodeProcess && confirmedIdentity) lastValidatedManagedIdentity = confirmedIdentity;
+            if (!ownsOpenCodeProcess) {
+              console.warn("[opencode-remote] managed candidate exited or identity was not confirmed; retaining non-owned state");
+              state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
+              return;
+            }
             console.warn("[opencode-remote] opencode service started by health watchdog");
-            state = initialHealthWatchdogState();
+            state = commitHealthRecoveryOutcome(originalState, state, "owned-ready", Date.now());
             return;
           }
           console.warn(
             `[opencode-remote] opencode serve unresponsive (${failures} consecutive health probe failures) but this proxy does not own the opencode process`,
           );
-          state = initialHealthWatchdogState();
+          state = commitHealthRecoveryOutcome(originalState, state, "owned-ready", Date.now(), false);
           return;
         }
 
         console.warn(
           `[opencode-remote] opencode serve unresponsive (${failures} consecutive health probe failures); restarting`,
         );
-        await restartOpenCodeChild("health watchdog");
-        console.warn("[opencode-remote] opencode serve restarted by health watchdog");
+        const outcome = await restartOpenCodeChild("health watchdog");
+        if (outcome === "owned-ready") {
+          console.warn("[opencode-remote] opencode serve restarted by health watchdog");
+          state = commitHealthRecoveryOutcome(originalState, state, outcome, Date.now());
+        } else {
+          state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
+        }
       } catch (err) {
         console.warn("[opencode-remote] health watchdog failed:", err);
       } finally {
@@ -2167,11 +2333,11 @@ async function main(): Promise<void> {
       shuttingDown = true;
       console.log(`[opencode-remote] received ${signal}; stopping proxy and OpenCode`);
 
-      let childExited = childHasExited(oc);
+      let childExited = !oc || childHasExited(oc);
       let serverClosed = !server.listening;
       const forceExit = setTimeout(() => {
         console.error("[opencode-remote] shutdown timed out after 5 seconds");
-        if (!childHasExited(oc)) oc.kill("SIGKILL");
+        if (ownsOpenCodeProcess && oc && !childHasExited(oc)) oc.kill("SIGKILL");
         process.exit(1);
       }, 5_000);
       forceExit.unref();
@@ -2183,11 +2349,11 @@ async function main(): Promise<void> {
       };
 
       if (!childExited) {
-        oc.once("exit", () => {
+        oc?.once("exit", () => {
           childExited = true;
           finishIfStopped();
         });
-        oc.kill(signal);
+        if (ownsOpenCodeProcess) oc?.kill(signal);
       }
 
       if (!serverClosed) {
@@ -2207,8 +2373,29 @@ async function main(): Promise<void> {
   try {
     // 2. Wait for OpenCode to be healthy
     console.log("[opencode-remote] waiting for OpenCode to be ready...");
-    await waitForOpenCode();
-    console.log("[opencode-remote] OpenCode is ready");
+    if (oc) {
+      try {
+        await waitForOpenCode();
+        console.log("[opencode-remote] OpenCode is ready");
+        if (config.serviceMode) {
+          const descriptor = readServiceState();
+          const identity = validateManagedServiceIdentity(descriptor);
+          if (identity && identity.port === config.opencodePort && oc && ownsManagedSpawn(oc, oc, true, identity.pid)) {
+            lastValidatedManagedIdentity = identity;
+          }
+        }
+      } catch (err) {
+        if (!config.serviceMode) throw err;
+        const listener = await probeLoopbackListener(config.opencodePort, config.healthWatchdogTimeoutMs);
+        if (listener === "absent") throw err;
+        ownsOpenCodeProcess = false;
+        console.warn(`[opencode-remote] managed startup remains degraded; failed child did not establish readiness and listener=${listener}`);
+      }
+    } else if (!config.serviceMode) {
+      throw new Error("OpenCode child was not started");
+    } else {
+      console.warn("[opencode-remote] proxy starting degraded; waiting for managed service recovery");
+    }
 
     // 3. Resolve initial active session path
     await refreshSessionPath();

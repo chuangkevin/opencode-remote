@@ -1,3 +1,5 @@
+import net from "node:net";
+
 export type HealthWatchdogAction = "none" | "restart" | "cooldown" | "recovered" | "deferred";
 
 export type HealthWatchdogState = {
@@ -10,6 +12,126 @@ export type HealthWatchdogState = {
 export const HEALTH_RECOVERY_DEFERRAL_MS = 180_000;
 
 export type HealthRecoveryStatus = "busy" | "idle" | "unknown";
+
+export type ManagedServiceRecoveryDecision = { action: "spawn" | "defer"; reason: string };
+
+export type ManagedServiceIdentity = { url: string; port: number; pid: number };
+
+export function validateManagedServiceIdentity(descriptor: { url?: unknown; pid?: unknown } | undefined): ManagedServiceIdentity | undefined {
+  if (!descriptor || typeof descriptor.url !== "string" || !Number.isSafeInteger(descriptor.pid) || (descriptor.pid as number) <= 0) return undefined;
+  try {
+    const url = new URL(descriptor.url);
+    const portMatch = descriptor.url.match(/^https?:\/\/[^/?#]*:(\d+)(?:[/?#]|$)/i);
+    const port = portMatch ? Number(portMatch[1]) : NaN;
+    const effectivePort = Number(url.port) || (url.protocol === "https:" ? 443 : 80);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") ||
+      !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
+      !Number.isSafeInteger(port) || port < 1 || port > 65535 || effectivePort !== port) return undefined;
+    return { url: `${url.protocol}//${url.host}`, port, pid: descriptor.pid as number };
+  } catch { return undefined; }
+}
+
+export function commitHealthRecoveryOutcome<T extends HealthWatchdogState>(
+  original: T,
+  proposed: HealthWatchdogState,
+  outcome: "owned-ready" | "shared-reused" | "skipped" | "failed",
+  actualNow: number,
+  managed = true,
+): HealthWatchdogState {
+  if (!managed) return proposed;
+  if (outcome !== "owned-ready") return original;
+  return { consecutiveFailures: 0, lastRestartAt: actualNow, cooldownWarnedForRestartAt: undefined };
+}
+
+export function ownsManagedSpawn(
+  child: { exitCode?: number | null; signalCode?: NodeJS.Signals | null; pid?: number | undefined },
+  currentChild: object,
+  readinessConfirmed: boolean,
+  descriptorPid?: number,
+): boolean {
+  return readinessConfirmed && child === currentChild && child.exitCode == null && child.signalCode == null &&
+    Number.isSafeInteger(child.pid) && (child.pid ?? 0) > 0 && Number.isSafeInteger(descriptorPid) &&
+    (descriptorPid ?? 0) > 0 && descriptorPid === child.pid;
+}
+
+export function managedSpawnExitAction(serviceMode: boolean, listener: "occupied" | "absent" | "unknown"): "preserve-shared" | "fatal" {
+  return serviceMode && listener !== "absent" ? "preserve-shared" : "fatal";
+}
+
+export async function handleRestartReadinessFailure<T>(input: {
+  serviceMode: boolean;
+  candidate: T | undefined;
+  terminateCandidate: (candidate: T) => Promise<void>;
+  fatalExit: () => Promise<void>;
+  managedFailure: () => Promise<void>;
+}): Promise<void> {
+  if (input.serviceMode) {
+    await input.managedFailure();
+    return;
+  }
+  if (input.candidate !== undefined) await input.terminateCandidate(input.candidate);
+  await input.fatalExit();
+}
+
+export async function probeLoopbackListener(port: number, timeoutMs: number): Promise<"occupied" | "absent" | "unknown"> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    const timer = setTimeout(() => finish("unknown"), Math.max(1, timeoutMs));
+    const finish = (result: "occupied" | "absent" | "unknown"): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    socket.once("connect", () => finish("occupied"));
+    socket.once("error", (error: NodeJS.ErrnoException) => finish(error.code === "ECONNREFUSED" ? "absent" : "unknown"));
+  });
+}
+
+export async function decideManagedServiceRecovery(input: {
+  port: number;
+  pid?: number;
+  timeoutMs: number;
+  probe?: (port: number, timeoutMs: number) => Promise<"occupied" | "absent" | "unknown">;
+  isPidAlive?: (pid: number) => boolean | "unknown";
+  getSnapshot?: () => Promise<{ url?: string; port?: number; pid?: number } | undefined>;
+}): Promise<ManagedServiceRecoveryDecision> {
+  const snapshot = input.getSnapshot ? await input.getSnapshot() : undefined;
+  if (input.getSnapshot && (!snapshot || snapshot.port !== input.port ||
+    !isExpectedLoopbackUrl(snapshot.url, input.port) || snapshot.pid !== input.pid)) {
+    return { action: "defer", reason: "managed-snapshot-changed-or-invalid" };
+  }
+  const listener = await (input.probe ?? probeLoopbackListener)(input.port, input.timeoutMs);
+  if (listener !== "absent") return { action: "defer", reason: listener === "occupied" ? "listener-occupied" : "listener-unknown" };
+  if (!Number.isSafeInteger(input.pid) || (input.pid ?? 0) <= 0) return { action: "defer", reason: "pid-unknown" };
+  const isPidAlive = input.isPidAlive ?? ((pid: number): boolean | "unknown" => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? false : "unknown"; }
+  });
+  const alive = isPidAlive(input.pid!);
+  if (alive !== false) return { action: "defer", reason: alive === true ? "shared-pid-live" : "pid-unknown" };
+  // Last-moment listener revalidation narrows, but cannot eliminate, the race
+  // before the child binds; bind failure is handled by the caller as shared.
+  const recheck = await (input.probe ?? probeLoopbackListener)(input.port, input.timeoutMs);
+  if (recheck !== "absent") return { action: "defer", reason: recheck === "occupied" ? "listener-acquired" : "listener-recheck-unknown" };
+  if (input.getSnapshot) {
+    const latest = await input.getSnapshot();
+    if (!latest || latest.port !== input.port || latest.pid !== input.pid || !isExpectedLoopbackUrl(latest.url, input.port)) {
+      return { action: "defer", reason: "managed-snapshot-changed-or-invalid" };
+    }
+  }
+  if (isPidAlive(input.pid!) !== false) return { action: "defer", reason: "pid-changed-or-live" };
+  const finalListener = await (input.probe ?? probeLoopbackListener)(input.port, input.timeoutMs);
+  if (finalListener !== "absent") return { action: "defer", reason: finalListener === "occupied" ? "listener-acquired" : "listener-recheck-unknown" };
+  return { action: "spawn", reason: "listener-absent-pid-dead" };
+}
+
+function isExpectedLoopbackUrl(value: string | undefined, port: number): boolean {
+  const identity = validateManagedServiceIdentity({ url: value, pid: 1 });
+  return identity?.port === port;
+}
 
 export type HealthRecoveryPolicyInput = {
   managed: boolean;
@@ -175,6 +297,7 @@ export async function fetchHealthRecoveryActivityStatus(
   } catch {
     return "unknown";
   } finally {
+    controller.abort();
     clearTimeout(timeout);
   }
 }

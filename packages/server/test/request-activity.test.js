@@ -142,6 +142,32 @@ test("recovery activity timeout aborts a response whose body is hanging", async 
   server.closeAllConnections();
 });
 
+test("rejected recovery response aborts its unread hanging body", async (t) => {
+  let bodyStarted;
+  const started = new Promise((resolve) => { bodyStarted = resolve; });
+  let socketClosed;
+  const closed = new Promise((resolve) => { socketClosed = resolve; });
+  const server = http.createServer((_req, res) => {
+    res.writeHead(503);
+    res.write("unavailable");
+    bodyStarted();
+    res.on("close", socketClosed);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  assert.equal(await fetchHealthRecoveryActivityStatus((signal) => fetch(origin, { signal }), 500), "unknown");
+  await started;
+  const closeOutcome = await Promise.race([
+    closed.then(() => "closed"),
+    new Promise((resolve) => setTimeout(() => resolve("timeout"), 500)),
+  ]);
+  assert.equal(closeOutcome, "closed", "rejected response body must be aborted and close its connection");
+});
+
 test("tracked prompt completed by early acknowledgement remains protected by busy activity status", async (t) => {
   const active = new Set();
   let accepted;
