@@ -2,6 +2,83 @@ import net from "node:net";
 
 export type HealthWatchdogAction = "none" | "restart" | "cooldown" | "recovered" | "deferred";
 
+export type HealthLifecycleDiagnostic = {
+  timestamp: string;
+  ownership: "owned" | "shared";
+  action: "probe" | "defer" | "skipped" | "start" | "restart" | "exit" | "terminate" | "force-terminate" | "recovered";
+  reason: "probe-result" | "failure-threshold" | "active-prompts" | "cooldown" | "shared-listener" | "shared-pid" | "ownership-unavailable" | "recovery-started" | "recovery-ready" | "recovery-failed" | "child-exit" | "termination" | "forced-termination" | "healthy-reset";
+  pid?: number;
+  probe: "healthy" | "unhealthy" | "unknown";
+  consecutiveFailures: number;
+  activePrompts: number;
+  graceRemainingMs: number;
+};
+
+const lifecycleActions = new Set<HealthLifecycleDiagnostic["action"]>([
+  "probe", "defer", "skipped", "start", "restart", "exit", "terminate", "force-terminate", "recovered",
+]);
+const lifecycleReasons = new Set<HealthLifecycleDiagnostic["reason"]>([
+  "probe-result", "failure-threshold", "active-prompts", "cooldown", "shared-listener", "shared-pid",
+  "ownership-unavailable", "recovery-started", "recovery-ready", "recovery-failed", "child-exit",
+  "termination", "forced-termination", "healthy-reset",
+]);
+
+function boundedCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1_000_000, Math.floor(value))) : 0;
+}
+
+function validPid(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function formatHealthLifecycleDiagnostic(
+  input: Omit<HealthLifecycleDiagnostic, "timestamp"> & { timestamp?: unknown; now?: () => number; [key: string]: unknown },
+): string {
+  let timestamp: string;
+  try {
+    const candidate = input.timestamp;
+    timestamp = typeof candidate === "string" && Number.isFinite(Date.parse(candidate))
+      ? new Date(candidate).toISOString()
+      : new Date((input.now ?? Date.now)()).toISOString();
+  } catch {
+    timestamp = new Date(0).toISOString();
+  }
+  const ownership = input.ownership === "owned" ? "owned" : "shared";
+  const action = lifecycleActions.has(input.action) ? input.action : "skipped";
+  const reason = lifecycleReasons.has(input.reason) ? input.reason : "ownership-unavailable";
+  const probe = input.probe === "healthy" || input.probe === "unhealthy" ? input.probe : "unknown";
+  const record: HealthLifecycleDiagnostic = {
+    timestamp, ownership, action, reason,
+    ...(validPid(input.pid) ? { pid: input.pid } : {}),
+    probe,
+    consecutiveFailures: boundedCount(input.consecutiveFailures),
+    activePrompts: boundedCount(input.activePrompts),
+    graceRemainingMs: boundedCount(input.graceRemainingMs),
+  };
+  return `[opencode-remote] health-watchdog ${JSON.stringify(record)}`;
+}
+
+export function emitHealthLifecycleDiagnostic(
+  input: Parameters<typeof formatHealthLifecycleDiagnostic>[0],
+  logger: (line: string) => void = (line) => console.warn(line),
+): void {
+  try { logger(formatHealthLifecycleDiagnostic(input)); } catch { /* diagnostics must never affect recovery */ }
+}
+
+export function signalChildWithHealthDiagnostic<T extends { kill(signal: NodeJS.Signals): unknown }>(input: {
+  child: T;
+  signal: "SIGTERM" | "SIGKILL";
+  context: Omit<HealthLifecycleDiagnostic, "timestamp" | "action" | "reason">;
+  logger?: (line: string) => void;
+}): void {
+  emitHealthLifecycleDiagnostic({
+    ...input.context,
+    action: input.signal === "SIGTERM" ? "terminate" : "force-terminate",
+    reason: input.signal === "SIGTERM" ? "termination" : "forced-termination",
+  }, input.logger);
+  input.child.kill(input.signal);
+}
+
 export type HealthWatchdogState = {
   consecutiveFailures: number;
   lastRestartAt?: number;

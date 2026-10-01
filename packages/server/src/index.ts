@@ -28,6 +28,9 @@ import {
   validateManagedServiceIdentity,
   commitHealthRecoveryOutcome,
   handleRestartReadinessFailure,
+  emitHealthLifecycleDiagnostic,
+  signalChildWithHealthDiagnostic,
+  type HealthLifecycleDiagnostic,
 } from "./health-watchdog.js";
 import { RECENT_SESSION_WINDOW_MS, encodeServerKey, listSessionPickerSessions, mergePinnedSessions, nativeSessionUrl, prefixedNativeSessionRedirectTarget, requestOrigin, resolveActiveSessionPath, truncateLargeSessionValue } from "./session.js";
 import { handleCompactStatic, handleCompactSession, handleCompactNewSession, handleCompactProviders, handleCompactAddProvider, handleLatestUserModel, matchCompactSessionPath, matchLatestUserModelPath } from "./compact/handlers.js";
@@ -1882,6 +1885,7 @@ function childHasExited(child: ChildProcess): boolean {
 }
 
 async function terminateOpenCodeChild(child: ChildProcess, context: string): Promise<void> {
+  void context;
   if (childHasExited(child)) return;
 
   await new Promise<void>((resolve) => {
@@ -1903,20 +1907,30 @@ async function terminateOpenCodeChild(child: ChildProcess, context: string): Pro
       return;
     }
 
-    child.kill("SIGTERM");
+    signalChildWithHealthDiagnostic({ child, signal: "SIGTERM", context: terminationDiagnosticContext(child) });
     forceKillTimer = setTimeout(() => {
       if (!childHasExited(child)) {
-        console.error(`[opencode-remote] OpenCode did not stop after ${context}; sending SIGKILL`);
-        child.kill("SIGKILL");
+        signalChildWithHealthDiagnostic({ child, signal: "SIGKILL", context: terminationDiagnosticContext(child) });
       }
       killWaitTimer = setTimeout(() => {
         if (!childHasExited(child)) {
-          console.error(`[opencode-remote] OpenCode is still running after ${context} SIGKILL`);
+          emitHealthLifecycleDiagnostic({ ...terminationDiagnosticContext(child), action: "force-terminate", reason: "recovery-failed" });
         }
         finish();
       }, startupKillWaitMs);
     }, startupTerminationGraceMs);
   });
+}
+
+function terminationDiagnosticContext(child: ChildProcess): Omit<HealthLifecycleDiagnostic, "timestamp" | "action" | "reason"> {
+  return {
+    ownership: "owned",
+    pid: child.pid ?? undefined,
+    probe: "unknown",
+    consecutiveFailures: 0,
+    activePrompts: activePromptRequests.size,
+    graceRemainingMs: 0,
+  };
 }
 
 async function refreshSessionPath(): Promise<void> {
@@ -1968,6 +1982,7 @@ async function main(): Promise<void> {
       if (shuttingDown) return;
       if (restartingChildRef && child === restartingChildRef) return;
       if (child !== oc) return;
+      emitHealthLifecycleDiagnostic({ ownership: ownsOpenCodeProcess ? "owned" : "shared", action: "exit", reason: "child-exit", pid: child.pid ?? undefined, probe: "unknown", consecutiveFailures: 0, activePrompts: activePromptRequests.size, graceRemainingMs: 0 });
       console.error(`[opencode-remote] opencode exited with code ${code}`);
       // If another OpenCode is already healthy on this port, don't crash.
       try {
@@ -2059,7 +2074,7 @@ async function main(): Promise<void> {
             return "shared-reused";
           }
         }
-        console.warn(`[opencode-remote] ${reason} restart readiness failed:`, err);
+        console.warn(`[opencode-remote] restart readiness failed (${reason}); category=readiness-failed`);
         await handleRestartReadinessFailure({
           serviceMode: config.serviceMode,
           candidate: oc,
@@ -2083,7 +2098,7 @@ async function main(): Promise<void> {
         }
         return "owned-ready";
       } catch (err) {
-        console.warn(`[opencode-remote] ${reason} restart failed:`, err);
+        console.warn(`[opencode-remote] restart failed (${reason}); category=recovery-failed`);
         return "failed";
       } finally {
       restartingChild = false;
@@ -2164,12 +2179,21 @@ async function main(): Promise<void> {
       failures: config.healthWatchdogFailures,
       restartCooldownMs: config.healthWatchdogRestartCooldownMs,
     };
+    const lifecycle = (event: Omit<HealthLifecycleDiagnostic, "timestamp" | "ownership" | "consecutiveFailures" | "activePrompts" | "graceRemainingMs"> & { failures?: number; prompts?: number; grace?: number }): void => emitHealthLifecycleDiagnostic({
+      ownership: ownsOpenCodeProcess ? "owned" : "shared", action: event.action, reason: event.reason,
+      probe: event.probe, pid: event.pid, consecutiveFailures: event.failures ?? state.consecutiveFailures,
+      activePrompts: event.prompts ?? activePromptRequests.size, graceRemainingMs: event.grace ?? 0,
+    });
 
     const tick = async (): Promise<void> => {
       if (running || restartingChild) return;
       running = true;
       try {
         const probeOk = await probeOpenCodeHealth(config.healthWatchdogTimeoutMs);
+        const validatedSharedPid = !ownsOpenCodeProcess && config.serviceMode
+          ? validateManagedServiceIdentity(readServiceState())?.pid
+          : undefined;
+        lifecycle({ action: "probe", reason: "probe-result", probe: probeOk ? "healthy" : "unhealthy", pid: ownsOpenCodeProcess ? oc?.pid ?? undefined : validatedSharedPid });
         if (probeOk && config.serviceMode) {
           const identity = validateManagedServiceIdentity(readServiceState());
           if (identity) lastValidatedManagedIdentity = identity;
@@ -2208,17 +2232,20 @@ async function main(): Promise<void> {
         state = result.state;
 
         if (result.action === "recovered") {
+          lifecycle({ action: "recovered", reason: "healthy-reset", probe: "healthy", pid: oc?.pid ?? undefined });
           console.warn("[opencode-remote] opencode serve health recovered");
           return;
         }
 
         if (result.action === "cooldown") {
+          lifecycle({ action: "defer", reason: "cooldown", probe: "unhealthy", pid: oc?.pid ?? undefined });
           const waitSeconds = Math.ceil(healthRestartCooldownRemainingMs(state, Date.now(), opts) / 1_000);
           console.warn(`[opencode-remote] opencode serve unresponsive; restart cooldown active for ${waitSeconds}s`);
           return;
         }
 
         if (result.action === "deferred") {
+          lifecycle({ action: "defer", reason: "active-prompts", probe: "unhealthy", pid: oc?.pid ?? undefined, failures: state.consecutiveFailures, grace: Math.max(0, 180_000 - (monotonicNow - (state.recoveryDeferredAt ?? monotonicNow))) });
           console.warn(`[opencode-remote] unhealthy OpenCode recovery deferred; activePrompts=${activePromptRequests.size} status=${activityStatus}`);
           return;
         }
@@ -2230,6 +2257,7 @@ async function main(): Promise<void> {
             const currentIdentity = validateManagedServiceIdentity(readServiceState());
             const expectedIdentity = currentIdentity ?? (serviceStateFileStatus() === "absent" ? lastValidatedManagedIdentity : undefined);
             if (!expectedIdentity) {
+              lifecycle({ action: "skipped", reason: "ownership-unavailable", probe: "unhealthy", failures });
               state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
               return;
             }
@@ -2244,6 +2272,7 @@ async function main(): Promise<void> {
               },
             });
             if (guard.action !== "spawn") {
+              lifecycle({ action: "defer", reason: guard.reason.includes("pid") ? "shared-pid" : "shared-listener", probe: "unhealthy", pid: expectedIdentity.pid, failures });
               console.warn(`[opencode-remote] shared recovery deferred reason=${guard.reason}; remaining non-owned`);
               state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
               return;
@@ -2260,10 +2289,12 @@ async function main(): Promise<void> {
               },
             });
             if (immediateGuard.action !== "spawn") {
+              lifecycle({ action: "defer", reason: immediateGuard.reason.includes("pid") ? "shared-pid" : "shared-listener", probe: "unhealthy", pid: expectedIdentity.pid, failures });
               state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
               return;
             }
             const candidate = spawnOpenCode();
+            lifecycle({ action: "start", reason: "recovery-started", probe: "unhealthy", pid: candidate.pid ?? undefined, failures });
             oc = candidate;
             restartingChildRef = candidate;
             let spawnError: Error | undefined;
@@ -2276,6 +2307,7 @@ async function main(): Promise<void> {
               if ((spawnError || childHasExited(candidate)) && listener === "occupied") {
                 ownsOpenCodeProcess = false;
                 console.warn("[opencode-remote] managed spawn lost bind race; preserving shared listener and deferring recovery");
+                lifecycle({ action: "defer", reason: "shared-listener", probe: "unhealthy", pid: candidate.pid ?? undefined, failures });
                 state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
                 return;
               }
@@ -2294,6 +2326,7 @@ async function main(): Promise<void> {
               return;
             }
             console.warn("[opencode-remote] opencode service started by health watchdog");
+            lifecycle({ action: "restart", reason: "recovery-ready", probe: "healthy", pid: candidate.pid ?? undefined, failures: 0 });
             state = commitHealthRecoveryOutcome(originalState, state, "owned-ready", Date.now());
             return;
           }
@@ -2307,15 +2340,18 @@ async function main(): Promise<void> {
         console.warn(
           `[opencode-remote] opencode serve unresponsive (${failures} consecutive health probe failures); restarting`,
         );
+        lifecycle({ action: "start", reason: "recovery-started", probe: "unhealthy", pid: oc?.pid ?? undefined, failures });
         const outcome = await restartOpenCodeChild("health watchdog");
         if (outcome === "owned-ready") {
+          lifecycle({ action: "restart", reason: "recovery-ready", probe: "healthy", pid: oc?.pid ?? undefined, failures: 0 });
           console.warn("[opencode-remote] opencode serve restarted by health watchdog");
           state = commitHealthRecoveryOutcome(originalState, state, outcome, Date.now());
         } else {
+          lifecycle({ action: outcome === "skipped" ? "skipped" : "defer", reason: outcome === "failed" ? "recovery-failed" : "ownership-unavailable", probe: "unhealthy", pid: oc?.pid ?? undefined, failures });
           state = { ...originalState, consecutiveFailures: Math.max(originalState.consecutiveFailures, failures) };
         }
       } catch (err) {
-        console.warn("[opencode-remote] health watchdog failed:", err);
+        console.warn("[opencode-remote] health watchdog failed; category=watchdog-error");
       } finally {
         running = false;
       }
@@ -2337,7 +2373,10 @@ async function main(): Promise<void> {
       let serverClosed = !server.listening;
       const forceExit = setTimeout(() => {
         console.error("[opencode-remote] shutdown timed out after 5 seconds");
-        if (ownsOpenCodeProcess && oc && !childHasExited(oc)) oc.kill("SIGKILL");
+        if (ownsOpenCodeProcess && oc && !childHasExited(oc)) {
+          emitHealthLifecycleDiagnostic({ ownership: "owned", action: "force-terminate", reason: "forced-termination", pid: oc.pid ?? undefined, probe: "unknown", consecutiveFailures: 0, activePrompts: activePromptRequests.size, graceRemainingMs: 0 });
+          oc.kill("SIGKILL");
+        }
         process.exit(1);
       }, 5_000);
       forceExit.unref();
@@ -2353,7 +2392,10 @@ async function main(): Promise<void> {
           childExited = true;
           finishIfStopped();
         });
-        if (ownsOpenCodeProcess) oc?.kill(signal);
+        if (ownsOpenCodeProcess) {
+          emitHealthLifecycleDiagnostic({ ownership: "owned", action: "terminate", reason: "termination", pid: oc?.pid ?? undefined, probe: "unknown", consecutiveFailures: 0, activePrompts: activePromptRequests.size, graceRemainingMs: 0 });
+          oc?.kill(signal);
+        }
       }
 
       if (!serverClosed) {
