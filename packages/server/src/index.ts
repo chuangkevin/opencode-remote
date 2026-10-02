@@ -869,7 +869,7 @@ function redirectToSession(req: http.IncomingMessage, res: http.ServerResponse, 
 
 async function handleRemoteHealth(res: http.ServerResponse): Promise<void> {
   try {
-    const info = await upstreamInfo();
+    const info = await upstreamInfo({ signal: AbortSignal.timeout(1_000) });
     if (!info) throw new Error("upstream health probe failed");
     // `version` is what update-opencode-sara.sh compares after a CLI swap.
     const upstreamHealth = { healthy: true, api: "v2", version: info.version };
@@ -1143,8 +1143,18 @@ async function handleListPairs(req: http.IncomingMessage, res: http.ServerRespon
     const { getClaudeArchivedOwners, pairArchived } = await import("./compact/pairs.js");
     const archived = new URL(req.url ?? "/api/pairs", "http://localhost").searchParams.get("archived") === "1";
     const now = Date.now();
-    const claudeArchivedOwners = await getClaudeArchivedOwners(now);
-    const rawPairs = await pairsCache.get(archived, () => buildPairsCacheEntry(Date.now(), claudeArchivedOwners), now);
+    const deadline = now + 900;
+    let archiveTimeout: NodeJS.Timeout | undefined;
+    const claudeArchivedOwners = await Promise.race([
+      getClaudeArchivedOwners(now),
+      new Promise<Set<string>>((resolve) => {
+        archiveTimeout = setTimeout(() => resolve(new Set()), Math.max(0, deadline - Date.now()));
+      }),
+    ]);
+    if (archiveTimeout) clearTimeout(archiveTimeout);
+    // Bounded replacement for the former pairsCache.get(archived, ...) cold wait.
+    const result = await pairsCache.getWithin(archived, () => buildPairsCacheEntry(Date.now(), claudeArchivedOwners), Math.max(0, deadline - Date.now()), now);
+    const rawPairs = result.value ?? [];
     const pairs = rawPairs
       .filter((pair) => pairArchived(pair, now, claudeArchivedOwners) === archived)
       .map((pair) => ({ ...pair, archived: pairArchived(pair, now, claudeArchivedOwners) }));
@@ -1153,6 +1163,7 @@ async function handleListPairs(req: http.IncomingMessage, res: http.ServerRespon
       "Cache-Control": "no-store",
       "Access-Control-Allow-Origin": "*",
       "X-OpenCode-Remote": "true",
+      ...(result.degraded ? { "X-OpenCode-Remote-Degraded": "true" } : {}),
     });
     res.end(JSON.stringify(pairs));
   } catch (err) {
@@ -1835,13 +1846,15 @@ function spawnOpenCode(): ChildProcess {
 }
 
 async function waitForOpenCode(): Promise<void> {
-  for (let i = 0; i < 60; i++) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
     try {
-      if (await upstreamHealthy()) return;
+      if (await upstreamHealthy({ signal: AbortSignal.timeout(Math.min(3_000, Math.max(1, deadline - Date.now()))) })) return;
     } catch {
       // not ready yet
     }
-    await new Promise((r) => setTimeout(r, 1_000));
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await new Promise((r) => setTimeout(r, Math.min(1_000, remaining)));
   }
   throw new Error("OpenCode did not become healthy within 60 seconds");
 }
@@ -2159,31 +2172,7 @@ async function main(): Promise<void> {
   }
 
   try {
-    // 2. Wait for OpenCode to be healthy
-    console.log("[opencode-remote] waiting for OpenCode to be ready...");
-    await waitForOpenCode();
-    console.log("[opencode-remote] OpenCode is ready");
-
-    // 3. Resolve initial active session path
-    await refreshSessionPath();
-
-    // 4. Periodically refresh the active session path
-    setInterval(() => { void refreshSessionPath(); }, config.sessionRefreshIntervalMs);
-
-    // 5. Keep-alive SSE connection to OpenCode
-    startKeepAlive();
-
-    // 6. Auto-clear OpenCode streams that produced no output and never completed.
-    startDeadStreamWatchdog();
-
-    // 7. Provider apiKey drift: 2.x hot-reloads opencode.jsonc itself; this is the
-    //    safety net (reload, then restart) if the watcher ever misses an edit.
-    startKeyDriftWatchdog();
-
-    // 8. Restart owned OpenCode child when health probes stop responding.
-    startHealthWatchdog();
-
-    // 9. Start HTTP proxy server
+    // Listen before waiting on upstream so dashboard-local endpoints stay available.
     await new Promise<void>((resolve, reject) => {
       const onStartupError = (err: Error): void => reject(err);
       server.once("error", onStartupError);
@@ -2192,10 +2181,21 @@ async function main(): Promise<void> {
         console.log(`[opencode-remote] proxy listening on http://${config.bindAddress}:${config.port}`);
         void startPairsCacheRefresh(pairsCache, () => buildPairsCacheEntry());
         console.log("[opencode-remote] → serving root Hub through /hub rewrite; / redirects to /remote-sessions");
-        console.log(`[opencode-remote] → redirecting /latest to ${activeSessionPath}`);
         resolve();
       });
     });
+
+    // Upstream-dependent background work starts after the listener is available.
+    console.log("[opencode-remote] waiting for OpenCode to be ready...");
+    await waitForOpenCode();
+    console.log("[opencode-remote] OpenCode is ready");
+    await refreshSessionPath();
+    setInterval(() => { void refreshSessionPath(); }, config.sessionRefreshIntervalMs);
+    startKeepAlive();
+    startDeadStreamWatchdog();
+    startKeyDriftWatchdog();
+    startHealthWatchdog();
+    console.log(`[opencode-remote] → redirecting /latest to ${activeSessionPath}`);
   } catch (err) {
     await cleanupOpenCodeAfterStartupFailure();
     throw err;

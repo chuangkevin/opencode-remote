@@ -365,6 +365,31 @@ export function createPairsCache<T>(clock: () => number = Date.now) {
   };
 
   return {
+    async getWithin(
+      archived: boolean,
+      build: () => Promise<T>,
+      maxWaitMs: number,
+      now = clock(),
+    ): Promise<{ value: T | undefined; degraded: boolean }> {
+      const slot = slots.get(archived) ?? {};
+      slots.set(archived, slot);
+      const age = slot.entry ? Math.max(0, now - slot.entry.storedAt) : Infinity;
+      if (slot.entry && age < PAIRS_CACHE_FRESH_MS) return { value: slot.entry.value, degraded: false };
+      if (slot.entry && age <= PAIRS_CACHE_MAX_AGE_MS) {
+        void startRefresh(slot, build);
+        return { value: slot.entry.value, degraded: false };
+      }
+
+      const refresh = startRefresh(slot, build);
+      let timer: NodeJS.Timeout | undefined;
+      const timeout = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), Math.max(0, maxWaitMs));
+      });
+      const refreshed = await Promise.race([refresh, timeout]);
+      if (timer) clearTimeout(timer);
+      if (refreshed !== undefined) return { value: refreshed, degraded: false };
+      return { value: slot.entry?.value, degraded: true };
+    },
     async get(
       archived: boolean,
       build: () => Promise<T>,
@@ -430,7 +455,7 @@ export function pairArchived(pair: Pick<PairInfo, "status" | "owner" | "lastActi
 }
 
 async function defaultListPairSessions(): Promise<PairSessionLite[]> {
-  const list = await upstreamJson<any[]>(`/session?limit=200&order=desc&parentID=null`);
+  const list = await upstreamJson<any[]>(`/session?limit=200&order=desc&parentID=null`, { signal: AbortSignal.timeout(3_000) });
   return (Array.isArray(list) ? list : [])
     .map((raw) => normalizeSession(raw))
     .filter((s) => isPairSession(s))
@@ -438,7 +463,7 @@ async function defaultListPairSessions(): Promise<PairSessionLite[]> {
 }
 
 async function defaultFetchBusySet(): Promise<Set<string>> {
-  const res = await upstreamFetch("/session/active");
+  const res = await upstreamFetch("/session/active", { signal: AbortSignal.timeout(3_000) });
   if (!res.ok) return new Set();
   const active = unwrap<Record<string, { type?: string }>>(await res.json());
   const out = new Set<string>();
@@ -452,7 +477,7 @@ async function defaultFetchBusySet(): Promise<Set<string>> {
 
 async function defaultFetchForm(id: string): Promise<unknown[]> {
   try {
-    const res = await upstreamFetch(`/session/${encodeURIComponent(id)}/form`);
+    const res = await upstreamFetch(`/session/${encodeURIComponent(id)}/form`, { signal: AbortSignal.timeout(3_000) });
     if (!res.ok) return [];
     const data = unwrap<unknown>(await res.json());
     return Array.isArray(data) ? data : [];
@@ -462,7 +487,7 @@ async function defaultFetchForm(id: string): Promise<unknown[]> {
 }
 
 async function defaultFetchMessages(id: string, limit: number): Promise<ChatMessage[]> {
-  const res = await upstreamFetch(`/session/${encodeURIComponent(id)}/message?limit=${limit}`);
+  const res = await upstreamFetch(`/session/${encodeURIComponent(id)}/message?limit=${limit}`, { signal: AbortSignal.timeout(3_000) });
   if (!res.ok) throw new Error(`GET /api/session/${id}/message returned ${res.status}`);
   return messageArray(await res.json());
 }
@@ -473,7 +498,7 @@ async function defaultFetchContextLimit(providerID: string, modelID: string): Pr
   const key = `${providerID}/${modelID}`;
   if (modelLimitCache.has(key)) return modelLimitCache.get(key);
   try {
-    const models = await upstreamJson<any[]>(`/model?location[directory]=${encodeURIComponent(appConfig.opencodeDirectory)}`);
+    const models = await upstreamJson<any[]>(`/model?location[directory]=${encodeURIComponent(appConfig.opencodeDirectory)}`, { signal: AbortSignal.timeout(3_000) });
     for (const m of Array.isArray(models) ? models : []) {
       const pid = m?.providerID;
       const mid = m?.modelID ?? m?.id;

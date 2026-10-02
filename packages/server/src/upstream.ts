@@ -16,7 +16,9 @@ export function apiUrl(path: string): string {
 export async function upstreamFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers ?? {});
   for (const [key, value] of Object.entries(upstreamAuthHeaders())) headers.set(key, value);
-  return fetch(apiUrl(path), { ...init, headers });
+  const timeoutSignal = AbortSignal.timeout(5_000);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  return fetch(apiUrl(path), { ...init, headers, signal });
 }
 
 export function unwrap<T = unknown>(payload: unknown): T {

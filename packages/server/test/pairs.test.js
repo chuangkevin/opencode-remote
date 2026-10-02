@@ -364,6 +364,15 @@ test("pairs cache keeps stale data after refresh failure and waits on first fail
   }), /pairs cache refresh failed/);
 });
 
+test("pairs cache bounds cold refresh wait and reports degraded empty fallback", async () => {
+  const cache = createPairsCache();
+  const started = Date.now();
+  const result = await cache.getWithin(false, () => new Promise(() => {}), 40);
+  assert.equal(result.value, undefined);
+  assert.equal(result.degraded, true);
+  assert.ok(Date.now() - started < 500);
+});
+
 test("pairs cache warmup builds both views, refreshes serially, and swallows failures", async () => {
   const calls = [];
   const built = [];
