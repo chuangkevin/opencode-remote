@@ -10,6 +10,7 @@ import {
   acceptPair,
   buildPairsList,
   computePairInfo,
+  comparePairOrder,
   createPairsCache,
   PAIRS_CACHE_REFRESH_INTERVAL_MS,
   startPairsCacheRefresh,
@@ -25,6 +26,9 @@ import {
   archivedPair,
   dashboardVisible,
   formatRelative,
+  normalizePairTimes,
+  retainDegradedPairs,
+  rememberedHostCount,
   pairCardUrl,
   partnerLabel,
   visiblePairs,
@@ -92,7 +96,7 @@ test("contextPct uses input+cache.read over the model limit; lastText is the new
     contextLimit: 200000,
   });
   assert.equal(info.contextPct, 5);
-  assert.equal(info.lastActivityAt, 2000);
+  assert.equal(info.lastActivityAt, 2_000_000);
   assert.equal(info.lastText, "second");
   assert.equal(info.url, "/c/session/ses_x");
   assert.equal(info.partner, "opencode");
@@ -104,6 +108,26 @@ test("contextPct uses input+cache.read over the model limit; lastText is the new
   });
   assert.equal(long.lastText.length, 200);
   assert.equal(long.contextPct, null);
+});
+
+test("computePairInfo normalizes seconds and uses session timestamps when messages are missing", () => {
+  const session = { id: "ses_time", title: "pair·o·time", time: { created: 1_700_000_000, updated: 1_700_000_100 } };
+  const missing = computePairInfo(session, { busy: false, formPending: false, messages: [], lastActivityAt: session.time.updated, createdAt: session.time.created });
+  assert.equal(missing.lastActivityAt, 1_700_000_100_000);
+  assert.equal(missing.createdAt, 1_700_000_000_000);
+  const directFallback = computePairInfo(session, { busy: false, formPending: false, messages: [] });
+  assert.equal(directFallback.lastActivityAt, 1_700_000_100_000);
+  assert.equal(directFallback.createdAt, 1_700_000_000_000);
+  const noTimeSession = { id: "ses_no_time", title: "pair·o·no-time" };
+  assert.equal(computePairInfo(noTimeSession, { busy: false, formPending: false, messages: [], lastActivityAt: Number.NaN }).lastActivityAt, null);
+  assert.equal(computePairInfo(noTimeSession, { busy: false, formPending: false, messages: [] }).lastActivityAt, null);
+});
+
+test("unknown pair time stays unarchived except for error status", () => {
+  assert.equal(pairArchived({ status: "idle", owner: "o", lastActivityAt: null }), false);
+  assert.equal(pairArchived({ status: "busy", owner: "o", lastActivityAt: null }), false);
+  assert.equal(pairArchived({ status: "ask", owner: "o", lastActivityAt: null }), false);
+  assert.equal(pairArchived({ status: "error", owner: "o", lastActivityAt: null }), true);
 });
 
 test("accept store round-trips through an atomic JSON file", async () => {
@@ -131,7 +155,7 @@ test("buildPairsList assembles fields and isolates per-session failures", async 
     const pairs = await buildPairsList({
       listPairSessions: async () => [
         { id: "ses_ok", title: "pair·owner1·fix login", model: { providerID: "p", modelID: "m" } },
-        { id: "ses_bad", title: "pair·o·broken", model: { providerID: "p", modelID: "m" } },
+        { id: "ses_bad", title: "pair·o·broken", model: { providerID: "p", modelID: "m" }, time: { created: 1_000_000_000_000, updated: 7_000_000_000_000 } },
       ],
       fetchBusySet: async () => new Set(["ses_ok"]),
       fetchForm: async () => [],
@@ -149,27 +173,28 @@ test("buildPairsList assembles fields and isolates per-session failures", async 
     assert.equal(ok.status, "busy");
     assert.equal(ok.contextPct, 10);
     assert.equal(ok.lastText, "hello world");
-    assert.equal(ok.lastActivityAt, 9000);
+    assert.equal(ok.lastActivityAt, 9_000_000);
     assert.equal(ok.acceptedAt, 777);
     const bad = pairs.find((p) => p.id === "ses_bad");
     assert.equal(bad.status, "idle");
-    assert.equal(bad.lastActivityAt, 0);
+    assert.equal(bad.lastActivityAt, 7_000_000_000_000);
+    assert.equal(bad.createdAt, 1_000_000_000_000);
   } finally {
     _setPairsStoreDir(null);
   }
 });
 
 test("dashboard shows busy/ask; idle 2h; accepted 30m; errors are archived", () => {
-  const now = 1_000_000_000;
+  const now = 1_700_000_000_000;
   const H = 3600_000;
   const M = 60_000;
-  const busyIdle10h = { id: "busy", status: "busy", lastActivityAt: now - 10 * H };
-  const askIdle10h = { id: "ask", status: "ask", lastActivityAt: now - 10 * H };
-  const errorUnaccepted10h = { id: "err", status: "error", lastActivityAt: now - 10 * H };
-  const idle1h = { id: "idle1", status: "idle", lastActivityAt: now - 1 * H };
-  const idle3h = { id: "idle3", status: "idle", lastActivityAt: now - 3 * H };
-  const accepted20m = { id: "acc20", status: "idle", lastActivityAt: now - 20 * M, acceptedAt: now - 25 * M };
-  const accepted40m = { id: "acc40", status: "idle", lastActivityAt: now - 40 * M, acceptedAt: now - 50 * M };
+  const busyIdle10h = { id: "busy", status: "busy", lastActivityAt: now - 10 * H, createdAt: 40 };
+  const askIdle10h = { id: "ask", status: "ask", lastActivityAt: now - 10 * H, createdAt: 50 };
+  const errorUnaccepted10h = { id: "err", status: "error", lastActivityAt: now - 10 * H, createdAt: 10 };
+  const idle1h = { id: "idle1", status: "idle", lastActivityAt: now - 1 * H, createdAt: 60 };
+  const idle3h = { id: "idle3", status: "idle", lastActivityAt: now - 3 * H, createdAt: 5 };
+  const accepted20m = { id: "acc20", status: "idle", lastActivityAt: now - 20 * M, acceptedAt: now - 25 * M, createdAt: 70 };
+  const accepted40m = { id: "acc40", status: "idle", lastActivityAt: now - 40 * M, acceptedAt: now - 50 * M, createdAt: 30 };
   assert.equal(dashboardVisible(busyIdle10h, now), true);
   assert.equal(dashboardVisible(askIdle10h, now), true);
   assert.equal(dashboardVisible(errorUnaccepted10h, now), false);
@@ -186,12 +211,53 @@ test("dashboard shows busy/ask; idle 2h; accepted 30m; errors are archived", () 
   // list view excludes archived pairs, but keeps newest-first order.
   assert.deepEqual(
     visiblePairs([accepted40m, idle3h, idle1h], "list", now).map((p) => p.id),
-    ["acc40", "idle1"],
+    ["idle1", "acc40"],
   );
 });
 
+test("missing activity time is unknown and order uses created/title/id, not activity", () => {
+  const pairs = [
+    { id: "b", task: "Beta", status: "busy", createdAt: 20, lastActivityAt: 900 },
+    { id: "a", task: "Alpha", status: "idle", createdAt: 20, lastActivityAt: 100 },
+    { id: "c", task: "Gamma", status: "idle", createdAt: null, lastActivityAt: null },
+  ];
+  const first = visiblePairs(pairs, "list", 100_000).map((pair) => pair.id);
+  pairs[0].lastActivityAt = 1;
+  pairs[1].lastActivityAt = 99_999;
+  assert.deepEqual(visiblePairs(pairs, "list", 100_000).map((pair) => pair.id), first);
+  assert.deepEqual(first, ["a", "b", "c"]);
+  assert.ok(comparePairOrder(pairs[1], pairs[0]) < 0);
+  assert.ok(comparePairOrder(pairs[2], pairs[0]) > 0);
+  assert.equal(dashboardVisible({ status: "idle", lastActivityAt: null }), true);
+  assert.equal(dashboardVisible({ status: "busy", lastActivityAt: null }), true);
+  assert.equal(dashboardVisible({ status: "error", lastActivityAt: null }), false);
+});
+
+test("invalid relative times are unknown and valid times are remembered per session", () => {
+  for (const value of [null, 0, Number.NaN, undefined, Infinity, "bad"]) assert.equal(formatRelative(value), "—");
+  assert.equal(formatRelative(1_700_000_000_000, 1_700_000_001_000), "1 秒前");
+  const known = new Map();
+  assert.deepEqual(normalizePairTimes([{ id: "x", lastActivityAt: 1_700_000_000 }], known), [
+    { id: "x", lastActivityAt: 1_700_000_000_000, createdAt: null },
+  ]);
+  assert.deepEqual(normalizePairTimes([{ id: "x", lastActivityAt: null }], known), [
+    { id: "x", lastActivityAt: 1_700_000_000_000, createdAt: null },
+  ]);
+});
+
+test("degraded empty response preserves pairs and successful counts per view", () => {
+  const previous = [{ id: "known" }];
+  assert.equal(retainDegradedPairs(previous, [], true), previous);
+  assert.deepEqual(retainDegradedPairs(previous, [], false), []);
+  const counts = new Map();
+  assert.equal(rememberedHostCount(counts, "mac", "dashboard", 9, true), 9);
+  assert.equal(rememberedHostCount(counts, "mac", "dashboard", 0, false), 9);
+  assert.equal(rememberedHostCount(counts, "mac", "archived", 14, true), 14);
+  assert.equal(rememberedHostCount(counts, "mac", "dashboard", 0, false), 9);
+});
+
 test("pairs archive errors immediately and idle pairs after 2 hours", () => {
-  const now = 1_000_000_000;
+  const now = 1_700_000_000_000;
   const hour = 3600_000;
   const idle2h01 = { id: "idle2h01", status: "idle", lastActivityAt: now - 2 * hour - 1 };
   const idle1h59 = { id: "idle1h59", status: "idle", lastActivityAt: now - 2 * hour + 1 };
@@ -204,7 +270,7 @@ test("pairs archive errors immediately and idle pairs after 2 hours", () => {
 });
 
 test("buildPairsList skips expensive message/context reads for stale idle sessions", async () => {
-  const now = 1_000_000_000;
+  const now = 1_700_000_000_000;
   let messages = 0;
   let contexts = 0;
   const pairs = await buildPairsList({
@@ -250,8 +316,8 @@ test("Claude archive lookup is cached, conservative, and never archives busy pai
 
 test("aggregate helpers merge freshest cards and keep offline state for its cooldown", () => {
   const merged = mergeAggregatePairs([
-    [{ id: "same", hostUrl: "https://a", lastActivityAt: 1 }, { id: "old", hostUrl: "https://a", lastActivityAt: 1 }],
-    [{ id: "same", hostUrl: "https://b", lastActivityAt: 2 }],
+    [{ id: "same", task: "A", hostUrl: "https://a", lastActivityAt: 1 }, { id: "old", task: "B", hostUrl: "https://a", lastActivityAt: 1 }],
+    [{ id: "same", task: "A", hostUrl: "https://b", lastActivityAt: 2 }],
   ]);
   assert.deepEqual(merged.map((pair) => pair.id), ["same", "old"]);
   assert.equal(remoteIsOffline(1_000, 1_000 + 59_999), true);
@@ -500,7 +566,7 @@ test("aggregate cards stay under the matching root-domain machine prefix", () =>
 });
 
 test("relative time ticks in Chinese units", () => {
-  const now = 1_000_000;
+  const now = 1_700_000_000_000;
   assert.equal(formatRelative(now - 5000, now), "5 秒前");
   assert.equal(formatRelative(now - 120_000, now), "2 分鐘前");
   assert.equal(formatRelative(now - 7200_000, now), "2 小時前");
@@ -615,11 +681,11 @@ test("pairs aggregate mode merges remotes with host tags", async () => {
   assert.match(client, /連不上，只顯示其他台/);
   assert.match(client, /location\.hostname === "opencode\.sisihome\.org"/);
   assert.match(client, /if \(!pending\.has\(r\.id\)\) \{\s*if \(generation === aggregateGeneration\) updateHostCount\(r\.id, false\)/);
-  assert.match(client, /finally \{\s*pending\.delete\(r\.id\);\s*if \(generation === aggregateGeneration\) \{\s*updateHostCount\(r\.id, false\);\s*updateAggregate\(\);/);
+  assert.match(client, /finally \{\s*pending\.delete\(r\.id\);\s*if \(generation === aggregateGeneration\) \{\s*if \(!degradedResponse \|\| successfulHostCounts\.has/);
   assert.match(client, /if \(countEl\?\.textContent === "載入中"\) \{\s*countEl\.textContent = "離線";\s*countEl\.dataset\.state = "offline"/);
   assert.match(client, /loadRemotePairs\(`\$\{r\.id\}:\$\{requestedView\}`/);
-  assert.match(client, /count: visiblePairs\(remoteData\.get\(id\) \?\? \[\], view, now\)\.length/);
-  assert.match(client, /hasData: remoteData\.has\(id\)/);
+  assert.match(client, /count: rememberedHostCount\(successfulHostCounts, id, view/);
+  assert.match(client, /hasData: remoteData\.has\(id\) \|\| successfulHostCounts\.has/);
   assert.match(client, /countEl\.dataset\.state = state\.state/);
   assert.match(client, /localStorage\.setItem\(ownKey\(remoteFailureStorageKey\(r\.id\)\), String\(failedAt\)\)/);
   assert.match(client, /persistedFailureHosts\.has\(r\.id\) \|\| !remoteIsOffline/);
@@ -711,6 +777,8 @@ test("hub tabs keep their status dots across re-renders", async () => {
   assert.match(hub, /const lastDot = new Map\(\)/);
   assert.match(hub, /lastDot\.set\(r\.id/);
   assert.match(hub, /lastDot\.get\(r\.id\)/);
+  assert.equal((hub.match(/AbortSignal\.timeout\(5000\)/g) ?? []).length, 2);
+  assert.match(hub, /if \(!a\.ok\) throw new Error\("active sessions unavailable"\)/);
 });
 
 test("pairs model is a full object; cards show a wrapped model line", async () => {

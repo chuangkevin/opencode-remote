@@ -18,6 +18,7 @@ export const PAIR_ARCHIVE_MS = DASHBOARD_IDLE_MS;
 export function archivedPair(pair, now = Date.now()) {
   if (pair.status === "busy" || pair.status === "ask") return false;
   if (pair.status === "error") return true;
+  if (!validTimestamp(pair.lastActivityAt)) return false;
   return now - pair.lastActivityAt > PAIR_ARCHIVE_MS;
 }
 
@@ -25,14 +26,30 @@ export function dashboardVisible(pair, now = Date.now()) {
   if (archivedPair(pair, now)) return false;
   if (pair.status === "busy" || pair.status === "ask") return true;
   const accepted = pair.acceptedAt !== undefined && pair.acceptedAt !== null;
+  if (!validTimestamp(pair.lastActivityAt)) return true;
   if (accepted) return now - pair.lastActivityAt < DASHBOARD_ACTIVE_MS;
   if (pair.status === "error") return true;
   return now - pair.lastActivityAt < DASHBOARD_IDLE_MS;
 }
 
 export function visiblePairs(pairs, view, now = Date.now()) {
-  const sorted = [...pairs].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
+  const sorted = [...pairs].sort(comparePairOrder);
   if (view === "archived") return sorted.filter((p) => archivedPair(p, now));
   if (view === "list") return sorted.filter((p) => !archivedPair(p, now));
   return sorted.filter((p) => dashboardVisible(p, now));
+}
+
+function validTimestamp(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+export function comparePairOrder(a, b) {
+  const aCreated = validTimestamp(a.createdAt);
+  const bCreated = validTimestamp(b.createdAt);
+  if (aCreated && bCreated && a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+  if (aCreated !== bCreated) return aCreated ? -1 : 1;
+  const aTitle = String(a.task ?? a.title ?? "");
+  const bTitle = String(b.task ?? b.title ?? "");
+  return (aTitle < bTitle ? -1 : aTitle > bTitle ? 1 : 0) ||
+    (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
 }

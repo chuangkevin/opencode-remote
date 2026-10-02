@@ -185,7 +185,7 @@ export type PairSessionLite = {
   id: string;
   title: string;
   model?: { providerID?: string; id?: string; modelID?: string; variant?: string };
-  time?: { updated?: number };
+  time?: { created?: number; updated?: number };
 };
 
 export type ChatMessage = {
@@ -219,7 +219,8 @@ export type PairInfo = {
   owner: string;
   task: string;
   status: PairStatus;
-  lastActivityAt: number;
+  lastActivityAt: number | null;
+  createdAt?: number | null;
   contextPct: number | null;
   lastText: string;
   model?: PairModel;
@@ -234,7 +235,15 @@ function messageArray(payload: unknown): ChatMessage[] {
 
 function messageTime(m: ChatMessage): number {
   const t = m.info?.time ?? m.time;
-  return Math.max(Number(t?.created ?? 0), Number(t?.completed ?? 0));
+  const values = [normalizeTimestamp(t?.created), normalizeTimestamp(t?.completed)].filter((value): value is number => value !== null);
+  return values.length ? Math.max(...values) : 0;
+}
+
+function normalizeTimestamp(value: unknown): number | null {
+  const timestamp = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+  const normalized = timestamp < 1e11 ? timestamp * 1_000 : timestamp;
+  return Number.isFinite(normalized) && normalized > 0 ? normalized : null;
 }
 
 function messageTokens(m: ChatMessage): ChatMessage["tokens"] {
@@ -265,7 +274,8 @@ export function computePairInfo(
     messages: ChatMessage[];
     contextLimit?: number;
     acceptedAt?: number;
-    lastActivityAt?: number;
+    lastActivityAt?: number | null;
+    createdAt?: number | null;
   },
 ): PairInfo {
   const parsed = parsePairTitle(session.title) ?? { owner: "", task: "" };
@@ -277,8 +287,14 @@ export function computePairInfo(
   else if (ctx.formPending) status = "ask";
   else if (newestAssistant && messageError(newestAssistant)) status = "error";
 
-  let lastActivityAt = ctx.lastActivityAt ?? 0;
-  for (const m of ctx.messages) lastActivityAt = Math.max(lastActivityAt, messageTime(m));
+  let lastActivityAt = normalizeTimestamp(ctx.lastActivityAt)
+    ?? normalizeTimestamp(session.time?.updated)
+    ?? normalizeTimestamp(session.time?.created);
+  for (const m of ctx.messages) {
+    const at = messageTime(m);
+    if (at > 0) lastActivityAt = lastActivityAt === null ? at : Math.max(lastActivityAt, at);
+  }
+  const createdAt = normalizeTimestamp(ctx.createdAt) ?? normalizeTimestamp(session.time?.created);
 
   let contextPct: number | null = null;
   if (ctx.contextLimit && ctx.contextLimit > 0) {
@@ -304,6 +320,7 @@ export function computePairInfo(
     task: parsed.task,
     status,
     lastActivityAt,
+    createdAt,
     contextPct,
     lastText,
     url: `/c/session/${session.id}`,
@@ -450,7 +467,9 @@ export function startPairsCacheRefresh<T>(
 
 export function pairArchived(pair: Pick<PairInfo, "status" | "owner" | "lastActivityAt">, now = Date.now(), claudeArchivedOwners?: ReadonlySet<string>): boolean {
   if (pair.status === "busy" || pair.status === "ask") return false;
+  if (pair.status === "error") return true;
   if (claudeArchivedOwners?.has(pair.owner)) return true;
+  if (typeof pair.lastActivityAt !== "number" || !Number.isFinite(pair.lastActivityAt) || pair.lastActivityAt <= 0) return false;
   return archivedPair(pair, now);
 }
 
@@ -534,9 +553,10 @@ export async function buildPairsList(deps: PairsDeps = {}, options: BuildPairsOp
 
   const settled = await Promise.allSettled(
     sessions.map(async (session): Promise<PairInfo> => {
-      const sessionLastActivity = session.time?.updated ?? 0;
+      const sessionLastActivity = normalizeTimestamp(session.time?.updated) ?? normalizeTimestamp(session.time?.created);
+      const sessionCreatedAt = normalizeTimestamp(session.time?.created);
       const staleNonBusy = !busySet.has(session.id)
-        && sessionLastActivity > 0
+        && sessionLastActivity !== null
         && now - sessionLastActivity > PAIR_ARCHIVE_MS;
       // Old non-busy sessions cannot become visible unless they have a pending
       // question. Avoid message/context fan-out for the common archived case.
@@ -549,6 +569,7 @@ export async function buildPairsList(deps: PairsDeps = {}, options: BuildPairsOp
             messages: [],
             acceptedAt: accepted[session.id],
             lastActivityAt: sessionLastActivity,
+            createdAt: sessionCreatedAt,
           });
         }
       }
@@ -570,6 +591,8 @@ export async function buildPairsList(deps: PairsDeps = {}, options: BuildPairsOp
         messages,
         contextLimit,
         acceptedAt: accepted[session.id],
+        lastActivityAt: sessionLastActivity,
+        createdAt: sessionCreatedAt,
       });
     }),
   );
@@ -578,7 +601,16 @@ export async function buildPairsList(deps: PairsDeps = {}, options: BuildPairsOp
   for (const r of settled) {
     if (r.status === "fulfilled") pairs.push(r.value);
   }
-  // Newest activity first.
-  pairs.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  // Stable creation order; activity affects visibility, not card position.
+  pairs.sort(comparePairOrder);
   return filterArchive ? pairs.filter((pair) => includeArchived === pairArchived(pair, now, claudeArchivedOwners)) : pairs;
+}
+
+export function comparePairOrder(a: Pick<PairInfo, "id" | "task" | "createdAt">, b: Pick<PairInfo, "id" | "task" | "createdAt">): number {
+  const aCreated = typeof a.createdAt === "number" && Number.isFinite(a.createdAt) && a.createdAt > 0;
+  const bCreated = typeof b.createdAt === "number" && Number.isFinite(b.createdAt) && b.createdAt > 0;
+  if (aCreated && bCreated && a.createdAt !== b.createdAt) return b.createdAt! - a.createdAt!;
+  if (aCreated !== bCreated) return aCreated ? -1 : 1;
+  const titleOrder = a.task < b.task ? -1 : a.task > b.task ? 1 : 0;
+  return titleOrder || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }

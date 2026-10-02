@@ -6,12 +6,38 @@
 // Only re-renders cards that changed; relative times tick locally every second.
 
 export { DASHBOARD_ACTIVE_MS, DASHBOARD_IDLE_MS, PAIR_ARCHIVE_MS, archivedPair, dashboardVisible, visiblePairs } from "./pairs-rules.js";
-import { visiblePairs } from "./pairs-rules.js";
+import { comparePairOrder, visiblePairs } from "./pairs-rules.js";
 import { hubHostUrl } from "./hub-state.js";
 export const PAIRS_VIEW_KEY = "pairs-view";
 export const AGGREGATE_FETCH_TIMEOUT_MS = 15 * 1000;
 export const AGGREGATE_OFFLINE_COOLDOWN_MS = 60 * 1000;
 export const REMOTE_FAILURE_STORAGE_TTL_MS = 5 * 60 * 1000;
+
+export function retainDegradedPairs(previous, incoming, degraded) {
+  return degraded && incoming.length === 0 && previous !== undefined ? previous : incoming;
+}
+
+export function normalizePairTimes(pairs, knownTimes = new Map(), keyFor = (pair) => pair.id) {
+  return pairs.map((pair) => {
+    const raw = pair.lastActivityAt;
+    const normalized = typeof raw === "number" && Number.isFinite(raw) && raw > 0
+      ? (raw < 1e11 ? raw * 1_000 : raw)
+      : undefined;
+    const key = keyFor(pair);
+    if (normalized !== undefined) knownTimes.set(key, normalized);
+    const rawCreated = pair.createdAt;
+    const createdAt = typeof rawCreated === "number" && Number.isFinite(rawCreated) && rawCreated > 0
+      ? (rawCreated < 1e11 ? rawCreated * 1_000 : rawCreated)
+      : null;
+    return { ...pair, createdAt, lastActivityAt: normalized ?? knownTimes.get(key) ?? null };
+  });
+}
+
+export function rememberedHostCount(cache, hostId, view, currentCount, canUpdate) {
+  const key = `${hostId}:${view}`;
+  if (canUpdate) cache.set(key, currentCount);
+  return cache.get(key);
+}
 
 export function mergeAggregatePairs(remoteLists) {
   const byId = new Map();
@@ -21,7 +47,7 @@ export function mergeAggregatePairs(remoteLists) {
       if (!prev || (pair.lastActivityAt ?? 0) > (prev.lastActivityAt ?? 0)) byId.set(pair.id, pair);
     }
   }
-  return [...byId.values()].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
+  return [...byId.values()].sort(comparePairOrder);
 }
 
 export function remoteOfflineUntil(lastFailureAt, now = Date.now(), cooldown = AGGREGATE_OFFLINE_COOLDOWN_MS) {
@@ -92,6 +118,7 @@ export const PAIR_REMOTE_DOMAINS = Object.freeze({
 });
 
 export function formatRelative(ts, now = Date.now()) {
+  if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return "—";
   const s = Math.max(0, Math.floor((now - ts) / 1000));
   if (s < 60) return `${s} 秒前`;
   const m = Math.floor(s / 60);
@@ -197,6 +224,7 @@ if (typeof document !== "undefined") {
   viewButtons[viewButtons.length - 1]?.insertAdjacentElement("afterend", archivedButton);
   viewButtons.push(archivedButton);
   let pairsById = new Map();
+  const localPairsByView = new Map();
   let lastRenderedSig = new Map();
   const remoteFailures = new Map();
   const persistedFailureHosts = new Set();
@@ -215,7 +243,10 @@ if (typeof document !== "undefined") {
       } catch { /* storage unavailable: probe normally */ }
     }
   }
-  const remoteData = new Map();
+  let remoteData = new Map();
+  const remoteDataByView = new Map([[view, remoteData]]);
+  const knownActivityTimes = new Map();
+  const successfulHostCounts = new Map();
   const loadRemotePairs = createInFlightRequestDeduper();
   let aggregateDataView = view;
   let aggregateGeneration = 0;
@@ -232,8 +263,13 @@ if (typeof document !== "undefined") {
   }
 
   function setState(next, push = true) {
+    if (AGGREGATE && next.view !== view) remoteDataByView.set(view, remoteData);
     selectedHost = next.host;
     view = next.view;
+    if (AGGREGATE) {
+      remoteData = remoteDataByView.get(view) ?? new Map();
+      remoteDataByView.set(view, remoteData);
+    }
     if (push) history.pushState(null, "", pairsStateUrl({ host: selectedHost, view }, true, BASE_PATH));
     applyView();
     if (sessionsLink && AGGREGATE) {
@@ -401,12 +437,14 @@ if (typeof document !== "undefined") {
       grid.innerHTML = `<div class="empty">目前沒有夥伴 session</div>`;
     } else {
       grid.querySelector(".empty")?.remove();
-      // Keep DOM order = newest first.
-      for (const pair of visible) {
-        const card = grid.querySelector(`[data-session-id="${CSS.escape(pair.id)}"]`);
-        if (card) grid.appendChild(card);
-      }
+      moveCardsIfOrderChanged(grid, visible.map((pair) => grid.querySelector(`[data-session-id="${CSS.escape(pair.id)}"]`)).filter(Boolean));
     }
+  }
+
+  function moveCardsIfOrderChanged(container, orderedCards) {
+    const current = [...container.querySelectorAll(":scope > [data-session-id]")];
+    if (current.length === orderedCards.length && current.every((card, index) => card === orderedCards[index])) return;
+    for (const card of orderedCards) container.appendChild(card);
   }
 
   // Relative times tick locally every second (no API call).
@@ -424,9 +462,13 @@ if (typeof document !== "undefined") {
           ? await fetch(ownPath("/api/pairs?archived=1"), { cache: "no-store" })
           : await fetch(ownPath("/api/pairs"));
         if (!res.ok) return;
-        const pairs = await res.json();
-        if (!Array.isArray(pairs)) return;
+        const payload = await res.json();
+        if (!Array.isArray(payload)) return;
+        const degraded = res.headers.get("x-opencode-remote-degraded") === "true";
+        const incoming = retainDegradedPairs(localPairsByView.get(view), payload, degraded);
+        const pairs = normalizePairTimes(incoming, knownActivityTimes);
         pairsById = new Map(pairs.map((p) => [p.id, p]));
+        localPairsByView.set(view, pairs);
         render(pairs);
         return;
       }
@@ -435,7 +477,8 @@ if (typeof document !== "undefined") {
       const generation = ++aggregateGeneration;
       if (aggregateDataView !== view) {
         aggregateDataView = view;
-        remoteData.clear();
+        remoteData = remoteDataByView.get(view) ?? new Map();
+        remoteDataByView.set(view, remoteData);
       }
       const pending = new Set();
       for (const r of remotes) {
@@ -450,9 +493,10 @@ if (typeof document !== "undefined") {
         const state = aggregateHostCountState({
           pending: isPending,
           failedAt: configured ? remoteFailures.get(id) : now,
-          count: visiblePairs(remoteData.get(id) ?? [], view, now).length,
+          count: rememberedHostCount(successfulHostCounts, id, view, visiblePairs(remoteData.get(id) ?? [], view, now).length, false)
+            ?? visiblePairs(remoteData.get(id) ?? [], view, now).length,
           now,
-          hasData: remoteData.has(id),
+          hasData: remoteData.has(id) || successfulHostCounts.has(`${id}:${view}`),
           persistedFailure: persistedFailureHosts.has(id),
         });
         countEl.textContent = state.label;
@@ -480,9 +524,10 @@ if (typeof document !== "undefined") {
           if (generation === aggregateGeneration) updateHostCount(r.id, false);
           return;
         }
+        let degradedResponse = false;
         try {
           const requestedView = view;
-          const list = await loadRemotePairs(`${r.id}:${requestedView}`, async () => {
+          const response = await loadRemotePairs(`${r.id}:${requestedView}`, async () => {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), AGGREGATE_FETCH_TIMEOUT_MS);
             try {
@@ -492,16 +537,27 @@ if (typeof document !== "undefined") {
               if (!res.ok) throw new Error(`GET ${url} returned ${res.status}`);
               const payload = await res.json();
               if (!Array.isArray(payload)) throw new Error("invalid pairs payload");
-              return payload;
+              return { pairs: payload, degraded: res.headers.get("x-opencode-remote-degraded") === "true" };
             } finally {
               clearTimeout(timeout);
             }
           });
           if (generation === aggregateGeneration) {
-            remoteFailures.delete(r.id);
-            persistedFailureHosts.delete(r.id);
-            try { localStorage.removeItem(ownKey(remoteFailureStorageKey(r.id))); } catch { /* storage unavailable */ }
-            remoteData.set(r.id, list.map((p) => ({ ...p, hostId: r.id, hostName: r.name, hostUrl: r.url })));
+            degradedResponse = response.degraded;
+            const previous = remoteData.get(r.id);
+            const pairs = retainDegradedPairs(previous, response.pairs, response.degraded);
+            if (!response.degraded || response.pairs.length > 0) {
+              const normalized = normalizePairTimes(pairs, knownActivityTimes, (pair) => `${r.id}:${pair.id}`);
+              remoteData.set(r.id, normalized.map((p) => ({ ...p, hostId: r.id, hostName: r.name, hostUrl: r.url })));
+            }
+            if (!response.degraded) {
+              remoteFailures.delete(r.id);
+              persistedFailureHosts.delete(r.id);
+              try { localStorage.removeItem(ownKey(remoteFailureStorageKey(r.id))); } catch { /* storage unavailable */ }
+              rememberedHostCount(successfulHostCounts, r.id, requestedView, visiblePairs(remoteData.get(r.id) ?? [], requestedView, Date.now()).length, true);
+            } else if (response.pairs.length > 0) {
+              rememberedHostCount(successfulHostCounts, r.id, requestedView, visiblePairs(remoteData.get(r.id) ?? [], requestedView, Date.now()).length, true);
+            }
           }
         } catch {
           if (generation === aggregateGeneration) {
@@ -513,7 +569,7 @@ if (typeof document !== "undefined") {
         } finally {
           pending.delete(r.id);
           if (generation === aggregateGeneration) {
-            updateHostCount(r.id, false);
+            if (!degradedResponse || successfulHostCounts.has(`${r.id}:${view}`)) updateHostCount(r.id, false);
             updateAggregate();
           }
         }
@@ -537,7 +593,7 @@ if (typeof document !== "undefined") {
     const namespaced = pairs.map((p) => ({ ...p, id: `${p.hostUrl}${p.id}` }));
     const realIds = new Map(namespaced.map((n, i) => [n.id, pairs[i]]));
     const now = Date.now();
-    const visible = visiblePairs(pairs, view, now);
+    const visible = normalizePairTimes(visiblePairs(pairs, view, now), knownActivityTimes, (pair) => `${pair.hostId}:${pair.id}`);
     const seen = new Set();
     for (const pair of visible) {
       const nid = `${pair.hostUrl}${pair.id}`;
@@ -573,10 +629,12 @@ if (typeof document !== "undefined") {
       grid.innerHTML = `<div class="empty">${loading ? "載入中…" : "目前沒有夥伴 session"}</div>`;
     } else {
       grid.querySelector(".empty")?.remove();
+      const orderedCards = [];
       for (const pair of visible) {
         const card = grid.querySelector(`[data-session-id="${CSS.escape(`${pair.hostUrl}${pair.id}`)}"]`);
-        if (card) grid.appendChild(card);
+        if (card) orderedCards.push(card);
       }
+      moveCardsIfOrderChanged(grid, orderedCards);
     }
   }
 
@@ -590,8 +648,13 @@ if (typeof document !== "undefined") {
   for (const btn of hostButtons) btn.addEventListener("click", () => setState({ host: btn.dataset.hostBtn, view }));
   window.addEventListener("popstate", () => {
     const next = parsePairsState(location.search, storedView);
+    if (AGGREGATE && next.view !== view) remoteDataByView.set(view, remoteData);
     selectedHost = next.host;
     view = next.view;
+    if (AGGREGATE) {
+      remoteData = remoteDataByView.get(view) ?? new Map();
+      remoteDataByView.set(view, remoteData);
+    }
     applyView();
     if (sessionsLink && AGGREGATE) {
       sessionsLink.href = hubHostUrl(selectedHost);

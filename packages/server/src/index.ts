@@ -26,7 +26,7 @@ import { ensureSessionTrust } from "./compact/trust.js";
 import { handleMergedSessionStatus, isMergedSessionStatusPath, isPathWithinRoot } from "./compact/session-status.js";
 import { unwrap, upstreamAuthHeaders, upstreamFetch, upstreamHealthy, upstreamInfo } from "./upstream.js";
 import { readBuildInfo } from "./build-info.js";
-import { createPairsCache, isPairSession, startPairsCacheRefresh, type PairInfo } from "./compact/pairs.js";
+import { comparePairOrder, createPairsCache, isPairSession, startPairsCacheRefresh, type PairInfo } from "./compact/pairs.js";
 import { getStaticAsset } from "./compact/static-assets.js";
 import { sendHtml } from "./html-response.js";
 import { shouldCompressUpstream } from "./proxy-compress.js";
@@ -1135,7 +1135,7 @@ async function buildPairsCacheEntry(
     buildPairsList({}, { now, claudeArchivedOwners: owners }),
     listPiPairs().catch(() => []),
   ]);
-  return [...openPairs, ...piPairs].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  return [...openPairs, ...piPairs].sort(comparePairOrder);
 }
 
 async function handleListPairs(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

@@ -197,16 +197,15 @@ import { hubHostUrl, parseHubHost, rewriteHubSessionHref } from "/c/static/hub-s
       const dot = tabsEl.querySelector(`[data-dot="${r.id}"]`);
       if (!dot) continue;
       try {
-        const res = await fetch(normalizeUrl(r.url) + "/remote-health", { cache: "no-store" });
+        const res = await fetch(normalizeUrl(r.url) + "/remote-health", { cache: "no-store", signal: AbortSignal.timeout(5000) });
         const j = await res.json();
         const ok = res.ok && j?.upstreamHealth?.healthy === true;
         let busy = false;
         if (ok) {
-          try {
-            const a = await fetch(normalizeUrl(r.url) + "/api/session/active", { cache: "no-store" });
-            const aj = await a.json();
-            busy = Object.keys(aj?.data ?? {}).length > 0;
-          } catch {}
+          const a = await fetch(normalizeUrl(r.url) + "/api/session/active", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+          if (!a.ok) throw new Error("active sessions unavailable");
+          const aj = await a.json();
+          busy = Object.keys(aj?.data ?? {}).length > 0;
         }
         dot.className = "dot " + (ok ? (busy ? "busy" : "ok") : "bad");
         dot.title = ok ? (busy ? "有 session 在跑" : "正常") : "連不上";

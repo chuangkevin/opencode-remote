@@ -47,11 +47,31 @@ test("Pi pair registry maps a busy session to PairInfo", async () => {
       task: session.task,
       status: session.status,
       lastActivityAt: session.lastActivityAt,
+      createdAt: null,
       contextPct: null,
       lastText: session.lastText,
       model: session.model,
       url: "#",
     }]);
+  });
+});
+
+test("Pi pair registry normalizes second timestamps and preserves missing activity as null", async () => {
+  const session = {
+    id: "ses_piPair456",
+    owner: "pi-main",
+    task: "timestamp fallback",
+    status: "idle",
+    lastActivityAt: 1_725_000_000,
+    createdAt: 1_724_000_000,
+    lastText: "",
+    model: { provider: "gb10", id: "gpt-5" },
+  };
+  await withRegistry(JSON.stringify({ sessions: { [session.id]: session, ses_piPair789: { ...session, id: "ses_piPair789", lastActivityAt: Number.NaN } } }), async () => {
+    const pairs = await listPiPairs();
+    assert.equal(pairs.find((pair) => pair.id === session.id).lastActivityAt, 1_725_000_000_000);
+    assert.equal(pairs.find((pair) => pair.id === session.id).createdAt, 1_724_000_000_000);
+    assert.equal(pairs.find((pair) => pair.id === "ses_piPair789").lastActivityAt, null);
   });
 });
 

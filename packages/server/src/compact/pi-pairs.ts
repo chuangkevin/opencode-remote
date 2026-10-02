@@ -37,8 +37,14 @@ function toPairInfo(value: unknown): PairInfo | undefined {
   const status = value.status;
   if (status !== "busy" && status !== "idle" && status !== "error") return undefined;
 
-  const lastActivityAt = value.lastActivityAt;
-  if (typeof lastActivityAt !== "number" || !Number.isFinite(lastActivityAt)) return undefined;
+  const rawLastActivityAt = value.lastActivityAt;
+  const lastActivityAt = typeof rawLastActivityAt === "number" && Number.isFinite(rawLastActivityAt) && rawLastActivityAt > 0
+    ? (rawLastActivityAt < 1e11 ? rawLastActivityAt * 1_000 : rawLastActivityAt)
+    : null;
+  const rawCreatedAt = value.createdAt ?? value.created;
+  const createdAt = typeof rawCreatedAt === "number" && Number.isFinite(rawCreatedAt) && rawCreatedAt > 0
+    ? (rawCreatedAt < 1e11 ? rawCreatedAt * 1_000 : rawCreatedAt)
+    : null;
 
   const lastText = value.lastText;
   if (typeof lastText !== "string") return undefined;
@@ -55,6 +61,7 @@ function toPairInfo(value: unknown): PairInfo | undefined {
     task,
     status,
     lastActivityAt,
+    createdAt,
     contextPct: null,
     lastText,
     model: { provider: model.provider, id: model.id },
