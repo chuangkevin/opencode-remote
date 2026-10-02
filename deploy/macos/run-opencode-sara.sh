@@ -3,21 +3,16 @@
 set -euo pipefail
 
 readonly EXPECTED_TAILSCALE_IP="100.113.121.103"
-readonly TAILSCALE_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 readonly NODE_BIN="/opt/homebrew/bin/node"
 readonly SERVER_ENTRY="/Users/kevin/.local/share/opencode-remote/packages/server/dist/index.js"
 readonly WAIT_ATTEMPTS=30
 readonly WAIT_SECONDS=2
 
 tailscale_ready() {
-  local address addresses
-  addresses="$("$TAILSCALE_BIN" ip -4 2>/dev/null || true)"
-  while IFS= read -r address; do
-    if [[ "$address" == "$EXPECTED_TAILSCALE_IP" ]]; then
-      return 0
-    fi
-  done <<< "$addresses"
-  return 1
+  /sbin/ifconfig | /usr/bin/awk -v expected="$EXPECTED_TAILSCALE_IP" '
+    $1 == "inet" && $2 == expected { found = 1 }
+    END { exit !found }
+  '
 }
 
 for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do

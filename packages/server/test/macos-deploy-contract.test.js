@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +41,23 @@ test("macOS wrapper alone configures the fixed updater quiesce marker", async ()
 
   assert.match(wrapper, /OPENCODE_UPDATE_QUIESCE_FILE="\/Users\/kevin\/\.local\/share\/opencode-remote\/update-opencode-sara\.quiesce"/);
   assert.doesNotMatch(plist, /OPENCODE_UPDATE_QUIESCE_FILE|EnvironmentVariables/);
+});
+
+test("macOS runtime wrapper checks the exact Tailscale address from ifconfig", async () => {
+  const wrapper = await readFile(new URL("../../../deploy/macos/run-opencode-sara.sh", import.meta.url), "utf8");
+  assert.doesNotMatch(wrapper, /TAILSCALE_BIN|Tailscale\.app/);
+  assert.match(wrapper, /\/sbin\/ifconfig/);
+  const start = wrapper.indexOf("tailscale_ready() {");
+  const end = wrapper.indexOf("\n}", start) + 2;
+  assert.ok(start >= 0 && end > start);
+  const fn = wrapper.slice(start, end).replace("/sbin/ifconfig", "ifconfig");
+  const run = (ifconfigOutput) => spawnSync("/bin/bash", ["-c", `EXPECTED_TAILSCALE_IP="100.113.121.103"\nifconfig() { printf '%s\\n' "$TEST_IFCONFIG"; }\n${fn}\ntailscale_ready`], {
+    encoding: "utf8",
+    env: { ...process.env, TEST_IFCONFIG: ifconfigOutput },
+  });
+
+  assert.equal(run("en0:\n\tinet 100.113.121.103 netmask 0xffffff00").status, 0);
+  assert.equal(run("en0:\n\tinet 100.113.121.1030 netmask 0xffffff00").status, 1);
 });
 
 test("macOS deploy tar allowlist covers every compiled server module", async () => {
