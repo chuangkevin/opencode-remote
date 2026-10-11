@@ -1938,7 +1938,12 @@ function renderProviders(providers) {
       // Build variant pills, hiding the "none" variant pill (we render it as the
       // model row's single-button fallback instead). If a model has NO variants
       // at all, render a single "—" button to allow selecting it.
-      const allVariants = m.variants ? Object.keys(m.variants) : [];
+      // OpenCode 2.x returns variants as an ARRAY of names (["low","medium",...]);
+      // the older shape was keyed by name. Object.keys() on an array yields indices
+      // ("0","1","2"), which sent invalid variants (VariantUnavailableError).
+      const allVariants = Array.isArray(m.variants)
+        ? m.variants
+        : m.variants ? Object.keys(m.variants) : [];
       const variantsExcludingNone = allVariants.filter((v) => v !== "none");
       const isCurrent = currentModel && currentModel.providerID === provider.id && currentModel.modelID === m.id;
       let pills;

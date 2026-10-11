@@ -155,3 +155,13 @@ test("remote-sessions cards and compact link the 2.x /server/ route", async () =
   assert.match(compact, /\/server\/\$\{key\}\/session\/\$\{sessionID\}/);
   assert.match(compact, /btoa\(nativeOrigin\)/);
 });
+
+test("model picker reads OpenCode 2.x array variants as names, not indices", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const compact = await readFile(new URL("../static/compact.js", import.meta.url), "utf8");
+  // 2.x returns variants as an array of names. Object.keys() on that array
+  // yields "0","1","2" - sending an index as the variant fails with
+  // VariantUnavailableError. The picker must use the array as the name list.
+  assert.match(compact, /Array\.isArray\(m\.variants\)/);
+  assert.doesNotMatch(compact, /allVariants = m\.variants \? Object\.keys\(m\.variants\)/);
+});
