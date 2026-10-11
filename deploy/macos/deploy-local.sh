@@ -36,6 +36,11 @@ readonly HEALTH_WAIT_SECONDS=2
 readonly STOP_ATTEMPTS=15
 readonly STOP_WAIT_SECONDS=1
 readonly SERVER_ENTRY="$RUNTIME_DIR/packages/server/dist/index.js"
+# Desktop prunes old CLI folders when it updates itself. The runtime wrapper
+# seeds OPENCODE_CLI_PATH with a placeholder version, so a deploy must re-point
+# it at an installed version before (re)starting the service; see
+# point_wrapper_at_newest_desktop_cli().
+readonly DESKTOP_CLI_ROOT="/Users/kevin/Library/Application Support/ai.opencode.desktop/cli"
 # Desktop-owned OpenCode service (service mode): CLI writes its url/pid here.
 # The proxy reads the same file (config.ts readServiceState) and reuses the
 # shared service instead of spawning its own `opencode serve --port 4196`.
@@ -73,6 +78,32 @@ fail() {
 
 require_executable() {
   [[ -x "$1" ]] || fail "required executable is missing: $1"
+}
+
+# The runtime wrapper hardcodes one Desktop CLI version in OPENCODE_CLI_PATH.
+# Desktop prunes old versions when it updates, so the checked-in seed can be
+# gone by deploy time and the service then dies at startup (spawn ENOENT).
+# Re-point the installed wrapper at the newest installed Desktop CLI before the
+# service is (re)started; the hourly updater keeps it current afterwards.
+point_wrapper_at_newest_desktop_cli() {
+  local wrapper="$RUNTIME_DIR/run-opencode-sara.sh" newest
+  [[ -d "$DESKTOP_CLI_ROOT" ]] || fail "Desktop CLI folder is missing: $DESKTOP_CLI_ROOT"
+  newest="$(/usr/bin/python3 - "$DESKTOP_CLI_ROOT" <<'PYEOF'
+import os, sys
+root = sys.argv[1]
+def semver(name):
+    return [int(p) if p.isdigit() else 0 for p in name.split("-", 1)[0].split(".")]
+usable = [d for d in os.listdir(root)
+          if os.access(os.path.join(root, d, "opencode-cli"), os.X_OK)]
+print(max(usable, key=semver) if usable else "")
+PYEOF
+)"
+  [[ -n "$newest" ]] || fail "no installed Desktop CLI under $DESKTOP_CLI_ROOT"
+  /usr/bin/sed -E -i '' \
+    "s|(OPENCODE_CLI_PATH=\"[^\"]*/cli/)[^/\"]+(/opencode-cli\")|\1${newest}\2|" "$wrapper"
+  /usr/bin/grep -q "OPENCODE_CLI_PATH=\"[^\"]*/cli/${newest}/opencode-cli\"" "$wrapper" \
+    || fail "could not re-point run-opencode-sara.sh to Desktop CLI $newest"
+  echo "Re-pointed run-opencode-sara.sh to Desktop CLI $newest"
 }
 
 [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || fail "this installer only supports macOS"
@@ -336,6 +367,7 @@ echo "Updating runtime copy without deleting service data..."
 /usr/bin/tar -xf "$STAGE_ARCHIVE" -C "$RUNTIME_DIR"
 /bin/rm -f -- "$RUNTIME_DIR/launch-opencode-sara.sh"
 /usr/bin/install -m 0755 "$SCRIPT_DIR/run-opencode-sara.sh" "$RUNTIME_DIR/run-opencode-sara.sh"
+point_wrapper_at_newest_desktop_cli
 /usr/bin/install -m 0644 "$SCRIPT_DIR/$PLIST_SOURCE_NAME" "$PLIST_DEST"
 /usr/bin/install -d -m 0700 "$PLUGIN_DIR" "$BRIDGE_LIB_DIR"
 /usr/bin/install -m 0600 "$SCRIPT_DIR/$PLUGIN_SOURCE_NAME" "$PLUGIN_DEST"
