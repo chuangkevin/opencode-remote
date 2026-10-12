@@ -115,7 +115,7 @@ export async function handleCompactProviders(res: http.ServerResponse): Promise<
       const variants: string[] | null = Array.isArray(m.variants)
         ? m.variants.map((v: any) => (typeof v === "string" ? v : v?.id)).filter((v: unknown): v is string => typeof v === "string")
         : m.variants && typeof m.variants === "object" ? Object.keys(m.variants) : null;
-      entry.models.push({ id: m.modelID ?? m.id, name: m.name ?? m.id, variants: variants && variants.length ? variants : null });
+      entry.models.push({ id: m.id, name: m.name ?? m.id, variants: variants && variants.length ? variants : null });
       byProvider.set(m.providerID, entry);
     }
     const providers = [...byProvider.values()].filter((p) => p.models.length > 0);

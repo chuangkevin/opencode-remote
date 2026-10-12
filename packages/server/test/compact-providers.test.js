@@ -16,6 +16,7 @@ test("compact picker groups OpenCode 2.x /api/model by provider and sends Basic 
       res.end(JSON.stringify({ location: { directory: "/w" }, data: [
         { id: "free-a", providerID: "opencode", name: "Free A" },
         { id: "paid-b", providerID: "opencode", name: "Paid B", variants: [{ id: "high", settings: {} }, { id: "low" }] },
+        { id: "paid-b-fast", providerID: "opencode", name: "Paid B Fast", modelID: "paid-b" },
         { id: "gb10", providerID: "newapi", name: "GB10" },
         { id: "gpt", providerID: "openai", name: "GPT", variants: [] },
         { id: "no-provider" },
@@ -38,7 +39,7 @@ test("compact picker groups OpenCode 2.x /api/model by provider and sends Basic 
   const list = JSON.parse(chunks.join(""));
   const byId = Object.fromEntries(list.map((p) => [p.id, p.models.map((m) => m.id).sort()]));
   assert.deepEqual(Object.keys(byId).sort(), ["newapi", "openai", "opencode"], "one entry per provider");
-  assert.deepEqual(byId.opencode, ["free-a", "paid-b"]);
+  assert.deepEqual(byId.opencode, ["free-a", "paid-b", "paid-b-fast"], "keeps the model's unique id, not the shared modelID");
   assert.deepEqual(byId.newapi, ["gb10"]);
   const paidB = list.find((p) => p.id === "opencode").models.find((m) => m.id === "paid-b");
   assert.deepEqual(paidB.variants, ["high", "low"], "variant objects become a name list");
@@ -47,3 +48,4 @@ test("compact picker groups OpenCode 2.x /api/model by provider and sends Basic 
   assert.equal(seenAuth, `Basic ${Buffer.from("opencode:pw-test").toString("base64")}`);
   assert.equal(new URL(seenPath, "http://x").searchParams.get("location[directory]"), "/w");
 });
+
