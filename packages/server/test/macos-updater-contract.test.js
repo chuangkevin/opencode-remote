@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -42,6 +45,65 @@ test("Desktop CLI version picker returns the newest semver and whether it beats 
   assert.deepEqual(newestDesktopCliVersion("2.0.11\n", "missing"), { status: "outdated", newest: "2.0.11" }, "unparseable current forces the newest");
   assert.deepEqual(newestDesktopCliVersion("", "2.0.11"), { status: "invalid" });
   assert.deepEqual(newestDesktopCliVersion("junk\n", "2.0.11"), { status: "invalid" });
+});
+
+test("Desktop CLI picker accepts architecture suffixes, ignores invalid folders, and keeps full names", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opencode-desktop-cli-"));
+  const helper = new URL("../../../deploy/macos/update-opencode-sara-json.mjs", import.meta.url);
+  try {
+    const addExecutable = async (name) => {
+      const dir = join(root, name);
+      await mkdir(dir, { recursive: true });
+      const cli = join(dir, "opencode-cli");
+      await writeFile(cli, "#!/bin/sh\nexit 0\n");
+      await chmod(cli, 0o755);
+    };
+    const pickFrom = async (current = "missing", onlyNames) => {
+      const names = [];
+      for (const entry of onlyNames ?? await readdir(root)) {
+        const cli = join(root, entry, "opencode-cli");
+        try {
+          if ((await stat(cli)).isFile()) {
+            await access(cli, 1);
+            names.push(entry);
+          }
+        } catch { /* updater only supplies directories with an executable CLI */ }
+      }
+      return spawnSync(
+        process.execPath,
+        [helper.pathname, "desktop-cli-newest", current],
+        { encoding: "utf8", input: `${names.join("\n")}\n` },
+      );
+    };
+
+    await addExecutable("2.0.29-arm64");
+    let result = await pickFrom("2.0.27");
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, "2.0.29-arm64");
+
+    await addExecutable("2.0.27");
+    result = await pickFrom("2.0.27");
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, "2.0.29-arm64");
+
+    await addExecutable("2.0.30-x64");
+    result = await pickFrom("2.0.27");
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, "2.0.30-x64");
+
+    for (const name of ["latest", "2.0", "2.0.29-arm64.bak", "2.0.31-arm64"]) {
+      await mkdir(join(root, name), { recursive: true });
+    }
+    result = await pickFrom("2.0.29-arm64");
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, "2.0.30-x64");
+
+    await addExecutable("2.0.29-x64");
+    result = await pickFrom("2.0.27", ["2.0.29-arm64", "2.0.29-x64"]);
+    assert.equal(result.stdout, "2.0.29-arm64", "same version suffixes resolve lexically");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("FDA probe parser accepts the 2.x raw body and the legacy JSON contract", () => {

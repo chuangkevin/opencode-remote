@@ -224,7 +224,11 @@ else
 fi
 
 newest_result=0
-newest_version="$(/bin/ls -1 "$DESKTOP_CLI_ROOT" 2>/dev/null | "$NODE_BIN" "$HELPER" desktop-cli-newest "$current_version")" || newest_result=$?
+newest_version="$(for cli_path in "$DESKTOP_CLI_ROOT"/*/opencode-cli; do
+  [[ -x "$cli_path" ]] || continue
+  cli_dir="${cli_path%/opencode-cli}"
+  /usr/bin/printf '%s\n' "${cli_dir##*/}"
+done | "$NODE_BIN" "$HELPER" desktop-cli-newest "$current_version")" || newest_result=$?
 if ((newest_result == 11)); then
   fail_stage DETECT "no Desktop CLI versions found under $DESKTOP_CLI_ROOT"
 fi

@@ -74,13 +74,23 @@ export function fileContentMatches(raw, expectedContent) {
 // newest, 11 = nothing parseable.
 export function newestDesktopCliVersion(raw, current) {
   const parse = (v) => {
-    const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(v).trim());
-    return m ? m.slice(1, 4).map(Number) : undefined;
+    const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z0-9]+))?$/.exec(String(v).trim());
+    return m ? { parts: m.slice(1, 4).map(Number), suffix: m[4] } : undefined;
   };
-  const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  const cmp = (a, b) => a.parts[0] - b.parts[0] || a.parts[1] - b.parts[1] || a.parts[2] - b.parts[2];
   const versions = raw.split(/\r?\n/).map((line) => line.trim()).filter((line) => parse(line));
   if (versions.length === 0) return { status: "invalid" };
-  const newest = versions.reduce((best, v) => (cmp(parse(v), parse(best)) > 0 ? v : best));
+  const newest = versions.reduce((best, v) => {
+    const order = cmp(parse(v), parse(best));
+    if (order !== 0) return order > 0 ? v : best;
+    // For equal numeric versions, prefer the unsuffixed directory; otherwise
+    // choose the suffix lexically so selection is deterministic.
+    const a = parse(v).suffix;
+    const b = parse(best).suffix;
+    if (a === undefined) return v;
+    if (b === undefined) return best;
+    return a < b ? v : best;
+  });
   const cur = parse(current);
   if (cur && cmp(parse(newest), cur) <= 0) return { status: "current", newest };
   return { status: "outdated", newest };
